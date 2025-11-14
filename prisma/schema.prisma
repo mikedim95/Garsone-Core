@@ -1,0 +1,309 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Store {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug            String           @unique @db.VarChar(100)
+  name            String           @db.VarChar(255)
+  settingsJson    Json?
+  createdAt       DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamp(6)
+  auditLogs       AuditLog[]
+  categories      Category[]
+  itemModifiers   ItemModifier[]
+  items           Item[]
+  kitchenCounters KitchenCounter[]
+  modifierOptions ModifierOption[]
+  modifiers       Modifier[]
+  orders          Order[]
+  profiles        Profile[]
+  storeMeta       StoreMeta?
+  tables          Table[]
+  waiterTables    WaiterTable[]
+  waiterShifts    WaiterShift[]
+
+  @@map("stores")
+}
+
+model StoreMeta {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String   @unique @db.Uuid
+  currencyCode String   @default("EUR") @db.VarChar(3)
+  locale       String   @default("en") @db.VarChar(10)
+  createdAt    DateTime @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime @updatedAt @db.Timestamp(6)
+  store        Store    @relation(fields: [storeId], references: [id])
+
+  @@map("store_meta")
+}
+
+model Profile {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String        @db.Uuid
+  email        String        @unique @db.VarChar(255)
+  passwordHash String        @db.VarChar(255)
+  role         Role
+  displayName  String?       @db.VarChar(255)
+  ratingAvg    Decimal?      @db.Decimal(4, 2)
+  createdAt    DateTime      @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime      @updatedAt @db.Timestamp(6)
+  auditLogs    AuditLog[]
+  store        Store         @relation(fields: [storeId], references: [id])
+  waiterTables WaiterTable[]
+  waiterShifts WaiterShift[]
+
+  @@index([storeId, role])
+  @@map("profiles")
+}
+
+model Table {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String        @db.Uuid
+  label        String        @db.VarChar(50)
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime      @updatedAt @db.Timestamp(6)
+  orders       Order[]
+  store        Store         @relation(fields: [storeId], references: [id])
+  waiterTables WaiterTable[]
+
+  @@unique([storeId, label])
+  @@map("tables")
+}
+
+model WaiterTable {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  waiterId  String   @db.Uuid
+  tableId   String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+  store     Store    @relation(fields: [storeId], references: [id])
+  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  waiter    Profile  @relation(fields: [waiterId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, waiterId, tableId])
+  @@index([storeId, waiterId])
+  @@index([storeId, tableId])
+  @@map("waiter_tables")
+}
+
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  slug      String   @db.VarChar(100)
+  title     String   @db.VarChar(255)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+  store     Store    @relation(fields: [storeId], references: [id])
+  items     Item[]
+
+  @@unique([storeId, slug])
+  @@index([storeId, sortOrder])
+  @@map("categories")
+}
+
+model Item {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId       String         @db.Uuid
+  categoryId    String         @db.Uuid
+  slug          String         @db.VarChar(100)
+  title         String         @db.VarChar(255)
+  description   String?
+  priceCents    Int
+  isAvailable   Boolean        @default(true)
+  sortOrder     Int            @default(0)
+  createdAt     DateTime       @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime       @updatedAt @db.Timestamp(6)
+  imageUrl      String?        @db.VarChar(2048)
+  costCents     Int?
+  itemModifiers ItemModifier[]
+  category      Category       @relation(fields: [categoryId], references: [id])
+  store         Store          @relation(fields: [storeId], references: [id])
+  orderItems    OrderItem[]
+
+  @@unique([storeId, slug])
+  @@index([storeId, categoryId, sortOrder])
+  @@index([storeId, isAvailable])
+  @@map("items")
+}
+
+model Modifier {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId          String            @db.Uuid
+  slug             String            @db.VarChar(100)
+  title            String            @db.VarChar(255)
+  minSelect        Int               @default(0)
+  maxSelect        Int?
+  createdAt        DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
+  itemModifiers    ItemModifier[]
+  modifierOptions  ModifierOption[]
+  store            Store             @relation(fields: [storeId], references: [id])
+  orderItemOptions OrderItemOption[]
+
+  @@unique([storeId, slug])
+  @@map("modifiers")
+}
+
+model ModifierOption {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId          String            @db.Uuid
+  modifierId       String            @db.Uuid
+  slug             String            @db.VarChar(100)
+  title            String            @db.VarChar(255)
+  priceDeltaCents  Int               @default(0)
+  sortOrder        Int               @default(0)
+  createdAt        DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
+  modifier         Modifier          @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+  store            Store             @relation(fields: [storeId], references: [id])
+  orderItemOptions OrderItemOption[]
+
+  @@unique([modifierId, slug])
+  @@index([modifierId, sortOrder])
+  @@map("modifier_options")
+}
+
+model ItemModifier {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId    String   @db.Uuid
+  itemId     String   @db.Uuid
+  modifierId String   @db.Uuid
+  isRequired Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+  item       Item     @relation(fields: [itemId], references: [id])
+  modifier   Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+  store      Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([itemId, modifierId])
+  @@map("item_modifiers")
+}
+
+model Order {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String      @db.Uuid
+  tableId      String      @db.Uuid
+  status       OrderStatus @default(PLACED)
+  note         String?
+  totalCents   Int
+  placedAt     DateTime    @default(now()) @db.Timestamp(6)
+  createdAt    DateTime    @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime    @updatedAt @db.Timestamp(6)
+  servedAt     DateTime?   @db.Timestamp(6)
+  ticketNumber Int?
+  cancelReason String?     @db.VarChar(255)
+  orderItems   OrderItem[]
+  store        Store       @relation(fields: [storeId], references: [id])
+  table        Table       @relation(fields: [tableId], references: [id])
+
+  @@index([storeId, status, placedAt(sort: Desc)])
+  @@index([storeId, tableId, placedAt(sort: Desc)])
+  @@map("orders")
+}
+
+model WaiterShift {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String      @db.Uuid
+  waiterId  String      @db.Uuid
+  startedAt DateTime    @default(now()) @db.Timestamp(6)
+  endedAt   DateTime?   @db.Timestamp(6)
+  status    ShiftStatus @default(SCHEDULED)
+  createdAt DateTime    @default(now()) @db.Timestamp(6)
+  updatedAt DateTime    @updatedAt @db.Timestamp(6)
+  store     Store       @relation(fields: [storeId], references: [id])
+  waiter    Profile     @relation(fields: [waiterId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@index([storeId, waiterId, startedAt(sort: Desc)])
+  @@map("waiter_shifts")
+}
+
+/// Per-store daily counter to allocate kitchen ticket numbers (#priority)
+model KitchenCounter {
+  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId String @db.Uuid
+  day     String @db.VarChar(10)
+  seq     Int    @default(0)
+  store   Store  @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, day])
+  @@map("kitchen_counters")
+}
+
+model OrderItem {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId          String            @db.Uuid
+  itemId           String            @db.Uuid
+  titleSnapshot    String            @db.VarChar(255)
+  unitPriceCents   Int
+  quantity         Int               @default(1)
+  createdAt        DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
+  orderItemOptions OrderItemOption[]
+  item             Item              @relation(fields: [itemId], references: [id])
+  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_items")
+}
+
+model OrderItemOption {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderItemId      String         @db.Uuid
+  modifierId       String         @db.Uuid
+  modifierOptionId String         @db.Uuid
+  titleSnapshot    String         @db.VarChar(255)
+  priceDeltaCents  Int            @default(0)
+  createdAt        DateTime       @default(now()) @db.Timestamp(6)
+  updatedAt        DateTime       @updatedAt @db.Timestamp(6)
+  modifier         Modifier       @relation(fields: [modifierId], references: [id])
+  modifierOption   ModifierOption @relation(fields: [modifierOptionId], references: [id])
+  orderItem        OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@map("order_item_options")
+}
+
+model AuditLog {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId        String   @db.Uuid
+  actorProfileId String?  @db.Uuid
+  action         String   @db.VarChar(100)
+  entity         String   @db.VarChar(100)
+  entityId       String   @db.Uuid
+  diff           Json?
+  ts             DateTime @default(now()) @db.Timestamp(6)
+  actorProfile   Profile? @relation(fields: [actorProfileId], references: [id])
+  store          Store    @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, ts(sort: Desc)])
+  @@map("audit_logs")
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+}
+
+enum Role {
+  WAITER
+  MANAGER
+  COOK
+}
+
+enum OrderStatus {
+  PLACED
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
