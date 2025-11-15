@@ -7,8 +7,10 @@ import { orderRoutes } from './routes/orders.js';
 import { storeRoutes } from './routes/store.js';
 import { waiterTableRoutes } from './routes/waiterTables.js';
 import { managerRoutes } from './routes/manager.js';
-import { getMqttClient } from './lib/mqtt.js';
 import { webhookRoutes } from './routes/webhooks.js';
+import { eventsRoutes } from './routes/events.js';
+import { setupRealtimeGateway } from './lib/realtime.js';
+import { getMqttClient } from './lib/mqtt.js';
 
 // Load local .env only for non-production environments.
 // In online deployments, rely solely on platform-provided env vars.
@@ -72,6 +74,9 @@ fastify.get('/health', async (request, reply) => {
   return { status: 'ok', timestamp: new Date().toISOString() };
 });
 
+setupRealtimeGateway(fastify);
+getMqttClient();
+
 // Register routes
 await fastify.register(authRoutes);
 await fastify.register(storeRoutes);
@@ -80,9 +85,7 @@ await fastify.register(orderRoutes);
 await fastify.register(waiterTableRoutes);
 await fastify.register(managerRoutes);
 await fastify.register(webhookRoutes);
-
-// Initialize MQTT
-getMqttClient();
+await fastify.register(eventsRoutes);
 
 // Start server
 try {

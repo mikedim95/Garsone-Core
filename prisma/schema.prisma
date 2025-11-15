@@ -26,8 +26,8 @@ model Store {
   profiles        Profile[]
   storeMeta       StoreMeta?
   tables          Table[]
-  waiterTables    WaiterTable[]
   waiterShifts    WaiterShift[]
+  waiterTables    WaiterTable[]
 
   @@map("stores")
 }
@@ -51,13 +51,14 @@ model Profile {
   passwordHash String        @db.VarChar(255)
   role         Role
   displayName  String?       @db.VarChar(255)
-  ratingAvg    Decimal?      @db.Decimal(4, 2)
   createdAt    DateTime      @default(now()) @db.Timestamp(6)
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
+  ratingAvg    Decimal?      @db.Decimal(4, 2)
+  isVerified   Boolean       @default(false)
   auditLogs    AuditLog[]
   store        Store         @relation(fields: [storeId], references: [id])
-  waiterTables WaiterTable[]
   waiterShifts WaiterShift[]
+  waiterTables WaiterTable[]
 
   @@index([storeId, role])
   @@map("profiles")
@@ -199,9 +200,9 @@ model Order {
   placedAt     DateTime    @default(now()) @db.Timestamp(6)
   createdAt    DateTime    @default(now()) @db.Timestamp(6)
   updatedAt    DateTime    @updatedAt @db.Timestamp(6)
-  servedAt     DateTime?   @db.Timestamp(6)
   ticketNumber Int?
   cancelReason String?     @db.VarChar(255)
+  servedAt     DateTime?   @db.Timestamp(6)
   orderItems   OrderItem[]
   store        Store       @relation(fields: [storeId], references: [id])
   table        Table       @relation(fields: [tableId], references: [id])

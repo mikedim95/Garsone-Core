@@ -26,6 +26,7 @@ const createOrderSchema = z.object({
 const updateStatusSchema = z.object({
   status: z.nativeEnum(OrderStatus),
   cancelReason: z.string().trim().min(1).max(255).optional(),
+  skipMqtt: z.boolean().optional(),
 });
 
 const callWaiterSchema = z.object({
@@ -75,6 +76,14 @@ function serializeOrder(order: OrderWithRelations) {
       })),
     })),
   };
+}
+
+async function getWaiterIdsForTable(storeId: string, tableId: string) {
+  const assignments = await db.waiterTable.findMany({
+    where: { storeId, tableId },
+    select: { waiterId: true },
+  });
+  return assignments.map((a) => a.waiterId);
 }
 
 function parseModifiers(value?: unknown) {
@@ -247,9 +256,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
         });
 
-        // Notify kitchen/clients over MQTT (topic used by frontend)
-        // printing = new order placed
-        publishMessage(`${STORE_SLUG}/orders/placed`, {
+        const waiterIds = await getWaiterIdsForTable(store.id, table.id);
+        const placedPayload = {
           orderId: createdOrder.id,
           tableId: createdOrder.tableId,
           tableLabel: table.label,
@@ -263,7 +271,16 @@ export async function orderRoutes(fastify: FastifyInstance) {
             unitPriceCents: orderItem.unitPriceCents,
             modifiers: orderItem.orderItemOptions,
           })),
+        };
+        publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
+          roles: ["cook"],
         });
+        if (waiterIds.length) {
+          publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
+            userIds: waiterIds,
+            skipMqtt: true,
+          });
+        }
 
         return reply
           .status(201)
@@ -367,6 +384,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = updateStatusSchema.parse(request.body);
+        const skipStatusMqtt = body.skipMqtt === true;
         const store = await ensureStore();
         const actorRole = (request as any).user?.role as string | undefined;
 
@@ -436,6 +454,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
         });
 
+        const waiterIdsForOrder = await getWaiterIdsForTable(
+          store.id,
+          updatedOrder.tableId
+        );
+
         if (body.status === OrderStatus.PREPARING) {
           // Allocate daily ticket number if missing
           if ((updatedOrder as any).ticketNumber == null) {
@@ -473,6 +496,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
             updatedOrder = result as any;
           }
           // Notify that kitchen accepted the order
+          const orderSnapshot = serializeOrder(
+            updatedOrder as OrderWithRelations
+          );
           const payload = {
             orderId: updatedOrder.id,
             tableId: updatedOrder.tableId,
@@ -486,12 +512,26 @@ export async function orderRoutes(fastify: FastifyInstance) {
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
             })),
+            order: orderSnapshot,
           };
-          publishMessage(`${STORE_SLUG}/orders/preparing`, payload);
+          publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
+            roles: ["cook"],
+            ...(skipStatusMqtt ? { skipMqtt: true } : {}),
+          });
+          if (waiterIdsForOrder.length) {
+            publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
+              userIds: waiterIdsForOrder,
+              skipMqtt: true,
+            });
+          }
+          publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
+            anonymousOnly: true,
+            skipMqtt: true,
+          });
         }
 
         if (body.status === OrderStatus.READY) {
-          publishMessage(`${STORE_SLUG}/orders/ready`, {
+          const payload = {
             orderId: updatedOrder.id,
             tableId: updatedOrder.tableId,
             tableLabel: updatedOrder.table?.label ?? "",
@@ -504,11 +544,20 @@ export async function orderRoutes(fastify: FastifyInstance) {
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
             })),
+          };
+          publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
+            roles: ["cook"],
           });
+          if (waiterIdsForOrder.length) {
+            publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
+              userIds: waiterIdsForOrder,
+              skipMqtt: true,
+            });
+          }
         }
 
         if (body.status === OrderStatus.CANCELLED) {
-          publishMessage(`${STORE_SLUG}/orders/canceled`, {
+          const payload = {
             orderId: updatedOrder.id,
             tableId: updatedOrder.tableId,
             tableLabel: updatedOrder.table?.label ?? "",
@@ -521,11 +570,20 @@ export async function orderRoutes(fastify: FastifyInstance) {
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
             })),
+          };
+          publishMessage(`${STORE_SLUG}/orders/canceled`, payload, {
+            roles: ["cook"],
           });
+          if (waiterIdsForOrder.length) {
+            publishMessage(`${STORE_SLUG}/orders/canceled`, payload, {
+              userIds: waiterIdsForOrder,
+              skipMqtt: true,
+            });
+          }
         }
 
         if (body.status === OrderStatus.SERVED) {
-          publishMessage(`${STORE_SLUG}/orders/served`, {
+          const payload = {
             orderId: updatedOrder.id,
             tableId: updatedOrder.tableId,
             tableLabel: updatedOrder.table?.label ?? "",
@@ -538,7 +596,16 @@ export async function orderRoutes(fastify: FastifyInstance) {
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
             })),
+          };
+          publishMessage(`${STORE_SLUG}/orders/served`, payload, {
+            roles: ["cook"],
           });
+          if (waiterIdsForOrder.length) {
+            publishMessage(`${STORE_SLUG}/orders/served`, payload, {
+              userIds: waiterIdsForOrder,
+              skipMqtt: true,
+            });
+          }
         }
 
         return reply.send({ order: serializeOrder(updatedOrder) });
@@ -685,7 +752,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         });
 
         // Notify clients (re-emit placed with new content)
-        publishMessage(`${STORE_SLUG}/orders/placed`, {
+        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+        const payloadPlaced = {
           orderId: updated.id,
           tableId: updated.tableId,
           tableLabel: updated.table?.label ?? "",
@@ -699,7 +767,16 @@ export async function orderRoutes(fastify: FastifyInstance) {
             unitPriceCents: oi.unitPriceCents,
             modifiers: oi.orderItemOptions,
           })),
+        };
+        publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
+          roles: ["cook"],
         });
+        if (waiterIds.length) {
+          publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
+            userIds: waiterIds,
+            skipMqtt: true,
+          });
+        }
 
         return reply.send({ order: serializeOrder(updated) });
       } catch (error) {
@@ -710,6 +787,59 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
         console.error("Edit order error:", error);
         return reply.status(500).send({ error: "Failed to edit order" });
+      }
+    }
+  );
+
+  fastify.post(
+    "/orders/:id/print",
+    {
+      preHandler: [authMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            id: z.string().uuid(),
+          })
+          .parse(request.params ?? {});
+        const store = await ensureStore();
+        const order = await db.order.findFirst({
+          where: { id: params.id, storeId: store.id },
+          include: {
+            table: { select: { id: true, label: true } },
+            orderItems: { include: { orderItemOptions: true } },
+          },
+        });
+        if (!order) {
+          return reply.status(404).send({ error: "Order not found" });
+        }
+
+        const payload = {
+          orderId: order.id,
+          tableLabel: order.table?.label ?? "",
+          createdAt: order.createdAt,
+          printedAt: new Date().toISOString(),
+          items: order.orderItems.map((oi) => ({
+            title: oi.titleSnapshot,
+            quantity: oi.quantity,
+            unitPriceCents: oi.unitPriceCents,
+            modifiers: oi.orderItemOptions.map((opt) => ({
+              titleSnapshot: opt.titleSnapshot,
+              priceDeltaCents: opt.priceDeltaCents,
+            })),
+          })),
+        };
+        publishMessage(`${STORE_SLUG}/orders/accepted`, payload);
+        return reply.send({ success: true });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Print order error:", error);
+        return reply.status(500).send({ error: "Failed to print order" });
       }
     }
   );
@@ -734,11 +864,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
 
         // New waiter call topic: {slug}/waiter/call
+        const waiterIds = await getWaiterIdsForTable(store.id, table.id);
         publishMessage(`${STORE_SLUG}/waiter/call`, {
           tableId: body.tableId,
           action: "called",
           ts: new Date().toISOString(),
-        });
+        }, { userIds: waiterIds });
 
         return reply.send({ success: true });
       } catch (error) {
