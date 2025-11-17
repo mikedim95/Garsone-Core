@@ -1,5 +1,6 @@
 import os from "os";
 import mqtt from "mqtt";
+import type { QoS } from "mqtt-packet";
 import { emitRealtime } from "./realtime.js";
 
 export type PublishOptions = {
@@ -34,7 +35,10 @@ const MQTT_RECONNECT_MS = Number(process.env.MQTT_RECONNECT_MS || "5000");
 const MQTT_REJECT_UNAUTHORIZED =
   String(process.env.MQTT_REJECT_UNAUTHORIZED || "true").toLowerCase() !==
   "false";
-const MQTT_QOS = Number(process.env.MQTT_QOS || "1");
+const rawQos = Number(process.env.MQTT_QOS || "1");
+const MQTT_QOS: QoS = (Number.isFinite(rawQos)
+  ? Math.min(2, Math.max(0, rawQos))
+  : 1) as QoS;
 const MQTT_DEBUG =
   String(process.env.MQTT_DEBUG || "false").toLowerCase() === "true";
 
