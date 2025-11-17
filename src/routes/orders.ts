@@ -403,7 +403,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const next = body.status;
         const allowByRole = (role?: string) => {
           if (!role) return false;
-          if (next === OrderStatus.SERVED)
+          if (next === OrderStatus.SERVED || next === OrderStatus.PAID)
             return role === "waiter" || role === "manager";
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
             return role === "cook" || role === "manager";
@@ -421,7 +421,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const prev = existing.status;
         const now = new Date();
         const trimmedReason =
-          typeof body.cancelReason === "string" && body.cancelReason.trim().length > 0
+          typeof body.cancelReason === "string" &&
+          body.cancelReason.trim().length > 0
             ? body.cancelReason.trim()
             : undefined;
         const updateData: any = {
@@ -432,11 +433,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
           updateData.servedAt = existing.servedAt ?? now;
           updateData.cancelReason = null;
         } else {
-          if (existing.servedAt && prev === OrderStatus.SERVED) {
+          // Preserve servedAt if moving from SERVED -> PAID; clear it only
+          // when moving away from SERVED to a non-PAID status.
+          if (
+            existing.servedAt &&
+            prev === OrderStatus.SERVED &&
+            body.status !== OrderStatus.PAID
+          ) {
             updateData.servedAt = null;
           }
           if (body.status === OrderStatus.CANCELLED) {
-            updateData.cancelReason = trimmedReason ?? existing.cancelReason ?? null;
+            updateData.cancelReason =
+              trimmedReason ?? existing.cancelReason ?? null;
           } else if (existing.cancelReason) {
             updateData.cancelReason = null;
           }
@@ -602,6 +610,32 @@ export async function orderRoutes(fastify: FastifyInstance) {
           });
           if (waiterIdsForOrder.length) {
             publishMessage(`${STORE_SLUG}/orders/served`, payload, {
+              userIds: waiterIdsForOrder,
+              skipMqtt: true,
+            });
+          }
+        }
+
+        if (body.status === OrderStatus.PAID) {
+          const payload = {
+            orderId: updatedOrder.id,
+            tableId: updatedOrder.tableId,
+            tableLabel: updatedOrder.table?.label ?? "",
+            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
+            status: OrderStatus.PAID,
+            ts: new Date().toISOString(),
+            items: updatedOrder.orderItems.map((oi) => ({
+              title: oi.titleSnapshot,
+              quantity: oi.quantity,
+              unitPriceCents: oi.unitPriceCents,
+              modifiers: oi.orderItemOptions,
+            })),
+          };
+          publishMessage(`${STORE_SLUG}/orders/paid`, payload, {
+            roles: ["cook"],
+          });
+          if (waiterIdsForOrder.length) {
+            publishMessage(`${STORE_SLUG}/orders/paid`, payload, {
               userIds: waiterIdsForOrder,
               skipMqtt: true,
             });
@@ -865,11 +899,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         // New waiter call topic: {slug}/waiter/call
         const waiterIds = await getWaiterIdsForTable(store.id, table.id);
-        publishMessage(`${STORE_SLUG}/waiter/call`, {
-          tableId: body.tableId,
-          action: "called",
-          ts: new Date().toISOString(),
-        }, { userIds: waiterIds });
+        publishMessage(
+          `${STORE_SLUG}/waiter/call`,
+          {
+            tableId: body.tableId,
+            action: "called",
+            ts: new Date().toISOString(),
+          },
+          { userIds: waiterIds }
+        );
 
         return reply.send({ success: true });
       } catch (error) {
