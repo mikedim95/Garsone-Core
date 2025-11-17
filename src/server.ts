@@ -25,7 +25,15 @@ const CORS_ENV = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN; // comma-s
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN; // optional single origin
 const IS_PROD = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER);
 
-let corsOrigin: boolean | string[] = ['http://localhost:5173'];
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:5173',
+  'https://www.garsone.gr',
+  'https://garsone.gr',
+];
+
+let corsOrigin: boolean | string[] = [...DEFAULT_ALLOWED_ORIGINS];
 if (CORS_ENV && CORS_ENV.trim().length > 0) {
   if (CORS_ENV.trim() === '*') {
     corsOrigin = true;
