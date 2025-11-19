@@ -203,6 +203,10 @@ model Order {
   ticketNumber Int?
   cancelReason String?     @db.VarChar(255)
   servedAt     DateTime?   @db.Timestamp(6)
+  preparingAt  DateTime?   @db.Timestamp(6)
+  readyAt      DateTime?   @db.Timestamp(6)
+  paidAt       DateTime?   @db.Timestamp(6)
+  cancelledAt  DateTime?   @db.Timestamp(6)
   orderItems   OrderItem[]
   store        Store       @relation(fields: [storeId], references: [id])
   table        Table       @relation(fields: [tableId], references: [id])

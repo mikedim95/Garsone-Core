@@ -44,6 +44,30 @@ type OrderWithRelations = Prisma.OrderGetPayload<{
   };
 }>;
 
+const STATUS_PROGRESS_FLOW: OrderStatus[] = [
+  OrderStatus.PLACED,
+  OrderStatus.PREPARING,
+  OrderStatus.READY,
+  OrderStatus.SERVED,
+  OrderStatus.PAID,
+];
+
+type StatusTimestampField =
+  | "preparingAt"
+  | "readyAt"
+  | "servedAt"
+  | "paidAt"
+  | "cancelledAt";
+
+const STATUS_TIMESTAMP_FIELDS: Record<OrderStatus, StatusTimestampField | undefined> = {
+  [OrderStatus.PLACED]: undefined,
+  [OrderStatus.PREPARING]: "preparingAt",
+  [OrderStatus.READY]: "readyAt",
+  [OrderStatus.SERVED]: "servedAt",
+  [OrderStatus.PAID]: "paidAt",
+  [OrderStatus.CANCELLED]: "cancelledAt",
+};
+
 function serializeOrder(order: OrderWithRelations) {
   return {
     id: order.id,
@@ -58,6 +82,10 @@ function serializeOrder(order: OrderWithRelations) {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     servedAt: order.servedAt,
+    preparingAt: order.preparingAt,
+    readyAt: order.readyAt,
+    paidAt: order.paidAt,
+    cancelledAt: order.cancelledAt,
     cancelReason: order.cancelReason,
     items: order.orderItems.map((orderItem) => ({
       id: orderItem.id,
@@ -418,7 +446,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .send({ error: "Insufficient permissions for status change" });
         }
 
-        const prev = existing.status;
         const now = new Date();
         const trimmedReason =
           typeof body.cancelReason === "string" &&
@@ -429,24 +456,29 @@ export async function orderRoutes(fastify: FastifyInstance) {
           status: body.status,
           updatedAt: now,
         };
-        if (body.status === OrderStatus.SERVED) {
-          updateData.servedAt = existing.servedAt ?? now;
-          updateData.cancelReason = null;
-        } else {
-          // Preserve servedAt if moving from SERVED -> PAID; clear it only
-          // when moving away from SERVED to a non-PAID status.
-          if (
-            existing.servedAt &&
-            prev === OrderStatus.SERVED &&
-            body.status !== OrderStatus.PAID
-          ) {
-            updateData.servedAt = null;
+        const statusTimestampField = STATUS_TIMESTAMP_FIELDS[body.status];
+        if (statusTimestampField) {
+          updateData[statusTimestampField] = now;
+        }
+        const flowIndex = STATUS_PROGRESS_FLOW.indexOf(body.status);
+        if (flowIndex >= 0) {
+          for (let i = flowIndex + 1; i < STATUS_PROGRESS_FLOW.length; i++) {
+            const futureStatus = STATUS_PROGRESS_FLOW[i];
+            const futureField = STATUS_TIMESTAMP_FIELDS[futureStatus];
+            if (futureField && (existing as any)[futureField]) {
+              updateData[futureField] = null;
+            }
           }
-          if (body.status === OrderStatus.CANCELLED) {
-            updateData.cancelReason =
-              trimmedReason ?? existing.cancelReason ?? null;
-          } else if (existing.cancelReason) {
+        }
+        if (body.status === OrderStatus.CANCELLED) {
+          updateData.cancelReason =
+            trimmedReason ?? existing.cancelReason ?? null;
+        } else {
+          if (existing.cancelReason) {
             updateData.cancelReason = null;
+          }
+          if (existing.cancelledAt) {
+            updateData.cancelledAt = null;
           }
         }
         let updatedOrder = await db.order.update({
