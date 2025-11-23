@@ -68,6 +68,22 @@ const STATUS_TIMESTAMP_FIELDS: Record<OrderStatus, StatusTimestampField | undefi
   [OrderStatus.CANCELLED]: "cancelledAt",
 };
 
+const parsePositiveInt = (value: string | number | undefined, fallback: number) => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? parseInt(value, 10)
+      : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+};
+
+const ORDERS_DEFAULT_TAKE = parsePositiveInt(process.env.ORDERS_DEFAULT_TAKE, 500);
+const ORDERS_MAX_TAKE = Math.max(
+  ORDERS_DEFAULT_TAKE,
+  parsePositiveInt(process.env.ORDERS_MAX_TAKE, 2000)
+);
+
 function serializeOrder(order: OrderWithRelations) {
   return {
     id: order.id,
@@ -339,9 +355,23 @@ export async function orderRoutes(fastify: FastifyInstance) {
           .object({ status: z.nativeEnum(OrderStatus).optional() })
           .parse(request.query ?? {});
 
+        const requestedTake =
+          typeof (request.query as any)?.take !== "undefined"
+            ? Number((request.query as any)?.take)
+            : ORDERS_DEFAULT_TAKE;
         const queryTake = Math.min(
-          Math.max(Number((request.query as any)?.take ?? 30), 1),
-          100
+          Math.max(Number.isFinite(requestedTake) ? requestedTake : ORDERS_DEFAULT_TAKE, 1),
+          ORDERS_MAX_TAKE
+        );
+        console.log(
+          "[orders:list] store",
+          store.slug,
+          "status",
+          query.status ?? "any",
+          "requestedTake",
+          requestedTake,
+          "effectiveTake",
+          queryTake
         );
         const ordersData = await db.order.findMany({
           where: {
@@ -359,6 +389,19 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           },
         });
+        const placedDates = ordersData
+          .map((o) => o.placedAt || o.createdAt)
+          .filter(Boolean)
+          .map((d) => new Date(d as Date).toISOString())
+          .sort();
+        console.log(
+          "[orders:list] returned",
+          ordersData.length,
+          "firstDate",
+          placedDates[0],
+          "lastDate",
+          placedDates[placedDates.length - 1]
+        );
 
         return reply.send({ orders: ordersData.map(serializeOrder) });
       } catch (error) {
