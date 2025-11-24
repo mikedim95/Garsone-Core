@@ -827,7 +827,7 @@ async function seed() {
         data: {
           storeId,
           waiterId: waiter.id,
-          status: ShiftStatus.CLOSED,
+          status: ShiftStatus.COMPLETED,
           startedAt: start,
           endedAt: end,
         },
