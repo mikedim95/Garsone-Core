@@ -4,20 +4,19 @@ import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
-// Override per run: STORE_SLUG=cincin npm run db:seed
 const STORE_SLUG = process.env.STORE_SLUG || "demo-bar";
+
 const DEFAULT_PASSWORD =
   process.env.DEFAULT_PASSWORD ||
   process.env.MANAGER_PASSWORD ||
   process.env.WAITER_PASSWORD ||
   "changeme";
 
-// CONFIG
 const DAYS_BACK = 180; // ~6 months
-const MIN_ORDERS_PER_DAY = 3;
+const MIN_ORDERS_PER_DAY = 5;
 const MAX_ORDERS_PER_DAY = 25;
-const OPEN_HOUR = 9; // 09:00
-const CLOSE_HOUR = 23; // 23:59
+
+// ---------- helpers ----------
 
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -27,44 +26,164 @@ function randFromArray<T>(arr: T[]): T {
   return arr[randInt(0, arr.length - 1)];
 }
 
-function randomOrderStatus(): OrderStatus {
-  const pool: OrderStatus[] = [
-    "PAID",
-    "PAID",
-    "PAID", // mostly paid
-    "SERVED",
-    "SERVED",
-    "READY",
-    "PREPARING",
-    "PLACED",
-    "CANCELLED",
-  ];
-  return randFromArray(pool);
-}
-
 function randomDateOnDay(day: Date): Date {
   const d = new Date(day);
-  const hour = randInt(OPEN_HOUR, CLOSE_HOUR);
-  const minute = randInt(0, 59);
-  const second = randInt(0, 59);
-  d.setHours(hour, minute, second, 0);
+  d.setHours(0, 0, 0, 0);
+  const minutesOffset = randInt(0, 60 * 24 - 1);
+  d.setMinutes(d.getMinutes() + minutesOffset);
   return d;
 }
 
-async function recreateMenu(storeId: string) {
-  console.log("Deleting existing menu for this store...");
+async function ensureProfile(
+  storeId: string,
+  email: string,
+  role: Role,
+  displayName: string,
+  password?: string
+) {
+  const normalizedEmail = email.toLowerCase();
 
-  // Order of deletes to satisfy FKs
+  const existing = await prisma.profile.findUnique({
+    where: { email: normalizedEmail },
+  });
+
+  if (existing) return existing;
+
+  const passwordHash = await bcrypt.hash(password || DEFAULT_PASSWORD, 10);
+
+  return prisma.profile.create({
+    data: {
+      storeId,
+      email: normalizedEmail,
+      role,
+      displayName,
+      passwordHash,
+    },
+  });
+}
+
+async function seed() {
+  console.log(`Seeding demo data for store slug: ${STORE_SLUG}`);
+
+  const store = await prisma.store.findUnique({
+    where: { slug: STORE_SLUG },
+  });
+
+  if (!store) {
+    console.error(
+      `No store found with slug "${STORE_SLUG}". Create it first or set STORE_SLUG.`
+    );
+    process.exit(1);
+  }
+
+  const storeId = store.id;
+  console.log(`Seeding for store "${store.slug}" (${storeId})`);
+
+  // ---------- PROFILES (fused from old seedProfiles) ----------
+  const manager = await ensureProfile(
+    storeId,
+    process.env.MANAGER_EMAIL || "manager@demo.local",
+    Role.MANAGER,
+    "Demo Manager",
+    process.env.MANAGER_PASSWORD
+  );
+
+  const waiter1 = await ensureProfile(
+    storeId,
+    process.env.WAITER_1_EMAIL || "waiter1@demo.local",
+    Role.WAITER,
+    "Waiter One",
+    process.env.WAITER_1_PASSWORD
+  );
+
+  const waiter2 = await ensureProfile(
+    storeId,
+    process.env.WAITER_2_EMAIL || "waiter2@demo.local",
+    Role.WAITER,
+    "Waiter Two",
+    process.env.WAITER_2_PASSWORD
+  );
+
+  const cook = await ensureProfile(
+    storeId,
+    process.env.COOK_EMAIL || "cook@demo.local",
+    Role.COOK,
+    "Demo Cook",
+    process.env.COOK_PASSWORD
+  );
+
+  const architect = await ensureProfile(
+    storeId,
+    process.env.ARCHITECT_EMAIL || "architect@demo.local",
+    Role.ARCHITECT,
+    "Architect Admin",
+    process.env.ARCHITECT_PASSWORD
+  );
+
+  console.log("Profiles ensured:", {
+    manager: manager.email,
+    waiter1: waiter1.email,
+    waiter2: waiter2.email,
+    cook: cook.email,
+    architect: architect.email,
+  });
+
+  // ---------- CLEAR EXISTING DEMO DATA (orders/menu/shifts) ----------
+  console.log("Clearing existing demo data for this store...");
+
+  await prisma.order.deleteMany({ where: { storeId } });
+  await prisma.waiterTable.deleteMany({ where: { storeId } });
+  await prisma.waiterShift.deleteMany({ where: { storeId } });
+
   await prisma.itemModifier.deleteMany({ where: { storeId } });
   await prisma.modifierOption.deleteMany({ where: { storeId } });
   await prisma.modifier.deleteMany({ where: { storeId } });
+
   await prisma.item.deleteMany({ where: { storeId } });
   await prisma.category.deleteMany({ where: { storeId } });
-  await prisma.kitchenCounter.deleteMany({ where: { storeId } });
 
-  console.log("Creating new sane menu...");
+  // ---------- TABLES ----------
+  console.log("Ensuring tables...");
 
-  // ---- Categories ----
+  let tables = await prisma.table.findMany({
+    where: { storeId },
+    orderBy: { label: "asc" },
+  });
+
+  if (tables.length === 0) {
+    const tableLabels = [
+      "T1",
+      "T2",
+      "T3",
+      "T4",
+      "T5",
+      "T6",
+      "T7",
+      "T8",
+      "T9",
+      "T10",
+    ];
+
+    tables = await Promise.all(
+      tableLabels.map((label) =>
+        prisma.table.create({
+          data: {
+            storeId,
+            label,
+            isActive: true,
+          },
+        })
+      )
+    );
+
+    console.log(`Created ${tables.length} tables.`);
+  } else {
+    console.log(`Reusing ${tables.length} existing tables.`);
+  }
+
+  // ---------- CATEGORIES ----------
+  console.log("Creating categories...");
+
   const coffeeCat = await prisma.category.create({
     data: {
       storeId,
@@ -110,16 +229,18 @@ async function recreateMenu(storeId: string) {
     },
   });
 
-  // ---- Items ----
+  // ---------- ITEMS ----------
+  console.log("Creating items...");
+
   const espresso = await prisma.item.create({
     data: {
       storeId,
       categoryId: coffeeCat.id,
       slug: "espresso",
       title: "Espresso",
-      description: "Single espresso shot",
-      priceCents: 200,
-      costCents: 40,
+      description: "Classic single shot espresso.",
+      priceCents: 250,
+      isAvailable: true,
       sortOrder: 1,
     },
   });
@@ -130,9 +251,9 @@ async function recreateMenu(storeId: string) {
       categoryId: coffeeCat.id,
       slug: "double-espresso",
       title: "Double Espresso",
-      description: "Double espresso shot",
-      priceCents: 260,
-      costCents: 55,
+      description: "Double shot espresso.",
+      priceCents: 320,
+      isAvailable: true,
       sortOrder: 2,
     },
   });
@@ -143,9 +264,9 @@ async function recreateMenu(storeId: string) {
       categoryId: coffeeCat.id,
       slug: "cappuccino",
       title: "Cappuccino",
-      description: "Classic cappuccino",
-      priceCents: 320,
-      costCents: 80,
+      description: "Espresso with steamed milk and foam.",
+      priceCents: 350,
+      isAvailable: true,
       sortOrder: 3,
     },
   });
@@ -156,9 +277,9 @@ async function recreateMenu(storeId: string) {
       categoryId: coffeeCat.id,
       slug: "latte",
       title: "Latte",
-      description: "Espresso with steamed milk",
-      priceCents: 350,
-      costCents: 90,
+      description: "Espresso with extra steamed milk.",
+      priceCents: 380,
+      isAvailable: true,
       sortOrder: 4,
     },
   });
@@ -169,9 +290,9 @@ async function recreateMenu(storeId: string) {
       categoryId: coffeeCat.id,
       slug: "freddo-espresso",
       title: "Freddo Espresso",
-      description: "Iced shaken espresso",
+      description: "Iced shaken espresso.",
       priceCents: 320,
-      costCents: 80,
+      isAvailable: true,
       sortOrder: 5,
     },
   });
@@ -182,36 +303,10 @@ async function recreateMenu(storeId: string) {
       categoryId: coffeeCat.id,
       slug: "freddo-cappuccino",
       title: "Freddo Cappuccino",
-      description: "Iced shaken cappuccino",
-      priceCents: 360,
-      costCents: 100,
+      description: "Iced shaken espresso with foam milk.",
+      priceCents: 380,
+      isAvailable: true,
       sortOrder: 6,
-    },
-  });
-
-  const filterCoffee = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "filter-coffee",
-      title: "Filter Coffee",
-      description: "Freshly brewed filter coffee",
-      priceCents: 280,
-      costCents: 70,
-      sortOrder: 7,
-    },
-  });
-
-  const stillWater = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: drinksCat.id,
-      slug: "water-500",
-      title: "Water 500ml",
-      description: "Bottled still water",
-      priceCents: 80,
-      costCents: 20,
-      sortOrder: 1,
     },
   });
 
@@ -219,38 +314,38 @@ async function recreateMenu(storeId: string) {
     data: {
       storeId,
       categoryId: drinksCat.id,
-      slug: "soft-drink-330",
-      title: "Soft Drink 330ml",
-      description: "Coke / Sprite / Orange",
+      slug: "soft-drink",
+      title: "Soft Drink",
+      description: "Cola, lemon or orange.",
       priceCents: 250,
-      costCents: 80,
+      isAvailable: true,
+      sortOrder: 1,
+    },
+  });
+
+  const bottledWater = await prisma.item.create({
+    data: {
+      storeId,
+      categoryId: drinksCat.id,
+      slug: "bottled-water",
+      title: "Bottled Water",
+      description: "Still spring water 500ml.",
+      priceCents: 100,
+      isAvailable: true,
       sortOrder: 2,
     },
   });
 
-  const draftBeer = await prisma.item.create({
+  const beer = await prisma.item.create({
     data: {
       storeId,
       categoryId: drinksCat.id,
-      slug: "draft-beer-500",
-      title: "Draft Beer 500ml",
-      description: "House draft beer",
+      slug: "beer",
+      title: "Beer (draft)",
+      description: "Pint of draft beer.",
       priceCents: 450,
-      costCents: 150,
+      isAvailable: true,
       sortOrder: 3,
-    },
-  });
-
-  const bottledBeer = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: drinksCat.id,
-      slug: "bottled-beer-330",
-      title: "Bottled Beer 330ml",
-      description: "Local / imported bottle",
-      priceCents: 420,
-      costCents: 160,
-      sortOrder: 4,
     },
   });
 
@@ -260,9 +355,9 @@ async function recreateMenu(storeId: string) {
       categoryId: cocktailsCat.id,
       slug: "mojito",
       title: "Mojito",
-      description: "Rum, lime, mint, soda",
+      description: "Rum, lime, mint, soda.",
       priceCents: 800,
-      costCents: 280,
+      isAvailable: true,
       sortOrder: 1,
     },
   });
@@ -273,36 +368,23 @@ async function recreateMenu(storeId: string) {
       categoryId: cocktailsCat.id,
       slug: "aperol-spritz",
       title: "Aperol Spritz",
-      description: "Aperol, prosecco, soda",
-      priceCents: 780,
-      costCents: 260,
+      description: "Aperol, prosecco, soda.",
+      priceCents: 750,
+      isAvailable: true,
       sortOrder: 2,
     },
   });
 
-  const ginTonic = await prisma.item.create({
+  const espressoMartini = await prisma.item.create({
     data: {
       storeId,
       categoryId: cocktailsCat.id,
-      slug: "gin-tonic",
-      title: "Gin & Tonic",
-      description: "Gin, tonic water, lime",
-      priceCents: 750,
-      costCents: 250,
+      slug: "espresso-martini",
+      title: "Espresso Martini",
+      description: "Vodka, espresso, coffee liqueur.",
+      priceCents: 850,
+      isAvailable: true,
       sortOrder: 3,
-    },
-  });
-
-  const fries = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: snacksCat.id,
-      slug: "fries",
-      title: "French Fries",
-      description: "Crispy fries with salt",
-      priceCents: 380,
-      costCents: 120,
-      sortOrder: 1,
     },
   });
 
@@ -312,10 +394,10 @@ async function recreateMenu(storeId: string) {
       categoryId: snacksCat.id,
       slug: "club-sandwich",
       title: "Club Sandwich",
-      description: "Chicken, bacon, fries",
-      priceCents: 850,
-      costCents: 300,
-      sortOrder: 2,
+      description: "Triple sandwich with fries.",
+      priceCents: 900,
+      isAvailable: true,
+      sortOrder: 1,
     },
   });
 
@@ -325,9 +407,22 @@ async function recreateMenu(storeId: string) {
       categoryId: snacksCat.id,
       slug: "nachos",
       title: "Nachos",
-      description: "Nachos with cheese & salsa",
-      priceCents: 650,
-      costCents: 220,
+      description: "Tortilla chips with cheese and jalapeños.",
+      priceCents: 700,
+      isAvailable: true,
+      sortOrder: 2,
+    },
+  });
+
+  const fries = await prisma.item.create({
+    data: {
+      storeId,
+      categoryId: snacksCat.id,
+      slug: "fries",
+      title: "Fries",
+      description: "Crispy french fries.",
+      priceCents: 350,
+      isAvailable: true,
       sortOrder: 3,
     },
   });
@@ -336,11 +431,11 @@ async function recreateMenu(storeId: string) {
     data: {
       storeId,
       categoryId: dessertsCat.id,
-      slug: "chocolate-brownie",
+      slug: "brownie",
       title: "Chocolate Brownie",
-      description: "With vanilla ice cream",
-      priceCents: 520,
-      costCents: 180,
+      description: "Warm brownie with vanilla ice cream.",
+      priceCents: 600,
+      isAvailable: true,
       sortOrder: 1,
     },
   });
@@ -351,14 +446,53 @@ async function recreateMenu(storeId: string) {
       categoryId: dessertsCat.id,
       slug: "cheesecake",
       title: "Cheesecake",
-      description: "Classic cheesecake slice",
-      priceCents: 540,
-      costCents: 190,
+      description: "Classic baked cheesecake slice.",
+      priceCents: 650,
+      isAvailable: true,
       sortOrder: 2,
     },
   });
 
-  // ---- Modifiers ----
+  const iceCream = await prisma.item.create({
+    data: {
+      storeId,
+      categoryId: dessertsCat.id,
+      slug: "ice-cream",
+      title: "Ice Cream Scoop",
+      description: "Vanilla, chocolate or strawberry.",
+      priceCents: 250,
+      isAvailable: true,
+      sortOrder: 3,
+    },
+  });
+
+  const items = [
+    espresso,
+    doubleEspresso,
+    cappuccino,
+    latte,
+    freddoEspresso,
+    freddoCappuccino,
+    softDrink,
+    bottledWater,
+    beer,
+    mojito,
+    aperolSpritz,
+    espressoMartini,
+    clubSandwich,
+    nachos,
+    fries,
+    brownie,
+    cheesecake,
+    iceCream,
+  ];
+
+  console.log(`Created ${items.length} items.`);
+
+  // ---------- MODIFIERS & OPTIONS ----------
+  console.log("Creating modifiers and options...");
+
+  // We use minSelect/maxSelect instead of a 'required' flag on Modifier.
   const sizeModifier = await prisma.modifier.create({
     data: {
       storeId,
@@ -379,26 +513,27 @@ async function recreateMenu(storeId: string) {
     },
   });
 
-  const sugarModifier = await prisma.modifier.create({
+  const sweetnessModifier = await prisma.modifier.create({
     data: {
       storeId,
-      slug: "sugar",
-      title: "Sugar",
-      minSelect: 1,
+      slug: "sweetness",
+      title: "Sweetness",
+      minSelect: 0,
       maxSelect: 1,
     },
   });
 
-  const tempModifier = await prisma.modifier.create({
+  const iceModifier = await prisma.modifier.create({
     data: {
       storeId,
-      slug: "temperature",
-      title: "Temperature",
-      minSelect: 1,
+      slug: "ice",
+      title: "Ice",
+      minSelect: 0,
       maxSelect: 1,
     },
   });
 
+  // options; note: ModifierOption has slug, title, priceDeltaCents, sortOrder
   const sizeSmall = await prisma.modifierOption.create({
     data: {
       storeId,
@@ -409,7 +544,6 @@ async function recreateMenu(storeId: string) {
       sortOrder: 1,
     },
   });
-
   const sizeMedium = await prisma.modifierOption.create({
     data: {
       storeId,
@@ -420,7 +554,6 @@ async function recreateMenu(storeId: string) {
       sortOrder: 2,
     },
   });
-
   const sizeLarge = await prisma.modifierOption.create({
     data: {
       storeId,
@@ -432,310 +565,303 @@ async function recreateMenu(storeId: string) {
     },
   });
 
-  const milkCow = await prisma.modifierOption.create({
+  const milkRegular = await prisma.modifierOption.create({
     data: {
       storeId,
       modifierId: milkModifier.id,
-      slug: "cow",
-      title: "Cow Milk",
+      slug: "regular",
+      title: "Regular",
       priceDeltaCents: 0,
       sortOrder: 1,
     },
   });
-
-  const milkLactoseFree = await prisma.modifierOption.create({
+  const milkSoy = await prisma.modifierOption.create({
     data: {
       storeId,
       modifierId: milkModifier.id,
-      slug: "lactose-free",
-      title: "Lactose-Free",
-      priceDeltaCents: 40,
+      slug: "soy",
+      title: "Soy",
+      priceDeltaCents: 50,
       sortOrder: 2,
     },
   });
-
   const milkOat = await prisma.modifierOption.create({
     data: {
       storeId,
       modifierId: milkModifier.id,
       slug: "oat",
-      title: "Oat Milk",
-      priceDeltaCents: 50,
+      title: "Oat",
+      priceDeltaCents: 70,
       sortOrder: 3,
     },
   });
 
-  const sugarNo = await prisma.modifierOption.create({
+  const sweetnessNo = await prisma.modifierOption.create({
     data: {
       storeId,
-      modifierId: sugarModifier.id,
+      modifierId: sweetnessModifier.id,
       slug: "no-sugar",
       title: "No sugar",
       priceDeltaCents: 0,
       sortOrder: 1,
     },
   });
-
-  const sugarMedium = await prisma.modifierOption.create({
+  const sweetness1 = await prisma.modifierOption.create({
     data: {
       storeId,
-      modifierId: sugarModifier.id,
-      slug: "medium-sugar",
-      title: "Medium",
+      modifierId: sweetnessModifier.id,
+      slug: "1-sugar",
+      title: "1 sugar",
       priceDeltaCents: 0,
       sortOrder: 2,
     },
   });
-
-  const sugarSweet = await prisma.modifierOption.create({
+  const sweetness2 = await prisma.modifierOption.create({
     data: {
       storeId,
-      modifierId: sugarModifier.id,
-      slug: "sweet",
-      title: "Sweet",
+      modifierId: sweetnessModifier.id,
+      slug: "2-sugars",
+      title: "2 sugars",
+      priceDeltaCents: 0,
+      sortOrder: 3,
+    },
+  });
+  const sweetness3 = await prisma.modifierOption.create({
+    data: {
+      storeId,
+      modifierId: sweetnessModifier.id,
+      slug: "3-sugars",
+      title: "3 sugars",
+      priceDeltaCents: 0,
+      sortOrder: 4,
+    },
+  });
+
+  const iceNone = await prisma.modifierOption.create({
+    data: {
+      storeId,
+      modifierId: iceModifier.id,
+      slug: "no-ice",
+      title: "No ice",
+      priceDeltaCents: 0,
+      sortOrder: 1,
+    },
+  });
+  const iceNormal = await prisma.modifierOption.create({
+    data: {
+      storeId,
+      modifierId: iceModifier.id,
+      slug: "normal-ice",
+      title: "Normal ice",
+      priceDeltaCents: 0,
+      sortOrder: 2,
+    },
+  });
+  const iceExtra = await prisma.modifierOption.create({
+    data: {
+      storeId,
+      modifierId: iceModifier.id,
+      slug: "extra-ice",
+      title: "Extra ice",
       priceDeltaCents: 0,
       sortOrder: 3,
     },
   });
 
-  const tempHot = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: tempModifier.id,
-      slug: "hot",
-      title: "Hot",
-      priceDeltaCents: 0,
-      sortOrder: 1,
-    },
-  });
+  const modifierOptionsByModifierId: Record<
+    string,
+    { id: string; title: string; priceDeltaCents: number }[]
+  > = {
+    [sizeModifier.id]: [sizeSmall, sizeMedium, sizeLarge],
+    [milkModifier.id]: [milkRegular, milkSoy, milkOat],
+    [sweetnessModifier.id]: [sweetnessNo, sweetness1, sweetness2, sweetness3],
+    [iceModifier.id]: [iceNone, iceNormal, iceExtra],
+  };
 
-  const tempIced = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: tempModifier.id,
-      slug: "iced",
-      title: "Iced",
-      priceDeltaCents: 0,
-      sortOrder: 2,
-    },
-  });
+  console.log("Modifiers and options created.");
 
-  const coffeeItems = [
-    espresso,
-    doubleEspresso,
-    cappuccino,
-    latte,
-    freddoEspresso,
-    freddoCappuccino,
-    filterCoffee,
-  ];
+  // ---------- ITEM <-> MODIFIER LINKING ----------
+  console.log("Linking item modifiers...");
 
+  // isRequired is on ItemModifier; we use it for things like "Size".
   await prisma.itemModifier.createMany({
-    data: coffeeItems.flatMap((item) => [
+    data: [
+      // Espresso & Double Espresso: size + sweetness
       {
         storeId,
-        itemId: item.id,
+        itemId: espresso.id,
         modifierId: sizeModifier.id,
         isRequired: true,
       },
       {
         storeId,
-        itemId: item.id,
-        modifierId: sugarModifier.id,
+        itemId: espresso.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: doubleEspresso.id,
+        modifierId: sizeModifier.id,
         isRequired: true,
       },
       {
         storeId,
-        itemId: item.id,
-        modifierId: tempModifier.id,
+        itemId: doubleEspresso.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
+      },
+
+      // Cappuccino & Latte: size + milk + sweetness
+      {
+        storeId,
+        itemId: cappuccino.id,
+        modifierId: sizeModifier.id,
         isRequired: true,
       },
       {
         storeId,
-        itemId: item.id,
+        itemId: cappuccino.id,
         modifierId: milkModifier.id,
         isRequired: false,
       },
-    ]),
-    skipDuplicates: true,
-  });
-
-  // init kitchen counter for today
-  const today = new Date().toISOString().slice(0, 10);
-  await prisma.kitchenCounter
-    .create({
-      data: {
+      {
         storeId,
-        day: today,
-        seq: 0,
+        itemId: cappuccino.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
       },
-    })
-    .catch(() => {
-      /* ignore if already exists */
-    });
+      {
+        storeId,
+        itemId: latte.id,
+        modifierId: sizeModifier.id,
+        isRequired: true,
+      },
+      {
+        storeId,
+        itemId: latte.id,
+        modifierId: milkModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: latte.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
+      },
 
-  console.log("New menu created.");
-}
-
-async function main() {
-  // ---------- STORE ----------
-  const store = await prisma.store.findFirst({
-    where: { slug: STORE_SLUG },
+      // Freddo Espresso & Freddo Cappuccino: size + sweetness + ice (+ milk for cappuccino)
+      {
+        storeId,
+        itemId: freddoEspresso.id,
+        modifierId: sizeModifier.id,
+        isRequired: true,
+      },
+      {
+        storeId,
+        itemId: freddoEspresso.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: freddoEspresso.id,
+        modifierId: iceModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: freddoCappuccino.id,
+        modifierId: sizeModifier.id,
+        isRequired: true,
+      },
+      {
+        storeId,
+        itemId: freddoCappuccino.id,
+        modifierId: milkModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: freddoCappuccino.id,
+        modifierId: sweetnessModifier.id,
+        isRequired: false,
+      },
+      {
+        storeId,
+        itemId: freddoCappuccino.id,
+        modifierId: iceModifier.id,
+        isRequired: false,
+      },
+    ],
   });
 
-  if (!store) {
-    console.error(
-      `No store found with slug "${STORE_SLUG}". Set STORE_SLUG or create the store first.`
-    );
-    process.exit(1);
-  }
-
-  console.log(`Seeding for store "${store.slug}" (${store.id})`);
-
-  const ensureProfile = async (
-    email: string,
-    role: Role,
-    displayName: string,
-    password?: string
-  ) => {
-    const normalizedEmail = email.toLowerCase();
-    const existing = await prisma.profile.findUnique({
-      where: { email: normalizedEmail },
-    });
-    if (existing) return existing;
-    const passwordHash = await bcrypt.hash(password || DEFAULT_PASSWORD, 10);
-    return prisma.profile.create({
-      data: {
-        storeId: store.id,
-        email: normalizedEmail,
-        passwordHash,
-        role,
-        displayName,
-      },
-    });
-  };
-
-  // ---------- DEFAULT PROFILES ----------
-  await ensureProfile(
-    process.env.MANAGER_EMAIL || "manager@demo.local",
-    Role.MANAGER,
-    "Demo Manager",
-    process.env.MANAGER_PASSWORD
-  );
-  await ensureProfile(
-    process.env.WAITER_EMAIL || "waiter1@demo.local",
-    Role.WAITER,
-    "Waiter One",
-    process.env.WAITER_PASSWORD
-  );
-  await ensureProfile(
-    process.env.WAITER_EMAIL_2 || "waiter2@demo.local",
-    Role.WAITER,
-    "Waiter Two",
-    process.env.WAITER_PASSWORD_2 || process.env.WAITER_PASSWORD
-  );
-  await ensureProfile(
-    process.env.COOK_EMAIL || "cook@demo.local",
-    Role.COOK,
-    "Demo Cook",
-    process.env.COOK_PASSWORD
-  );
-  await ensureProfile(
-    process.env.ARCHITECT_EMAIL || "architect@demo.local",
-    Role.ARCHITECT,
-    "Architect Admin",
-    process.env.ARCHITECT_PASSWORD
-  );
-
-  // ---------- KEEP EXISTING USERS ----------
-  const [waiters, managers, cooks, architects] = await Promise.all([
-    prisma.profile.findMany({
-      where: { storeId: store.id, role: Role.WAITER },
-    }),
-    prisma.profile.findMany({
-      where: { storeId: store.id, role: Role.MANAGER },
-    }),
-    prisma.profile.findMany({ where: { storeId: store.id, role: Role.COOK } }),
-    prisma.profile.findMany({
-      where: { storeId: store.id, role: Role.ARCHITECT },
-    }),
-  ]);
-
-  console.log(
-    `Existing users -> waiters: ${waiters.length}, managers: ${managers.length}, cooks: ${cooks.length}, architects: ${architects.length}`
-  );
-
-  // ---------- TABLES ----------
-  const tables = await prisma.table.findMany({ where: { storeId: store.id } });
-  if (tables.length === 0) {
-    console.error("No tables found for this store. Cannot seed orders.");
-    process.exit(1);
-  }
-
-  // ---------- DELETE ORDERS + SHIFTS ----------
-  console.log("Deleting existing orders for this store...");
-  await prisma.order.deleteMany({ where: { storeId: store.id } });
-
-  console.log("Deleting existing waiter shifts for this store...");
-  await prisma.waiterShift.deleteMany({ where: { storeId: store.id } });
-
-  // ---------- RECREATE MENU ----------
-  await recreateMenu(store.id);
-
-  // reload items from new menu
-  const items = await prisma.item.findMany({
-    where: { storeId: store.id, isAvailable: true },
+  const itemModifiers = await prisma.itemModifier.findMany({
+    where: { storeId },
+    include: { modifier: true },
   });
 
-  console.log(`New menu has ${items.length} items.`);
+  console.log("Item modifiers linked.");
 
-  // ---------- WAITER SHIFTS HISTORY ----------
-  if (waiters.length > 0) {
-    console.log("Creating random waiter shifts over the last 6 months...");
-    const shiftsData: Parameters<
-      typeof prisma.waiterShift.create
-    >[0]["data"][] = [];
+  // ---------- WAITER SHIFTS ----------
+  console.log("Generating waiter shifts (last 30 days)...");
 
-    for (let daysAgo = DAYS_BACK; daysAgo >= 0; daysAgo--) {
-      const day = new Date();
-      day.setDate(day.getDate() - daysAgo);
+  const waiters = [waiter1, waiter2];
+  const today = new Date();
+  const daysForShifts = 30;
 
-      const shiftsToday = randInt(1, Math.min(3, waiters.length));
-      const usedWaiterIds = new Set<string>();
+  for (let i = 0; i < daysForShifts; i++) {
+    const day = new Date(today);
+    day.setDate(today.getDate() - i);
+    day.setHours(0, 0, 0, 0);
 
-      for (let i = 0; i < shiftsToday; i++) {
-        const waiter = randFromArray(waiters);
-        if (usedWaiterIds.has(waiter.id)) continue;
-        usedWaiterIds.add(waiter.id);
+    for (const waiter of waiters) {
+      const start = new Date(day);
+      start.setHours(18, 0, 0, 0);
 
-        const start = new Date(day);
-        start.setHours(randInt(8, 15), 0, 0, 0);
-        const end = new Date(start);
-        end.setHours(start.getHours() + randInt(6, 10));
+      const end = new Date(day);
+      end.setDate(end.getDate() + 1);
+      end.setHours(2, 0, 0, 0);
 
-        shiftsData.push({
-          storeId: store.id,
+      await prisma.waiterShift.create({
+        data: {
+          storeId,
           waiterId: waiter.id,
-          status: ShiftStatus.COMPLETED,
+          status: ShiftStatus.CLOSED,
           startedAt: start,
           endedAt: end,
-        });
-      }
-    }
-
-    if (shiftsData.length > 0) {
-      await prisma.waiterShift.createMany({ data: shiftsData });
-      console.log(`Created ${shiftsData.length} waiter shifts.`);
+        },
+      });
     }
   }
 
-  // ---------- 6 MONTHS OF ORDERS ----------
+  console.log("Waiter shifts generated.");
+
+  // ---------- ORDERS (status distribution + options) ----------
   console.log(
     `Generating orders for the last ${DAYS_BACK} days (~6 months)...`
   );
 
   let globalTicketNumber = 1;
   const now = new Date();
+
+  const TARGET_PER_TABLE_STATUS = 5; // PLACED, PREPARING, READY per table
+  const TARGET_CANCELLED_GLOBAL = 30; // CANCELLED across all tables
+
+  const tableStatusCounters: Record<
+    string,
+    { PLACED: number; PREPARING: number; READY: number }
+  > = {};
+  for (const table of tables) {
+    tableStatusCounters[table.id] = { PLACED: 0, PREPARING: 0, READY: 0 };
+  }
+
+  let cancelledCountGlobal = 0;
+
+  // helper: get itemModifiers + options for a given item
+  function getItemModifiersWithOptions(itemId: string) {
+    return itemModifiers.filter((im) => im.itemId === itemId);
+  }
 
   for (let daysAgo = DAYS_BACK; daysAgo >= 0; daysAgo--) {
     const day = new Date();
@@ -748,32 +874,95 @@ async function main() {
       const placedAt = randomDateOnDay(day);
 
       const itemsCount = randInt(1, 5);
-      const orderItemsData: {
-        itemId: string;
-        titleSnapshot: string;
-        unitPriceCents: number;
-        quantity: number;
-      }[] = [];
 
-      let totalCents = 0;
+      type Line = {
+        item: (typeof items)[number];
+        quantity: number;
+        basePrice: number;
+        options: {
+          modifierId: string;
+          option: { id: string; title: string; priceDeltaCents: number };
+        }[];
+      };
+
+      const lines: Line[] = [];
 
       for (let j = 0; j < itemsCount; j++) {
         const item = randFromArray(items);
         const quantity = randInt(1, 3);
-        const unitPriceCents = item.priceCents;
+        const basePrice = item.priceCents;
 
-        totalCents += unitPriceCents * quantity;
+        const modsForItem = getItemModifiersWithOptions(item.id);
+        const chosenOptions: Line["options"] = [];
 
-        orderItemsData.push({
-          itemId: item.id,
-          titleSnapshot: item.title,
-          unitPriceCents,
+        for (const im of modsForItem) {
+          const opts = modifierOptionsByModifierId[im.modifierId] || [];
+
+          if (!opts.length) continue;
+
+          const required = im.isRequired || (im.modifier.minSelect ?? 0) > 0;
+
+          let pickCount = 0;
+
+          if (required) {
+            pickCount = 1;
+          } else {
+            pickCount = Math.random() < 0.5 ? 0 : 1;
+          }
+
+          if (pickCount > 0) {
+            const opt = randFromArray(opts);
+            chosenOptions.push({
+              modifierId: im.modifierId,
+              option: opt,
+            });
+          }
+        }
+
+        lines.push({
+          item,
           quantity,
+          basePrice,
+          options: chosenOptions,
         });
       }
 
-      const status = randomOrderStatus();
+      // compute total
+      let totalCents = 0;
+      for (const line of lines) {
+        const optionTotal = line.options.reduce(
+          (sum, o) => sum + o.option.priceDeltaCents,
+          0
+        );
+        totalCents += (line.basePrice + optionTotal) * line.quantity;
+      }
 
+      // status distribution logic
+      const counters = tableStatusCounters[table.id];
+      const needed: OrderStatus[] = [];
+
+      if (counters.PLACED < TARGET_PER_TABLE_STATUS) needed.push("PLACED");
+      if (counters.PREPARING < TARGET_PER_TABLE_STATUS)
+        needed.push("PREPARING");
+      if (counters.READY < TARGET_PER_TABLE_STATUS) needed.push("READY");
+
+      let status: OrderStatus;
+
+      if (needed.length > 0) {
+        status = randFromArray(needed);
+      } else if (cancelledCountGlobal < TARGET_CANCELLED_GLOBAL) {
+        status = "CANCELLED";
+      } else {
+        status = "PAID";
+      }
+
+      if (status === "PLACED" || status === "PREPARING" || status === "READY") {
+        counters[status] += 1;
+      } else if (status === "CANCELLED") {
+        cancelledCountGlobal += 1;
+      }
+
+      // timestamps
       let preparingAt: Date | null = null;
       let readyAt: Date | null = null;
       let servedAt: Date | null = null;
@@ -813,7 +1002,7 @@ async function main() {
 
       await prisma.order.create({
         data: {
-          storeId: store.id,
+          storeId,
           tableId: table.id,
           status,
           note: null,
@@ -827,11 +1016,19 @@ async function main() {
           paidAt: paidAt ?? undefined,
           cancelledAt: cancelledAt ?? undefined,
           orderItems: {
-            create: orderItemsData.map((oi) => ({
-              itemId: oi.itemId,
-              titleSnapshot: oi.titleSnapshot,
-              unitPriceCents: oi.unitPriceCents,
-              quantity: oi.quantity,
+            create: lines.map((line) => ({
+              itemId: line.item.id,
+              titleSnapshot: line.item.title,
+              unitPriceCents: line.basePrice,
+              quantity: line.quantity,
+              orderItemOptions: {
+                create: line.options.map((o) => ({
+                  modifierId: o.modifierId,
+                  modifierOptionId: o.option.id,
+                  titleSnapshot: `${o.option.title}`,
+                  priceDeltaCents: o.option.priceDeltaCents,
+                })),
+              },
             })),
           },
         },
@@ -843,16 +1040,18 @@ async function main() {
     }
   }
 
-  console.log("Finished generating 6 months of orders and new menu.");
+  console.log("Finished generating orders and menu.");
 }
 
-main()
-  .then(async () => {
-    console.log("db:seed completed successfully.");
+async function main() {
+  try {
+    await seed();
+  } finally {
     await prisma.$disconnect();
-  })
-  .catch(async (err) => {
-    console.error("db:seed failed:", err);
-    await prisma.$disconnect();
-    process.exit(1);
-  });
+  }
+}
+
+main().catch((err) => {
+  console.error("db:seed failed:", err);
+  process.exit(1);
+});

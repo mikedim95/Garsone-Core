@@ -81,12 +81,32 @@ const parsePositiveInt = (value: string | number | undefined, fallback: number) 
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 };
 
-const ORDERS_DEFAULT_TAKE = parsePositiveInt(process.env.ORDERS_DEFAULT_TAKE, 500);
+// Increase defaults so month-long histories are returned without trimming
+const ORDERS_DEFAULT_TAKE = parsePositiveInt(process.env.ORDERS_DEFAULT_TAKE, 5000);
 const ORDERS_MAX_TAKE = Math.max(
   ORDERS_DEFAULT_TAKE,
-  parsePositiveInt(process.env.ORDERS_MAX_TAKE, 2000)
+  parsePositiveInt(process.env.ORDERS_MAX_TAKE, 10000)
 );
 const REQUIRE_VISIT_TOKEN = REQUIRE_TABLE_VISIT;
+
+const ORDER_ITEM_INCLUDE = {
+  include: {
+    orderItemOptions: true,
+    item: {
+      select: {
+        id: true,
+        title: true,
+        categoryId: true,
+        category: {
+          select: {
+            title: true,
+            slug: true,
+          },
+        },
+      },
+    },
+  },
+};
 
 const pickHeaderToken = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value;
@@ -122,6 +142,10 @@ function serializeOrder(order: OrderWithRelations) {
     items: order.orderItems.map((orderItem) => ({
       id: orderItem.id,
       itemId: orderItem.itemId,
+      categoryId: (orderItem as any)?.item?.categoryId ?? null,
+      categoryTitle:
+        (orderItem as any)?.item?.category?.title ??
+        undefined,
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
@@ -176,12 +200,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       try {
+        const t0 = Date.now();
+        const logStep = (label: string) =>
+          console.log(`[orders:create] ${label} +${Date.now() - t0}ms`);
         const body = createOrderSchema.parse(request.body);
+        logStep("parsed");
         const store = await ensureStore();
+        logStep("store");
 
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
         });
+        logStep("table");
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
@@ -194,6 +224,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             storeId: store.id,
             tableId: table.id,
           });
+          logStep("visitValidation");
           if (!visit) {
             return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
           }
@@ -218,6 +249,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           },
         });
+        logStep("itemsFetched");
 
         const itemMap = new Map(items.map((item) => [item.id, item]));
 
@@ -306,6 +338,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
         }
+        logStep("computed");
 
         const createdOrder = await db.order.create({
           data: {
@@ -320,13 +353,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
+        logStep("dbCreate");
 
         const waiterIds = await getWaiterIdsForTable(store.id, table.id);
         const placedPayload = {
@@ -353,6 +383,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             skipMqtt: true,
           });
         }
+        logStep("published");
+        logStep("total");
 
         return reply
           .status(201)
@@ -410,11 +442,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           take: queryTake,
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
         const placedDates = ordersData
@@ -422,13 +450,27 @@ export async function orderRoutes(fastify: FastifyInstance) {
           .filter(Boolean)
           .map((d) => new Date(d as Date).toISOString())
           .sort();
+        const categoryStats = ordersData.reduce<Record<string, number>>((acc, o) => {
+          (o.orderItems || []).forEach((oi) => {
+            const cat =
+              (oi as any)?.item?.category?.title ??
+              (oi as any)?.item?.categoryId ??
+              "Uncategorized";
+            acc[cat] = (acc[cat] ?? 0) + 1;
+          });
+          return acc;
+        }, {});
         console.log(
           "[orders:list] returned",
           ordersData.length,
           "firstDate",
           placedDates[0],
           "lastDate",
-          placedDates[placedDates.length - 1]
+          placedDates[placedDates.length - 1],
+          "categorySamples",
+          Object.entries(categoryStats)
+            .slice(0, 5)
+            .map(([cat, count]) => `${cat}:${count}`)
         );
 
         return reply.send({ orders: ordersData.map(serializeOrder) });
@@ -897,7 +939,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: { include: { orderItemOptions: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
 
@@ -956,11 +998,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const store = await ensureStore();
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
-          include: {
-            table: { select: { id: true, label: true } },
-            orderItems: { include: { orderItemOptions: true } },
-          },
-        });
+        include: {
+          table: { select: { id: true, label: true } },
+          orderItems: ORDER_ITEM_INCLUDE,
+        },
+      });
         if (!order) {
           return reply.status(404).send({ error: "Order not found" });
         }
