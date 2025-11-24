@@ -1,10 +1,16 @@
 // prisma/seed.ts
 import { PrismaClient, OrderStatus, ShiftStatus, Role } from "@prisma/client";
+import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
 // Override per run: STORE_SLUG=cincin npm run db:seed
 const STORE_SLUG = process.env.STORE_SLUG || "demo-bar";
+const DEFAULT_PASSWORD =
+  process.env.DEFAULT_PASSWORD ||
+  process.env.MANAGER_PASSWORD ||
+  process.env.WAITER_PASSWORD ||
+  "changeme";
 
 // CONFIG
 const DAYS_BACK = 180; // ~6 months
@@ -586,8 +592,63 @@ async function main() {
 
   console.log(`Seeding for store "${store.slug}" (${store.id})`);
 
+  const ensureProfile = async (
+    email: string,
+    role: Role,
+    displayName: string,
+    password?: string
+  ) => {
+    const normalizedEmail = email.toLowerCase();
+    const existing = await prisma.profile.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existing) return existing;
+    const passwordHash = await bcrypt.hash(password || DEFAULT_PASSWORD, 10);
+    return prisma.profile.create({
+      data: {
+        storeId: store.id,
+        email: normalizedEmail,
+        passwordHash,
+        role,
+        displayName,
+      },
+    });
+  };
+
+  // ---------- DEFAULT PROFILES ----------
+  await ensureProfile(
+    process.env.MANAGER_EMAIL || "manager@demo.local",
+    Role.MANAGER,
+    "Demo Manager",
+    process.env.MANAGER_PASSWORD
+  );
+  await ensureProfile(
+    process.env.WAITER_EMAIL || "waiter1@demo.local",
+    Role.WAITER,
+    "Waiter One",
+    process.env.WAITER_PASSWORD
+  );
+  await ensureProfile(
+    process.env.WAITER_EMAIL_2 || "waiter2@demo.local",
+    Role.WAITER,
+    "Waiter Two",
+    process.env.WAITER_PASSWORD_2 || process.env.WAITER_PASSWORD
+  );
+  await ensureProfile(
+    process.env.COOK_EMAIL || "cook@demo.local",
+    Role.COOK,
+    "Demo Cook",
+    process.env.COOK_PASSWORD
+  );
+  await ensureProfile(
+    process.env.ARCHITECT_EMAIL || "architect@demo.local",
+    Role.ARCHITECT,
+    "Architect Admin",
+    process.env.ARCHITECT_PASSWORD
+  );
+
   // ---------- KEEP EXISTING USERS ----------
-  const [waiters, managers, cooks] = await Promise.all([
+  const [waiters, managers, cooks, architects] = await Promise.all([
     prisma.profile.findMany({
       where: { storeId: store.id, role: Role.WAITER },
     }),
@@ -595,10 +656,13 @@ async function main() {
       where: { storeId: store.id, role: Role.MANAGER },
     }),
     prisma.profile.findMany({ where: { storeId: store.id, role: Role.COOK } }),
+    prisma.profile.findMany({
+      where: { storeId: store.id, role: Role.ARCHITECT },
+    }),
   ]);
 
   console.log(
-    `Existing users -> waiters: ${waiters.length}, managers: ${managers.length}, cooks: ${cooks.length}`
+    `Existing users -> waiters: ${waiters.length}, managers: ${managers.length}, cooks: ${cooks.length}, architects: ${architects.length}`
   );
 
   // ---------- TABLES ----------

@@ -8,27 +8,6 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-model QRTile {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  store       Store    @relation(fields: [storeId], references: [id])
-  storeId     String   @db.Uuid
-
-  table       Table?   @relation(fields: [tableId], references: [id])
-  tableId     String?  @db.Uuid
-
-  publicCode  String   @unique @db.VarChar(32) // e.g. "ABC123", encoded in QR
-  label       String?  @db.VarChar(255)        // optional human label (pack name etc.)
-  isActive    Boolean  @default(true)
-
-  createdAt   DateTime @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime @updatedAt @db.Timestamp(6)
-
-  @@index([storeId])
-  @@index([tableId])
-  // Add @@map if needed to match DB naming conventions
-}
-
-
 model Store {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   slug            String           @unique @db.VarChar(100)
@@ -46,7 +25,9 @@ model Store {
   orders          Order[]
   profiles        Profile[]
   storeMeta       StoreMeta?
+  tableVisits     TableVisit[]
   tables          Table[]
+  qrTiles         QRTile[]
   waiterShifts    WaiterShift[]
   waiterTables    WaiterTable[]
 
@@ -95,9 +76,51 @@ model Table {
   orders       Order[]
   store        Store         @relation(fields: [storeId], references: [id])
   waiterTables WaiterTable[]
+  tableVisits  TableVisit[]
+  qrTiles      QRTile[]
 
   @@unique([storeId, label])
   @@map("tables")
+}
+
+model QRTile {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  store      Store    @relation(fields: [storeId], references: [id])
+  storeId    String   @db.Uuid
+
+  table      Table?   @relation(fields: [tableId], references: [id])
+  tableId    String?  @db.Uuid
+
+  publicCode String   @unique @db.VarChar(32) // printed in QR
+  label      String?  @db.VarChar(255)
+  isActive   Boolean  @default(true)
+
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+  tableVisits TableVisit[]
+
+  @@index([storeId])
+  @@index([tableId])
+  @@map("qr_tiles")
+}
+
+model TableVisit {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tileId       String           @db.Uuid
+  tableId      String           @db.Uuid
+  storeId      String           @db.Uuid
+  sessionToken String           @unique @db.VarChar(64)
+  status       TableVisitStatus @default(OPEN)
+  expiresAt    DateTime         @db.Timestamp(6)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @updatedAt @db.Timestamp(6)
+  tile         QRTile           @relation(fields: [tileId], references: [id])
+  table        Table            @relation(fields: [tableId], references: [id])
+  store        Store            @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, tableId, status])
+  @@index([expiresAt])
+  @@map("table_visits")
 }
 
 model WaiterTable {
@@ -314,6 +337,12 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+enum TableVisitStatus {
+  OPEN
+  CLOSED
+  EXPIRED
+}
+
 enum ShiftStatus {
   SCHEDULED
   ACTIVE
@@ -324,6 +353,7 @@ enum Role {
   WAITER
   MANAGER
   COOK
+  ARCHITECT
 }
 
 enum OrderStatus {

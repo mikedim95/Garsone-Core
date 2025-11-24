@@ -8,7 +8,7 @@ import { publishMessage } from '../lib/mqtt.js';
 import { invalidateMenuCache } from './menu.js';
 
 export async function managerRoutes(fastify: FastifyInstance) {
-  const managerOnly = [authMiddleware, requireRole(['manager'])];
+  const managerOnly = [authMiddleware, requireRole(['manager', 'architect'])];
 
   // Image upload via Supabase (service key). Body: { fileName, mimeType, base64, itemId? }
   fastify.post('/manager/uploads/image', { preHandler: managerOnly }, async (request, reply) => {

@@ -6,11 +6,13 @@ import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { ensureStore, STORE_SLUG } from "../lib/store.js";
+import { validateTableVisitToken, REQUIRE_TABLE_VISIT } from "../lib/tableVisits.js";
 
 const modifierSelectionSchema = z.record(z.string());
 
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
+  visit: z.string().trim().min(8).max(128).optional(),
   items: z
     .array(
       z.object({
@@ -31,6 +33,7 @@ const updateStatusSchema = z.object({
 
 const callWaiterSchema = z.object({
   tableId: z.string().uuid(),
+  visit: z.string().trim().min(8).max(128).optional(),
 });
 
 type OrderWithRelations = Prisma.OrderGetPayload<{
@@ -83,6 +86,19 @@ const ORDERS_MAX_TAKE = Math.max(
   ORDERS_DEFAULT_TAKE,
   parsePositiveInt(process.env.ORDERS_MAX_TAKE, 2000)
 );
+const REQUIRE_VISIT_TOKEN = REQUIRE_TABLE_VISIT;
+
+const pickHeaderToken = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
+
+function getVisitTokenFromRequest(request: any, provided?: unknown) {
+  const bodyToken = typeof provided === "string" ? provided : undefined;
+  const headerToken = pickHeaderToken(
+    (request?.headers as any)?.["x-table-visit"] as string | string[] | undefined
+  );
+  const token = bodyToken || headerToken || "";
+  return typeof token === "string" ? token.trim() : "";
+}
 
 function serializeOrder(order: OrderWithRelations) {
   return {
@@ -169,6 +185,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
+        }
+
+        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
+        if (REQUIRE_VISIT_TOKEN || visitToken) {
+          const visit = await validateTableVisitToken({
+            sessionToken: visitToken,
+            storeId: store.id,
+            tableId: table.id,
+          });
+          if (!visit) {
+            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
+          }
         }
 
         const itemIds = body.items.map((item) => item.itemId);
@@ -474,13 +502,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const next = body.status;
         const allowByRole = (role?: string) => {
           if (!role) return false;
+          const isManager = role === "manager" || role === "architect";
           if (next === OrderStatus.SERVED || next === OrderStatus.PAID)
-            return role === "waiter" || role === "manager";
+            return role === "waiter" || isManager;
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
-            return role === "cook" || role === "manager";
+            return role === "cook" || isManager;
           if (next === OrderStatus.CANCELLED)
-            return role === "manager" || role === "cook";
-          return role === "manager";
+            return isManager || role === "cook";
+          return isManager;
         };
 
         if (!allowByRole(actorRole)) {
@@ -785,6 +814,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .send({ error: "Order can no longer be edited" });
         }
 
+        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
+        if (REQUIRE_VISIT_TOKEN || visitToken) {
+          const visit = await validateTableVisitToken({
+            sessionToken: visitToken,
+            storeId: store.id,
+            tableId: existing.tableId,
+          });
+          if (!visit) {
+            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
+          }
+        }
+
         // Rebuild items if provided
         let orderItemsData: any | undefined = undefined;
         let totalCents = existing.totalCents;
@@ -970,6 +1011,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
+        }
+
+        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
+        if (REQUIRE_VISIT_TOKEN || visitToken) {
+          const visit = await validateTableVisitToken({
+            sessionToken: visitToken,
+            storeId: store.id,
+            tableId: table.id,
+          });
+          if (!visit) {
+            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
+          }
         }
 
         // New waiter call topic: {slug}/waiter/call

@@ -7,7 +7,7 @@ export async function eventsRoutes(fastify: FastifyInstance) {
   fastify.post(
     "/events/publish",
     {
-      preHandler: [authMiddleware, requireRole(["waiter", "cook", "manager"])],
+      preHandler: [authMiddleware, requireRole(["waiter", "cook", "manager", "architect"])],
     },
     async (request, reply) => {
       try {

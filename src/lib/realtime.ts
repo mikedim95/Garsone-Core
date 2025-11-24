@@ -3,7 +3,7 @@ import { IncomingMessage } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import { verifyToken } from "./jwt.js";
 
-type RoleName = "waiter" | "cook" | "manager";
+type RoleName = "waiter" | "cook" | "manager" | "architect";
 
 interface ClientSession {
   socket: WebSocket;
