@@ -705,7 +705,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
           if (waiterIdsForOrder.length) {
             publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
               userIds: waiterIdsForOrder,
-              skipMqtt: true,
             });
           }
         }

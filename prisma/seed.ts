@@ -79,7 +79,7 @@ async function seed() {
   const storeId = store.id;
   console.log(`Seeding for store "${store.slug}" (${storeId})`);
 
-  // ---------- PROFILES (fused from old seedProfiles) ----------
+  // ---------- PROFILES ----------
   const manager = await ensureProfile(
     storeId,
     process.env.MANAGER_EMAIL || "manager@demo.local",
@@ -128,7 +128,7 @@ async function seed() {
     architect: architect.email,
   });
 
-  // ---------- CLEAR EXISTING DEMO DATA (orders/menu/shifts) ----------
+  // ---------- CLEAR EXISTING DEMO DATA ----------
   console.log("Clearing existing demo data for this store...");
 
   await prisma.order.deleteMany({ where: { storeId } });
@@ -492,7 +492,6 @@ async function seed() {
   // ---------- MODIFIERS & OPTIONS ----------
   console.log("Creating modifiers and options...");
 
-  // We use minSelect/maxSelect instead of a 'required' flag on Modifier.
   const sizeModifier = await prisma.modifier.create({
     data: {
       storeId,
@@ -533,7 +532,6 @@ async function seed() {
     },
   });
 
-  // options; note: ModifierOption has slug, title, priceDeltaCents, sortOrder
   const sizeSmall = await prisma.modifierOption.create({
     data: {
       storeId,
@@ -683,7 +681,6 @@ async function seed() {
   // ---------- ITEM <-> MODIFIER LINKING ----------
   console.log("Linking item modifiers...");
 
-  // isRequired is on ItemModifier; we use it for things like "Size".
   await prisma.itemModifier.createMany({
     data: [
       // Espresso & Double Espresso: size + sweetness
@@ -750,7 +747,7 @@ async function seed() {
         isRequired: false,
       },
 
-      // Freddo Espresso & Freddo Cappuccino: size + sweetness + ice (+ milk for cappuccino)
+      // Freddo Espresso & Freddo Cappuccino
       {
         storeId,
         itemId: freddoEspresso.id,
@@ -837,7 +834,7 @@ async function seed() {
 
   console.log("Waiter shifts generated.");
 
-  // ---------- ORDERS (status distribution + options) ----------
+  // ---------- ORDERS ----------
   console.log(
     `Generating orders for the last ${DAYS_BACK} days (~6 months)...`
   );
@@ -845,20 +842,12 @@ async function seed() {
   let globalTicketNumber = 1;
   const now = new Date();
 
-  const TARGET_PER_TABLE_STATUS = 5; // PLACED, PREPARING, READY per table
-  const TARGET_CANCELLED_GLOBAL = 30; // CANCELLED across all tables
+  // GLOBAL target counts (not per table)
+  let placedCount = 0;
+  let preparingCount = 0;
+  let readyCount = 0;
+  let cancelledCount = 0;
 
-  const tableStatusCounters: Record<
-    string,
-    { PLACED: number; PREPARING: number; READY: number }
-  > = {};
-  for (const table of tables) {
-    tableStatusCounters[table.id] = { PLACED: 0, PREPARING: 0, READY: 0 };
-  }
-
-  let cancelledCountGlobal = 0;
-
-  // helper: get itemModifiers + options for a given item
   function getItemModifiersWithOptions(itemId: string) {
     return itemModifiers.filter((im) => im.itemId === itemId);
   }
@@ -937,29 +926,23 @@ async function seed() {
         totalCents += (line.basePrice + optionTotal) * line.quantity;
       }
 
-      // status distribution logic
-      const counters = tableStatusCounters[table.id];
-      const needed: OrderStatus[] = [];
-
-      if (counters.PLACED < TARGET_PER_TABLE_STATUS) needed.push("PLACED");
-      if (counters.PREPARING < TARGET_PER_TABLE_STATUS)
-        needed.push("PREPARING");
-      if (counters.READY < TARGET_PER_TABLE_STATUS) needed.push("READY");
-
+      // GLOBAL status distribution:
+      // 5 PLACED, 5 PREPARING, 5 READY, 30 CANCELLED, rest PAID.
       let status: OrderStatus;
-
-      if (needed.length > 0) {
-        status = randFromArray(needed);
-      } else if (cancelledCountGlobal < TARGET_CANCELLED_GLOBAL) {
-        status = "CANCELLED";
+      if (placedCount < 5) {
+        status = OrderStatus.PLACED;
+        placedCount++;
+      } else if (preparingCount < 5) {
+        status = OrderStatus.PREPARING;
+        preparingCount++;
+      } else if (readyCount < 5) {
+        status = OrderStatus.READY;
+        readyCount++;
+      } else if (cancelledCount < 30) {
+        status = OrderStatus.CANCELLED;
+        cancelledCount++;
       } else {
-        status = "PAID";
-      }
-
-      if (status === "PLACED" || status === "PREPARING" || status === "READY") {
-        counters[status] += 1;
-      } else if (status === "CANCELLED") {
-        cancelledCountGlobal += 1;
+        status = OrderStatus.PAID;
       }
 
       // timestamps
@@ -976,19 +959,26 @@ async function seed() {
       const payOffsetMin = serveOffsetMin + randInt(0, 30);
       const cancelOffsetMin = randInt(1, 20);
 
-      if (["PREPARING", "READY", "SERVED", "PAID"].includes(status)) {
+      if (
+        status === OrderStatus.PREPARING ||
+        status === OrderStatus.READY ||
+        status === OrderStatus.SERVED ||
+        status === OrderStatus.PAID
+      ) {
         preparingAt = new Date(placedAt.getTime() + prepOffsetMin * 60 * 1000);
       }
-      if (["READY", "SERVED", "PAID"].includes(status)) {
+      if (
+        status === OrderStatus.READY ||
+        status === OrderStatus.SERVED ||
+        status === OrderStatus.PAID
+      ) {
         readyAt = new Date(placedAt.getTime() + readyOffsetMin * 60 * 1000);
       }
-      if (["SERVED", "PAID"].includes(status)) {
+      if (status === OrderStatus.PAID) {
         servedAt = new Date(placedAt.getTime() + serveOffsetMin * 60 * 1000);
-      }
-      if (status === "PAID") {
         paidAt = new Date(placedAt.getTime() + payOffsetMin * 60 * 1000);
       }
-      if (status === "CANCELLED") {
+      if (status === OrderStatus.CANCELLED) {
         cancelledAt = new Date(
           placedAt.getTime() + cancelOffsetMin * 60 * 1000
         );
@@ -1025,7 +1015,7 @@ async function seed() {
                 create: line.options.map((o) => ({
                   modifierId: o.modifierId,
                   modifierOptionId: o.option.id,
-                  titleSnapshot: `${o.option.title}`,
+                  titleSnapshot: o.option.title,
                   priceDeltaCents: o.option.priceDeltaCents,
                 })),
               },
