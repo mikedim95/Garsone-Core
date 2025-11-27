@@ -4,7 +4,7 @@ import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
-const STORE_SLUG = process.env.STORE_SLUG || "demo-bar";
+const STORE_SLUG = process.env.STORE_SLUG || "demo-cafe";
 
 const DEFAULT_PASSWORD =
   process.env.DEFAULT_PASSWORD ||
@@ -12,7 +12,7 @@ const DEFAULT_PASSWORD =
   process.env.WAITER_PASSWORD ||
   "changeme";
 
-const DAYS_BACK = 180; // ~6 months
+const DAYS_BACK_ORDERS = 60; // ~2 months
 const MIN_ORDERS_PER_DAY = 5;
 const MAX_ORDERS_PER_DAY = 25;
 
@@ -128,19 +128,16 @@ async function seed() {
     architect: architect.email,
   });
 
-  // ---------- CLEAR EXISTING DEMO DATA ----------
-  console.log("Clearing existing demo data for this store...");
+  // ---------- CLEAR EXISTING DEMO DATA (ONLY ORDERS & WAITER DATA) ----------
+  console.log(
+    "Clearing existing demo orders and waiter data for this store..."
+  );
 
   await prisma.order.deleteMany({ where: { storeId } });
   await prisma.waiterTable.deleteMany({ where: { storeId } });
   await prisma.waiterShift.deleteMany({ where: { storeId } });
 
-  await prisma.itemModifier.deleteMany({ where: { storeId } });
-  await prisma.modifierOption.deleteMany({ where: { storeId } });
-  await prisma.modifier.deleteMany({ where: { storeId } });
-
-  await prisma.item.deleteMany({ where: { storeId } });
-  await prisma.category.deleteMany({ where: { storeId } });
+  // DO NOT touch categories/items/modifiers/etc → respect existing menu.
 
   // ---------- TABLES ----------
   console.log("Ensuring tables...");
@@ -181,631 +178,56 @@ async function seed() {
     console.log(`Reusing ${tables.length} existing tables.`);
   }
 
-  // ---------- CATEGORIES ----------
-  console.log("Creating categories...");
+  // ---------- ITEMS FROM EXISTING MENU ----------
+  console.log("Fetching existing items for this store...");
 
-  const coffeeCat = await prisma.category.create({
-    data: {
-      storeId,
-      slug: "coffee",
-      title: "Coffee",
-      sortOrder: 1,
-    },
+  const items = await prisma.item.findMany({
+    where: { storeId, isAvailable: true },
+    orderBy: { title: "asc" },
   });
 
-  const drinksCat = await prisma.category.create({
-    data: {
-      storeId,
-      slug: "drinks",
-      title: "Drinks",
-      sortOrder: 2,
-    },
-  });
+  if (items.length === 0) {
+    console.error(
+      "No items found for this store. Seed or import your menu items first."
+    );
+    process.exit(1);
+  }
 
-  const cocktailsCat = await prisma.category.create({
-    data: {
-      storeId,
-      slug: "cocktails",
-      title: "Cocktails",
-      sortOrder: 3,
-    },
-  });
+  console.log(`Found ${items.length} items.`);
 
-  const snacksCat = await prisma.category.create({
-    data: {
-      storeId,
-      slug: "snacks",
-      title: "Snacks",
-      sortOrder: 4,
-    },
-  });
-
-  const dessertsCat = await prisma.category.create({
-    data: {
-      storeId,
-      slug: "desserts",
-      title: "Desserts",
-      sortOrder: 5,
-    },
-  });
-
-  // ---------- ITEMS ----------
-  console.log("Creating items...");
-
-  const espresso = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "espresso",
-      title: "Espresso",
-      description: "Classic single shot espresso.",
-      priceCents: 250,
-      isAvailable: true,
-      sortOrder: 1,
-    },
-  });
-
-  const doubleEspresso = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "double-espresso",
-      title: "Double Espresso",
-      description: "Double shot espresso.",
-      priceCents: 320,
-      isAvailable: true,
-      sortOrder: 2,
-    },
-  });
-
-  const cappuccino = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "cappuccino",
-      title: "Cappuccino",
-      description: "Espresso with steamed milk and foam.",
-      priceCents: 350,
-      isAvailable: true,
-      sortOrder: 3,
-    },
-  });
-
-  const latte = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "latte",
-      title: "Latte",
-      description: "Espresso with extra steamed milk.",
-      priceCents: 380,
-      isAvailable: true,
-      sortOrder: 4,
-    },
-  });
-
-  const freddoEspresso = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "freddo-espresso",
-      title: "Freddo Espresso",
-      description: "Iced shaken espresso.",
-      priceCents: 320,
-      isAvailable: true,
-      sortOrder: 5,
-    },
-  });
-
-  const freddoCappuccino = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: coffeeCat.id,
-      slug: "freddo-cappuccino",
-      title: "Freddo Cappuccino",
-      description: "Iced shaken espresso with foam milk.",
-      priceCents: 380,
-      isAvailable: true,
-      sortOrder: 6,
-    },
-  });
-
-  const softDrink = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: drinksCat.id,
-      slug: "soft-drink",
-      title: "Soft Drink",
-      description: "Cola, lemon or orange.",
-      priceCents: 250,
-      isAvailable: true,
-      sortOrder: 1,
-    },
-  });
-
-  const bottledWater = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: drinksCat.id,
-      slug: "bottled-water",
-      title: "Bottled Water",
-      description: "Still spring water 500ml.",
-      priceCents: 100,
-      isAvailable: true,
-      sortOrder: 2,
-    },
-  });
-
-  const beer = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: drinksCat.id,
-      slug: "beer",
-      title: "Beer (draft)",
-      description: "Pint of draft beer.",
-      priceCents: 450,
-      isAvailable: true,
-      sortOrder: 3,
-    },
-  });
-
-  const mojito = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: cocktailsCat.id,
-      slug: "mojito",
-      title: "Mojito",
-      description: "Rum, lime, mint, soda.",
-      priceCents: 800,
-      isAvailable: true,
-      sortOrder: 1,
-    },
-  });
-
-  const aperolSpritz = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: cocktailsCat.id,
-      slug: "aperol-spritz",
-      title: "Aperol Spritz",
-      description: "Aperol, prosecco, soda.",
-      priceCents: 750,
-      isAvailable: true,
-      sortOrder: 2,
-    },
-  });
-
-  const espressoMartini = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: cocktailsCat.id,
-      slug: "espresso-martini",
-      title: "Espresso Martini",
-      description: "Vodka, espresso, coffee liqueur.",
-      priceCents: 850,
-      isAvailable: true,
-      sortOrder: 3,
-    },
-  });
-
-  const clubSandwich = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: snacksCat.id,
-      slug: "club-sandwich",
-      title: "Club Sandwich",
-      description: "Triple sandwich with fries.",
-      priceCents: 900,
-      isAvailable: true,
-      sortOrder: 1,
-    },
-  });
-
-  const nachos = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: snacksCat.id,
-      slug: "nachos",
-      title: "Nachos",
-      description: "Tortilla chips with cheese and jalapeños.",
-      priceCents: 700,
-      isAvailable: true,
-      sortOrder: 2,
-    },
-  });
-
-  const fries = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: snacksCat.id,
-      slug: "fries",
-      title: "Fries",
-      description: "Crispy french fries.",
-      priceCents: 350,
-      isAvailable: true,
-      sortOrder: 3,
-    },
-  });
-
-  const brownie = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: dessertsCat.id,
-      slug: "brownie",
-      title: "Chocolate Brownie",
-      description: "Warm brownie with vanilla ice cream.",
-      priceCents: 600,
-      isAvailable: true,
-      sortOrder: 1,
-    },
-  });
-
-  const cheesecake = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: dessertsCat.id,
-      slug: "cheesecake",
-      title: "Cheesecake",
-      description: "Classic baked cheesecake slice.",
-      priceCents: 650,
-      isAvailable: true,
-      sortOrder: 2,
-    },
-  });
-
-  const iceCream = await prisma.item.create({
-    data: {
-      storeId,
-      categoryId: dessertsCat.id,
-      slug: "ice-cream",
-      title: "Ice Cream Scoop",
-      description: "Vanilla, chocolate or strawberry.",
-      priceCents: 250,
-      isAvailable: true,
-      sortOrder: 3,
-    },
-  });
-
-  const items = [
-    espresso,
-    doubleEspresso,
-    cappuccino,
-    latte,
-    freddoEspresso,
-    freddoCappuccino,
-    softDrink,
-    bottledWater,
-    beer,
-    mojito,
-    aperolSpritz,
-    espressoMartini,
-    clubSandwich,
-    nachos,
-    fries,
-    brownie,
-    cheesecake,
-    iceCream,
-  ];
-
-  console.log(`Created ${items.length} items.`);
-
-  // ---------- MODIFIERS & OPTIONS ----------
-  console.log("Creating modifiers and options...");
-
-  const sizeModifier = await prisma.modifier.create({
-    data: {
-      storeId,
-      slug: "size",
-      title: "Size",
-      minSelect: 1,
-      maxSelect: 1,
-    },
-  });
-
-  const milkModifier = await prisma.modifier.create({
-    data: {
-      storeId,
-      slug: "milk",
-      title: "Milk Type",
-      minSelect: 0,
-      maxSelect: 1,
-    },
-  });
-
-  const sweetnessModifier = await prisma.modifier.create({
-    data: {
-      storeId,
-      slug: "sweetness",
-      title: "Sweetness",
-      minSelect: 0,
-      maxSelect: 1,
-    },
-  });
-
-  const iceModifier = await prisma.modifier.create({
-    data: {
-      storeId,
-      slug: "ice",
-      title: "Ice",
-      minSelect: 0,
-      maxSelect: 1,
-    },
-  });
-
-  const sizeSmall = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sizeModifier.id,
-      slug: "small",
-      title: "Small",
-      priceDeltaCents: 0,
-      sortOrder: 1,
-    },
-  });
-  const sizeMedium = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sizeModifier.id,
-      slug: "medium",
-      title: "Medium",
-      priceDeltaCents: 30,
-      sortOrder: 2,
-    },
-  });
-  const sizeLarge = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sizeModifier.id,
-      slug: "large",
-      title: "Large",
-      priceDeltaCents: 60,
-      sortOrder: 3,
-    },
-  });
-
-  const milkRegular = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: milkModifier.id,
-      slug: "regular",
-      title: "Regular",
-      priceDeltaCents: 0,
-      sortOrder: 1,
-    },
-  });
-  const milkSoy = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: milkModifier.id,
-      slug: "soy",
-      title: "Soy",
-      priceDeltaCents: 50,
-      sortOrder: 2,
-    },
-  });
-  const milkOat = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: milkModifier.id,
-      slug: "oat",
-      title: "Oat",
-      priceDeltaCents: 70,
-      sortOrder: 3,
-    },
-  });
-
-  const sweetnessNo = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sweetnessModifier.id,
-      slug: "no-sugar",
-      title: "No sugar",
-      priceDeltaCents: 0,
-      sortOrder: 1,
-    },
-  });
-  const sweetness1 = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sweetnessModifier.id,
-      slug: "1-sugar",
-      title: "1 sugar",
-      priceDeltaCents: 0,
-      sortOrder: 2,
-    },
-  });
-  const sweetness2 = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sweetnessModifier.id,
-      slug: "2-sugars",
-      title: "2 sugars",
-      priceDeltaCents: 0,
-      sortOrder: 3,
-    },
-  });
-  const sweetness3 = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: sweetnessModifier.id,
-      slug: "3-sugars",
-      title: "3 sugars",
-      priceDeltaCents: 0,
-      sortOrder: 4,
-    },
-  });
-
-  const iceNone = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: iceModifier.id,
-      slug: "no-ice",
-      title: "No ice",
-      priceDeltaCents: 0,
-      sortOrder: 1,
-    },
-  });
-  const iceNormal = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: iceModifier.id,
-      slug: "normal-ice",
-      title: "Normal ice",
-      priceDeltaCents: 0,
-      sortOrder: 2,
-    },
-  });
-  const iceExtra = await prisma.modifierOption.create({
-    data: {
-      storeId,
-      modifierId: iceModifier.id,
-      slug: "extra-ice",
-      title: "Extra ice",
-      priceDeltaCents: 0,
-      sortOrder: 3,
-    },
-  });
-
-  const modifierOptionsByModifierId: Record<
-    string,
-    { id: string; title: string; priceDeltaCents: number }[]
-  > = {
-    [sizeModifier.id]: [sizeSmall, sizeMedium, sizeLarge],
-    [milkModifier.id]: [milkRegular, milkSoy, milkOat],
-    [sweetnessModifier.id]: [sweetnessNo, sweetness1, sweetness2, sweetness3],
-    [iceModifier.id]: [iceNone, iceNormal, iceExtra],
-  };
-
-  console.log("Modifiers and options created.");
-
-  // ---------- ITEM <-> MODIFIER LINKING ----------
-  console.log("Linking item modifiers...");
-
-  await prisma.itemModifier.createMany({
-    data: [
-      // Espresso & Double Espresso: size + sweetness
-      {
-        storeId,
-        itemId: espresso.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: espresso.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: doubleEspresso.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: doubleEspresso.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-
-      // Cappuccino & Latte: size + milk + sweetness
-      {
-        storeId,
-        itemId: cappuccino.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: cappuccino.id,
-        modifierId: milkModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: cappuccino.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: latte.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: latte.id,
-        modifierId: milkModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: latte.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-
-      // Freddo Espresso & Freddo Cappuccino
-      {
-        storeId,
-        itemId: freddoEspresso.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: freddoEspresso.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: freddoEspresso.id,
-        modifierId: iceModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: freddoCappuccino.id,
-        modifierId: sizeModifier.id,
-        isRequired: true,
-      },
-      {
-        storeId,
-        itemId: freddoCappuccino.id,
-        modifierId: milkModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: freddoCappuccino.id,
-        modifierId: sweetnessModifier.id,
-        isRequired: false,
-      },
-      {
-        storeId,
-        itemId: freddoCappuccino.id,
-        modifierId: iceModifier.id,
-        isRequired: false,
-      },
-    ],
-  });
+  // ---------- MODIFIERS & OPTIONS FROM EXISTING DATA ----------
+  console.log("Fetching modifiers and options...");
 
   const itemModifiers = await prisma.itemModifier.findMany({
     where: { storeId },
     include: { modifier: true },
   });
 
-  console.log("Item modifiers linked.");
+  const modifierOptions = await prisma.modifierOption.findMany({
+    where: { storeId },
+  });
 
-  // ---------- WAITER SHIFTS ----------
-  console.log("Generating waiter shifts (last 30 days)...");
+  const modifierOptionsByModifierId: Record<
+    string,
+    { id: string; title: string; priceDeltaCents: number }[]
+  > = modifierOptions.reduce((acc, opt) => {
+    if (!acc[opt.modifierId]) acc[opt.modifierId] = [];
+    acc[opt.modifierId].push({
+      id: opt.id,
+      title: opt.title,
+      priceDeltaCents: opt.priceDeltaCents,
+    });
+    return acc;
+  }, {} as Record<string, { id: string; title: string; priceDeltaCents: number }[]>);
+
+  console.log("Modifiers and options loaded from DB.");
+
+  // ---------- WAITER SHIFTS (last 60 days to match orders window) ----------
+  console.log("Generating waiter shifts (last 60 days)...");
 
   const waiters = [waiter1, waiter2];
   const today = new Date();
-  const daysForShifts = 30;
+  const daysForShifts = 60;
 
   for (let i = 0; i < daysForShifts; i++) {
     const day = new Date(today);
@@ -834,25 +256,19 @@ async function seed() {
 
   console.log("Waiter shifts generated.");
 
-  // ---------- ORDERS ----------
+  // ---------- ORDERS (ONLY PAID, LAST ~2 MONTHS) ----------
   console.log(
-    `Generating orders for the last ${DAYS_BACK} days (~6 months)...`
+    `Generating ONLY PAID orders for the last ${DAYS_BACK_ORDERS} days (~2 months)...`
   );
 
   let globalTicketNumber = 1;
   const now = new Date();
 
-  // GLOBAL target counts (not per table)
-  let placedCount = 0;
-  let preparingCount = 0;
-  let readyCount = 0;
-  let cancelledCount = 0;
-
   function getItemModifiersWithOptions(itemId: string) {
     return itemModifiers.filter((im) => im.itemId === itemId);
   }
 
-  for (let daysAgo = DAYS_BACK; daysAgo >= 0; daysAgo--) {
+  for (let daysAgo = 0; daysAgo < DAYS_BACK_ORDERS; daysAgo++) {
     const day = new Date();
     day.setDate(now.getDate() - daysAgo);
 
@@ -886,13 +302,11 @@ async function seed() {
 
         for (const im of modsForItem) {
           const opts = modifierOptionsByModifierId[im.modifierId] || [];
-
           if (!opts.length) continue;
 
           const required = im.isRequired || (im.modifier.minSelect ?? 0) > 0;
 
           let pickCount = 0;
-
           if (required) {
             pickCount = 1;
           } else {
@@ -926,69 +340,23 @@ async function seed() {
         totalCents += (line.basePrice + optionTotal) * line.quantity;
       }
 
-      // GLOBAL status distribution:
-      // 5 PLACED, 5 PREPARING, 5 READY, 30 CANCELLED, rest PAID.
-      let status: OrderStatus;
-      if (placedCount < 5) {
-        status = OrderStatus.PLACED;
-        placedCount++;
-      } else if (preparingCount < 5) {
-        status = OrderStatus.PREPARING;
-        preparingCount++;
-      } else if (readyCount < 5) {
-        status = OrderStatus.READY;
-        readyCount++;
-      } else if (cancelledCount < 30) {
-        status = OrderStatus.CANCELLED;
-        cancelledCount++;
-      } else {
-        status = OrderStatus.PAID;
-      }
+      // ONLY PAID ORDERS
+      const status: OrderStatus = OrderStatus.PAID;
 
       // timestamps
-      let preparingAt: Date | null = null;
-      let readyAt: Date | null = null;
-      let servedAt: Date | null = null;
-      let paidAt: Date | null = null;
-      let cancelledAt: Date | null = null;
-      let cancelReason: string | null = null;
-
       const prepOffsetMin = randInt(1, 10);
       const readyOffsetMin = prepOffsetMin + randInt(3, 15);
       const serveOffsetMin = readyOffsetMin + randInt(1, 10);
       const payOffsetMin = serveOffsetMin + randInt(0, 30);
-      const cancelOffsetMin = randInt(1, 20);
 
-      if (
-        status === OrderStatus.PREPARING ||
-        status === OrderStatus.READY ||
-        status === OrderStatus.SERVED ||
-        status === OrderStatus.PAID
-      ) {
-        preparingAt = new Date(placedAt.getTime() + prepOffsetMin * 60 * 1000);
-      }
-      if (
-        status === OrderStatus.READY ||
-        status === OrderStatus.SERVED ||
-        status === OrderStatus.PAID
-      ) {
-        readyAt = new Date(placedAt.getTime() + readyOffsetMin * 60 * 1000);
-      }
-      if (status === OrderStatus.PAID) {
-        servedAt = new Date(placedAt.getTime() + serveOffsetMin * 60 * 1000);
-        paidAt = new Date(placedAt.getTime() + payOffsetMin * 60 * 1000);
-      }
-      if (status === OrderStatus.CANCELLED) {
-        cancelledAt = new Date(
-          placedAt.getTime() + cancelOffsetMin * 60 * 1000
-        );
-        cancelReason = randFromArray([
-          "Customer left",
-          "Order mistake",
-          "Payment failed",
-          "Changed mind",
-        ]);
-      }
+      const preparingAt = new Date(
+        placedAt.getTime() + prepOffsetMin * 60 * 1000
+      );
+      const readyAt = new Date(placedAt.getTime() + readyOffsetMin * 60 * 1000);
+      const servedAt = new Date(
+        placedAt.getTime() + serveOffsetMin * 60 * 1000
+      );
+      const paidAt = new Date(placedAt.getTime() + payOffsetMin * 60 * 1000);
 
       await prisma.order.create({
         data: {
@@ -999,12 +367,12 @@ async function seed() {
           totalCents,
           placedAt,
           ticketNumber: globalTicketNumber++,
-          cancelReason,
-          servedAt: servedAt ?? undefined,
-          preparingAt: preparingAt ?? undefined,
-          readyAt: readyAt ?? undefined,
-          paidAt: paidAt ?? undefined,
-          cancelledAt: cancelledAt ?? undefined,
+          cancelReason: null,
+          servedAt,
+          preparingAt,
+          readyAt,
+          paidAt,
+          cancelledAt: null,
           orderItems: {
             create: lines.map((line) => ({
               itemId: line.item.id,
@@ -1025,12 +393,12 @@ async function seed() {
       });
     }
 
-    if (daysAgo % 30 === 0) {
-      console.log(`...generated up to ${daysAgo} days ago`);
+    if (daysAgo > 0 && daysAgo % 10 === 0) {
+      console.log(`...generated orders up to ${daysAgo} days ago`);
     }
   }
 
-  console.log("Finished generating orders and menu.");
+  console.log("Finished generating PAID orders for last 2 months.");
 }
 
 async function main() {
