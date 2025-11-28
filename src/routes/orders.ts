@@ -1120,22 +1120,25 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Order not found" });
         }
 
-        const payload = {
+        const preparedPayload = {
           orderId: order.id,
+          tableId: order.tableId,
           tableLabel: order.table?.label ?? "",
+          ticketNumber: (order as any).ticketNumber ?? undefined,
+          status: OrderStatus.PREPARING,
           createdAt: order.createdAt,
-          printedAt: new Date().toISOString(),
+          ts: new Date().toISOString(),
           items: order.orderItems.map((oi) => ({
             title: oi.titleSnapshot,
             quantity: oi.quantity,
             unitPriceCents: oi.unitPriceCents,
-            modifiers: oi.orderItemOptions.map((opt) => ({
-              titleSnapshot: opt.titleSnapshot,
-              priceDeltaCents: opt.priceDeltaCents,
-            })),
+            modifiers: oi.orderItemOptions,
           })),
+          order: serializeOrder(order as any),
         };
-        publishMessage(`${STORE_SLUG}/orders/accepted`, payload);
+        publishMessage(`${STORE_SLUG}/orders/preparing`, preparedPayload, {
+          roles: ["cook"],
+        });
         return reply.send({ success: true });
       } catch (error) {
         if (error instanceof z.ZodError) {
