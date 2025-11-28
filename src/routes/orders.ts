@@ -244,19 +244,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Table not found" });
         }
 
-        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
-        if (REQUIRE_VISIT_TOKEN || visitToken) {
-          const visit = await validateTableVisitToken({
-            sessionToken: visitToken,
-            storeId: store.id,
-            tableId: table.id,
-          });
-          logStep("visitValidation");
-          if (!visit) {
-            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
-          }
-        }
-
         const itemIds = body.items.map((item) => item.itemId);
         const items = await db.item.findMany({
           where: {
@@ -969,18 +956,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .send({ error: "Order can no longer be edited" });
         }
 
-        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
-        if (REQUIRE_VISIT_TOKEN || visitToken) {
-          const visit = await validateTableVisitToken({
-            sessionToken: visitToken,
-            storeId: store.id,
-            tableId: existing.tableId,
-          });
-          if (!visit) {
-            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
-          }
-        }
-
         // Rebuild items if provided
         let orderItemsData: any | undefined = undefined;
         let totalCents = existing.totalCents;
@@ -1169,18 +1144,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
-        }
-
-        const visitToken = getVisitTokenFromRequest(request, (body as any).visit);
-        if (REQUIRE_VISIT_TOKEN || visitToken) {
-          const visit = await validateTableVisitToken({
-            sessionToken: visitToken,
-            storeId: store.id,
-            tableId: table.id,
-          });
-          if (!visit) {
-            return reply.status(403).send({ error: "INVALID_TABLE_VISIT" });
-          }
         }
 
         // New waiter call topic: {slug}/waiter/call

@@ -10,8 +10,8 @@ const VISIT_TTL_MINUTES = (() => {
   return parsed;
 })();
 
-export const REQUIRE_TABLE_VISIT =
-  (process.env.REQUIRE_TABLE_VISIT || "1").toString().trim() !== "0";
+// Visit tokens disabled: QR links can work without a session token.
+export const REQUIRE_TABLE_VISIT = false;
 
 const VISIT_TTL_MS = VISIT_TTL_MINUTES * 60_000;
 
@@ -41,24 +41,6 @@ export async function createTableVisitSession(input: {
   return visit;
 }
 
-export async function validateTableVisitToken(input: {
-  sessionToken?: string | null;
-  tableId: string;
-  storeId: string;
-}) {
-  const token = (input.sessionToken || "").trim();
-  if (!token) return null;
-
-  const now = new Date();
-  const visit = await db.tableVisit.findFirst({
-    where: {
-      sessionToken: token,
-      tableId: input.tableId,
-      storeId: input.storeId,
-      status: TableVisitStatus.OPEN,
-      expiresAt: { gt: now },
-    },
-  });
-
-  return visit;
+export async function validateTableVisitToken() {
+  return null;
 }
