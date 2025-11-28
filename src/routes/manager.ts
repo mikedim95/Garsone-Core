@@ -279,15 +279,55 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.get('/manager/items', { preHandler: managerOnly }, async (_req, reply) => {
     const store = await ensureStore();
     const items = await db.item.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: 'asc' }, include: { category: true } });
-    return reply.send({ items: items.map(i => ({ id: i.id, title: i.title, description: i.description, imageUrl: i.imageUrl, priceCents: i.priceCents, isAvailable: i.isAvailable, categoryId: i.categoryId, category: i.category?.title })) });
+    return reply.send({
+      items: items.map(i => ({
+        id: i.id,
+        title: i.title,
+        titleEn: i.titleEn || i.title,
+        titleEl: i.titleEl || i.title,
+        description: i.description,
+        descriptionEn: i.descriptionEn ?? i.description,
+        descriptionEl: i.descriptionEl ?? i.description,
+        imageUrl: i.imageUrl,
+        priceCents: i.priceCents,
+        isAvailable: i.isAvailable,
+        categoryId: i.categoryId,
+        category: i.category?.titleEn ?? i.category?.titleEl ?? i.category?.title,
+      }))
+    });
   });
 
-  const itemCreateSchema = z.object({ title: z.string().min(1), description: z.string().optional(), imageUrl: z.string().url().max(2048).optional(), priceCents: z.number().int().nonnegative(), categoryId: z.string().uuid(), isAvailable: z.boolean().optional() });
+  const itemCreateSchema = z.object({
+    titleEn: z.string().min(1),
+    titleEl: z.string().min(1),
+    descriptionEn: z.string().optional(),
+    descriptionEl: z.string().optional(),
+    imageUrl: z.string().url().max(2048).optional(),
+    priceCents: z.number().int().nonnegative(),
+    categoryId: z.string().uuid(),
+    isAvailable: z.boolean().optional(),
+  });
   fastify.post('/manager/items', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = itemCreateSchema.parse(request.body);
       const store = await ensureStore();
-      const item = await db.item.create({ data: { storeId: store.id, categoryId: body.categoryId, slug: (body.title.toLowerCase().replace(/\s+/g, '-').slice(0, 60) + '-' + Math.random().toString(16).slice(2, 6)), title: body.title, description: body.description, imageUrl: body.imageUrl, priceCents: body.priceCents, isAvailable: body.isAvailable ?? true } });
+      const slugBase = body.titleEn.toLowerCase().replace(/\s+/g, '-').slice(0, 60);
+      const item = await db.item.create({
+        data: {
+          storeId: store.id,
+          categoryId: body.categoryId,
+          slug: `${slugBase}-${Math.random().toString(16).slice(2, 6)}`,
+          title: body.titleEn,
+          titleEn: body.titleEn,
+          titleEl: body.titleEl,
+          description: body.descriptionEn,
+          descriptionEn: body.descriptionEn,
+          descriptionEl: body.descriptionEl,
+          imageUrl: body.imageUrl,
+          priceCents: body.priceCents,
+          isAvailable: body.isAvailable ?? true,
+        },
+      });
       invalidateMenuCache();
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'item.created', itemId: item.id, ts: new Date().toISOString() }, { roles: ['manager'] });
       return reply.status(201).send({ item });
@@ -297,12 +337,30 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
-  const itemUpdateSchema = z.object({ title: z.string().min(1).optional(), description: z.string().optional(), imageUrl: z.string().url().max(2048).nullable().optional(), priceCents: z.number().int().nonnegative().optional(), categoryId: z.string().uuid().optional(), isAvailable: z.boolean().optional() });
+  const itemUpdateSchema = z.object({
+    title: z.string().min(1).optional(),
+    titleEn: z.string().min(1).optional(),
+    titleEl: z.string().min(1).optional(),
+    description: z.string().optional(),
+    descriptionEn: z.string().optional().nullable(),
+    descriptionEl: z.string().optional().nullable(),
+    imageUrl: z.string().url().max(2048).nullable().optional(),
+    priceCents: z.number().int().nonnegative().optional(),
+    categoryId: z.string().uuid().optional(),
+    isAvailable: z.boolean().optional(),
+  });
   fastify.patch('/manager/items/:id', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = itemUpdateSchema.parse(request.body);
-      const updated = await db.item.update({ where: { id }, data: body });
+      const data: any = { ...body };
+      if (body.titleEn) {
+        data.title = body.titleEn;
+      } else if (body.title) {
+        data.title = body.title;
+        data.titleEn = body.title;
+      }
+      const updated = await db.item.update({ where: { id }, data });
       invalidateMenuCache();
       const store = await ensureStore();
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'item.updated', itemId: updated.id, ts: new Date().toISOString() }, { roles: ['manager'] });
@@ -334,6 +392,27 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/manager/items/:id/detail', { preHandler: managerOnly }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const item = await db.item.findUnique({ where: { id } });
+      if (!item) return reply.status(404).send({ error: 'Not found' });
+      const links = await db.itemModifier.findMany({ where: { itemId: id } });
+      const modifiers = await db.modifier.findMany({
+        where: { id: { in: links.map((l) => l.modifierId) } },
+        include: { modifierOptions: { orderBy: { sortOrder: 'asc' } } },
+        orderBy: { title: 'asc' },
+      });
+      return reply.send({
+        item,
+        modifiers,
+        links: links.map((l) => ({ modifierId: l.modifierId, isRequired: l.isRequired })),
+      });
+    } catch (e) {
+      return reply.status(500).send({ error: 'Failed to load item detail' });
+    }
+  });
+
   // Modifiers CRUD
   fastify.get('/manager/modifiers', { preHandler: managerOnly }, async (_req, reply) => {
     const store = await ensureStore();
@@ -341,12 +420,30 @@ export async function managerRoutes(fastify: FastifyInstance) {
     return reply.send({ modifiers });
   });
 
-  const modifierCreateSchema = z.object({ title: z.string().min(1), minSelect: z.number().int().min(0).default(0), maxSelect: z.number().int().nullable().optional() });
+  const modifierCreateSchema = z.object({
+    titleEn: z.string().min(1),
+    titleEl: z.string().min(1),
+    minSelect: z.number().int().min(0).default(0),
+    maxSelect: z.number().int().nullable().optional(),
+    isAvailable: z.boolean().optional(),
+  });
   fastify.post('/manager/modifiers', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = modifierCreateSchema.parse(request.body);
       const store = await ensureStore();
-      const modifier = await db.modifier.create({ data: { storeId: store.id, slug: (body.title.toLowerCase().replace(/\s+/g, '-').slice(0, 60) + '-' + Math.random().toString(16).slice(2, 6)), title: body.title, minSelect: body.minSelect, maxSelect: body.maxSelect ?? null } });
+      const slug = `${body.titleEn.toLowerCase().replace(/\s+/g, '-').slice(0, 60)}-${Math.random().toString(16).slice(2, 6)}`;
+      const modifier = await db.modifier.create({
+        data: {
+          storeId: store.id,
+          slug,
+          title: body.titleEn,
+          titleEn: body.titleEn,
+          titleEl: body.titleEl,
+          minSelect: body.minSelect,
+          maxSelect: body.maxSelect ?? null,
+          isAvailable: body.isAvailable ?? true,
+        },
+      });
       invalidateMenuCache();
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'modifier.created', modifierId: modifier.id, ts: new Date().toISOString() }, { roles: ['manager'] });
       return reply.status(201).send({ modifier });
@@ -356,12 +453,26 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
-  const modifierUpdateSchema = z.object({ title: z.string().min(1).optional(), minSelect: z.number().int().min(0).optional(), maxSelect: z.number().int().nullable().optional() });
+  const modifierUpdateSchema = z.object({
+    title: z.string().min(1).optional(),
+    titleEn: z.string().min(1).optional(),
+    titleEl: z.string().min(1).optional(),
+    minSelect: z.number().int().min(0).optional(),
+    maxSelect: z.number().int().nullable().optional(),
+    isAvailable: z.boolean().optional(),
+  });
   fastify.patch('/manager/modifiers/:id', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = modifierUpdateSchema.parse(request.body);
-      const updated = await db.modifier.update({ where: { id }, data: body });
+      const data: any = { ...body };
+      if (body.titleEn) {
+        data.title = body.titleEn;
+      } else if (body.title) {
+        data.title = body.title;
+        data.titleEn = body.title;
+      }
+      const updated = await db.modifier.update({ where: { id }, data });
       invalidateMenuCache();
       const store = await ensureStore();
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'modifier.updated', modifierId: updated.id, ts: new Date().toISOString() }, { roles: ['manager'] });
@@ -383,12 +494,29 @@ export async function managerRoutes(fastify: FastifyInstance) {
   });
 
   // Modifier Option create/update/delete
-  const optionCreateSchema = z.object({ modifierId: z.string().uuid(), title: z.string().min(1), priceDeltaCents: z.number().int().default(0), sortOrder: z.number().int().default(0) });
+  const optionCreateSchema = z.object({
+    modifierId: z.string().uuid(),
+    titleEn: z.string().min(1),
+    titleEl: z.string().min(1),
+    priceDeltaCents: z.number().int().default(0),
+    sortOrder: z.number().int().default(0),
+  });
   fastify.post('/manager/modifier-options', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = optionCreateSchema.parse(request.body);
       const store = await ensureStore();
-      const opt = await db.modifierOption.create({ data: { storeId: store.id, modifierId: body.modifierId, slug: (body.title.toLowerCase().replace(/\s+/g, '-').slice(0, 60) + '-' + Math.random().toString(16).slice(2, 6)), title: body.title, priceDeltaCents: body.priceDeltaCents, sortOrder: body.sortOrder } });
+      const opt = await db.modifierOption.create({
+        data: {
+          storeId: store.id,
+          modifierId: body.modifierId,
+          slug: `${body.titleEn.toLowerCase().replace(/\s+/g, '-').slice(0, 60)}-${Math.random().toString(16).slice(2, 6)}`,
+          title: body.titleEn,
+          titleEn: body.titleEn,
+          titleEl: body.titleEl,
+          priceDeltaCents: body.priceDeltaCents,
+          sortOrder: body.sortOrder,
+        },
+      });
       return reply.status(201).send({ option: opt });
     } catch (e) {
       if (e instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request', details: e.errors });
@@ -396,12 +524,25 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
-  const optionUpdateSchema = z.object({ title: z.string().min(1).optional(), priceDeltaCents: z.number().int().optional(), sortOrder: z.number().int().optional() });
+  const optionUpdateSchema = z.object({
+    title: z.string().min(1).optional(),
+    titleEn: z.string().min(1).optional(),
+    titleEl: z.string().min(1).optional(),
+    priceDeltaCents: z.number().int().optional(),
+    sortOrder: z.number().int().optional(),
+  });
   fastify.patch('/manager/modifier-options/:id', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = optionUpdateSchema.parse(request.body);
-      const updated = await db.modifierOption.update({ where: { id }, data: body });
+      const data: any = { ...body };
+      if (body.titleEn) {
+        data.title = body.titleEn;
+      } else if (body.title) {
+        data.title = body.title;
+        data.titleEn = body.title;
+      }
+      const updated = await db.modifierOption.update({ where: { id }, data });
       return reply.send({ option: updated });
     } catch (e) {
       if (e instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request', details: e.errors });
@@ -476,13 +617,26 @@ export async function managerRoutes(fastify: FastifyInstance) {
     return reply.send({ categories });
   });
 
-  const categoryCreate = z.object({ title: z.string().min(1), sortOrder: z.number().int().optional() });
+  const categoryCreate = z.object({
+    titleEn: z.string().min(1),
+    titleEl: z.string().min(1),
+    sortOrder: z.number().int().optional()
+  });
   fastify.post('/manager/categories', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = categoryCreate.parse(request.body);
       const store = await ensureStore();
-      const slug = (body.title.toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(16).slice(2, 6)).slice(0, 100);
-      const cat = await db.category.create({ data: { storeId: store.id, title: body.title, slug, sortOrder: body.sortOrder ?? 0 } });
+      const slug = (body.titleEn.toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(16).slice(2, 6)).slice(0, 100);
+      const cat = await db.category.create({
+        data: {
+          storeId: store.id,
+          title: body.titleEn,
+          titleEn: body.titleEn,
+          titleEl: body.titleEl,
+          slug,
+          sortOrder: body.sortOrder ?? 0
+        }
+      });
       return reply.status(201).send({ category: cat });
     } catch (e) {
       if (e instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request', details: e.errors });
@@ -490,12 +644,24 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
-  const categoryUpdate = z.object({ title: z.string().min(1).optional(), sortOrder: z.number().int().optional() });
+  const categoryUpdate = z.object({
+    title: z.string().min(1).optional(),
+    titleEn: z.string().min(1).optional(),
+    titleEl: z.string().min(1).optional(),
+    sortOrder: z.number().int().optional()
+  });
   fastify.patch('/manager/categories/:id', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
       const body = categoryUpdate.parse(request.body);
-      const updated = await db.category.update({ where: { id }, data: body });
+      const data: any = { ...body };
+      if (body.titleEn) {
+        data.title = body.titleEn;
+      } else if (body.title) {
+        data.title = body.title;
+        data.titleEn = body.title;
+      }
+      const updated = await db.category.update({ where: { id }, data });
       return reply.send({ category: updated });
     } catch (e) {
       if (e instanceof z.ZodError) return reply.status(400).send({ error: 'Invalid request', details: e.errors });

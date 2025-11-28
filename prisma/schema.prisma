@@ -145,6 +145,8 @@ model Category {
   storeId   String   @db.Uuid
   slug      String   @db.VarChar(100)
   title     String   @db.VarChar(255)
+  titleEn   String   @db.VarChar(255) @default("")
+  titleEl   String   @db.VarChar(255) @default("")
   sortOrder Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamp(6)
   updatedAt DateTime @updatedAt @db.Timestamp(6)
@@ -162,7 +164,11 @@ model Item {
   categoryId    String         @db.Uuid
   slug          String         @db.VarChar(100)
   title         String         @db.VarChar(255)
+  titleEn       String         @db.VarChar(255) @default("")
+  titleEl       String         @db.VarChar(255) @default("")
   description   String?
+  descriptionEn String?        @db.VarChar(1024)
+  descriptionEl String?        @db.VarChar(1024)
   priceCents    Int
   isAvailable   Boolean        @default(true)
   sortOrder     Int            @default(0)
@@ -186,8 +192,11 @@ model Modifier {
   storeId          String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
+  titleEn          String            @db.VarChar(255) @default("")
+  titleEl          String            @db.VarChar(255) @default("")
   minSelect        Int               @default(0)
   maxSelect        Int?
+  isAvailable      Boolean           @default(true)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
   updatedAt        DateTime          @updatedAt @db.Timestamp(6)
   itemModifiers    ItemModifier[]
@@ -205,6 +214,8 @@ model ModifierOption {
   modifierId       String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
+  titleEn          String            @db.VarChar(255) @default("")
+  titleEl          String            @db.VarChar(255) @default("")
   priceDeltaCents  Int               @default(0)
   sortOrder        Int               @default(0)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)

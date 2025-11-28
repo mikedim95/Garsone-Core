@@ -62,6 +62,263 @@ async function ensureProfile(
   });
 }
 
+// ---------- DEMO MENU CONFIG ----------
+
+const IMAGE_BASE =
+  "https://oupwquepcjydgevdfnlm.supabase.co/storage/v1/object/public/assets/demo-cafe/";
+
+const imageUrlBySlug: Record<string, string> = {
+  "espresso-martini": IMAGE_BASE + "Espresso%20Martini.jpg",
+  "club-sandwich": IMAGE_BASE + "Club%20Sandwich.jpg",
+  "aperol-spritz": IMAGE_BASE + "Aperol%20Spritz.jpg",
+  fries: IMAGE_BASE + "Fries.jpg",
+  "bottled-water": IMAGE_BASE + "Bottled%20Water.jpg",
+  espresso: IMAGE_BASE + "espresso.jpg",
+  "double-espresso": IMAGE_BASE + "espresso.jpg",
+  brownie: IMAGE_BASE + "Chocolate%20Brownie.jpg",
+  latte: IMAGE_BASE + "Latte.jpg",
+  "ice-cream": IMAGE_BASE + "Ice%20Cream.jpg",
+  cappuccino: IMAGE_BASE + "Cup-Of-Creamy-Coffee.png",
+  "soft-drink": IMAGE_BASE + "Soft%20Drink.jpg",
+  mojito: IMAGE_BASE + "Mojito.jpg",
+  "freddo-espresso": IMAGE_BASE + "Freddo%20Espresso.jpg",
+  beer: IMAGE_BASE + "Draft%20Beer.jpg",
+  "freddo-cappuccino": IMAGE_BASE + "Fresso%20Cappuccino.jpg",
+  cheesecake: IMAGE_BASE + "Cheese%20Cake.jpg",
+  nachos: IMAGE_BASE + "Nachos.jpg",
+};
+
+type DemoItemConfig = {
+  slug: string;
+  titleEn: string;
+  titleEl: string;
+  descriptionEn?: string;
+  descriptionEl?: string;
+  priceCents: number;
+  costCents?: number;
+};
+
+type DemoCategoryConfig = {
+  slug: string;
+  titleEn: string;
+  titleEl: string;
+  sortOrder: number;
+  items: DemoItemConfig[];
+};
+
+const demoMenu: DemoCategoryConfig[] = [
+  {
+    slug: "coffee-hot",
+    titleEn: "Hot Coffee",
+    titleEl: "Ζεστός καφές",
+    sortOrder: 1,
+    items: [
+      {
+        slug: "espresso",
+        titleEn: "Espresso",
+        titleEl: "Εσπρέσο",
+        descriptionEn: "Single shot espresso.",
+        descriptionEl: "Μονός εσπρέσο.",
+        priceCents: 250,
+        costCents: 90,
+      },
+      {
+        slug: "double-espresso",
+        titleEn: "Double Espresso",
+        titleEl: "Διπλός εσπρέσο",
+        descriptionEn: "Double shot espresso.",
+        descriptionEl: "Διπλός εσπρέσο.",
+        priceCents: 320,
+        costCents: 120,
+      },
+      {
+        slug: "cappuccino",
+        titleEn: "Cappuccino",
+        titleEl: "Καπουτσίνο",
+        descriptionEn: "Espresso with steamed milk and foam.",
+        descriptionEl: "Εσπρέσο με αφρόγαλα.",
+        priceCents: 350,
+        costCents: 140,
+      },
+      {
+        slug: "latte",
+        titleEn: "Latte",
+        titleEl: "Λάτε",
+        descriptionEn: "Espresso with extra steamed milk.",
+        descriptionEl: "Εσπρέσο με περισσότερο γάλα.",
+        priceCents: 380,
+        costCents: 150,
+      },
+    ],
+  },
+  {
+    slug: "coffee-cold",
+    titleEn: "Iced Coffee",
+    titleEl: "Κρύος καφές",
+    sortOrder: 2,
+    items: [
+      {
+        slug: "freddo-espresso",
+        titleEn: "Freddo Espresso",
+        titleEl: "Φρέντο εσπρέσο",
+        descriptionEn: "Double espresso shaken with ice.",
+        descriptionEl: "Διπλός εσπρέσο χτυπημένος με πάγο.",
+        priceCents: 340,
+        costCents: 130,
+      },
+      {
+        slug: "freddo-cappuccino",
+        titleEn: "Freddo Cappuccino",
+        titleEl: "Φρέντο καπουτσίνο",
+        descriptionEn: "Iced espresso with cold milk foam.",
+        descriptionEl: "Κρύος εσπρέσο με κρύο αφρόγαλα.",
+        priceCents: 380,
+        costCents: 150,
+      },
+    ],
+  },
+  {
+    slug: "drinks-soft",
+    titleEn: "Soft Drinks & Water",
+    titleEl: "Αναψυκτικά & Νερό",
+    sortOrder: 3,
+    items: [
+      {
+        slug: "soft-drink",
+        titleEn: "Soft Drink",
+        titleEl: "Αναψυκτικό",
+        descriptionEn: "Assorted sodas.",
+        descriptionEl: "Διάφορα αναψυκτικά.",
+        priceCents: 250,
+        costCents: 80,
+      },
+      {
+        slug: "bottled-water",
+        titleEn: "Bottled Water",
+        titleEl: "Εμφιαλωμένο νερό",
+        descriptionEn: "Still mineral water.",
+        descriptionEl: "Εμφιαλωμένο νερό.",
+        priceCents: 100,
+        costCents: 30,
+      },
+      {
+        slug: "beer",
+        titleEn: "Draft Beer",
+        titleEl: "Μπύρα βαρελίσια",
+        descriptionEn: "Cold draft beer.",
+        descriptionEl: "Κρύα βαρελίσια μπύρα.",
+        priceCents: 450,
+        costCents: 200,
+      },
+    ],
+  },
+  {
+    slug: "cocktails",
+    titleEn: "Cocktails",
+    titleEl: "Κοκτέιλ",
+    sortOrder: 4,
+    items: [
+      {
+        slug: "espresso-martini",
+        titleEn: "Espresso Martini",
+        titleEl: "Εσπρέσο μαρτίνι",
+        descriptionEn: "Vodka, espresso, coffee liqueur.",
+        descriptionEl: "Βότκα, εσπρέσο, λικέρ καφέ.",
+        priceCents: 850,
+        costCents: 320,
+      },
+      {
+        slug: "aperol-spritz",
+        titleEn: "Aperol Spritz",
+        titleEl: "Άπερολ σπριτζ",
+        descriptionEn: "Aperol, prosecco, soda.",
+        descriptionEl: "Άπερολ, προσεκό, σόδα.",
+        priceCents: 780,
+        costCents: 300,
+      },
+      {
+        slug: "mojito",
+        titleEn: "Mojito",
+        titleEl: "Μοχίτο",
+        descriptionEn: "Rum, lime, mint, soda.",
+        descriptionEl: "Ρούμι, λάιμ, δυόσμος, σόδα.",
+        priceCents: 800,
+        costCents: 320,
+      },
+    ],
+  },
+  {
+    slug: "food-snacks",
+    titleEn: "Snacks & Bites",
+    titleEl: "Σνακ & μεζέδες",
+    sortOrder: 5,
+    items: [
+      {
+        slug: "club-sandwich",
+        titleEn: "Club Sandwich",
+        titleEl: "Κλαμπ σάντουιτς",
+        descriptionEn: "Toasted sandwich with fries.",
+        descriptionEl: "Τοστ σάντουιτς με πατάτες.",
+        priceCents: 900,
+        costCents: 380,
+      },
+      {
+        slug: "fries",
+        titleEn: "Fries",
+        titleEl: "Πατάτες τηγανητές",
+        descriptionEn: "Crispy fries with salt.",
+        descriptionEl: "Τραγανές πατάτες με αλάτι.",
+        priceCents: 380,
+        costCents: 150,
+      },
+      {
+        slug: "nachos",
+        titleEn: "Nachos",
+        titleEl: "Νάτσος",
+        descriptionEn: "Tortilla chips with cheese and jalapeños.",
+        descriptionEl: "Τορτίγια με τυρί και χαλαπένιο.",
+        priceCents: 700,
+        costCents: 280,
+      },
+    ],
+  },
+  {
+    slug: "desserts",
+    titleEn: "Desserts",
+    titleEl: "Γλυκά",
+    sortOrder: 6,
+    items: [
+      {
+        slug: "brownie",
+        titleEn: "Chocolate Brownie",
+        titleEl: "Σοκολατένιο μπράουνι",
+        descriptionEn: "Rich chocolate brownie.",
+        descriptionEl: "Πλούσιο σοκολατένιο μπράουνι.",
+        priceCents: 450,
+        costCents: 180,
+      },
+      {
+        slug: "cheesecake",
+        titleEn: "Cheesecake",
+        titleEl: "Τσιζκέικ",
+        descriptionEn: "Cheesecake with biscuit base.",
+        descriptionEl: "Τσιζκέικ με μπισκότο.",
+        priceCents: 500,
+        costCents: 200,
+      },
+      {
+        slug: "ice-cream",
+        titleEn: "Ice Cream Scoop",
+        titleEl: "Μπάλα παγωτό",
+        descriptionEn: "Single scoop of ice cream.",
+        descriptionEl: "Μία μπάλα παγωτό.",
+        priceCents: 300,
+        costCents: 110,
+      },
+    ],
+  },
+];
+
 async function seed() {
   console.log(`Seeding demo data for store slug: ${STORE_SLUG}`);
 
@@ -116,11 +373,11 @@ async function seed() {
     storeId,
     process.env.ARCHITECT_EMAIL || "architect@demo.local",
     Role.ARCHITECT,
-    "Architect Admin",
+    "Demo Architect",
     process.env.ARCHITECT_PASSWORD
   );
 
-  console.log("Profiles ensured:", {
+  console.log("Profiles ready:", {
     manager: manager.email,
     waiter1: waiter1.email,
     waiter2: waiter2.email,
@@ -128,16 +385,160 @@ async function seed() {
     architect: architect.email,
   });
 
-  // ---------- CLEAR EXISTING DEMO DATA (ONLY ORDERS & WAITER DATA) ----------
+  // ---------- CLEAR EXISTING DATA ----------
   console.log(
-    "Clearing existing demo orders and waiter data for this store..."
+    "Clearing existing demo orders, waiter data, and menu for this store..."
   );
 
+  // Orders (cascade to order_items & order_item_options)
   await prisma.order.deleteMany({ where: { storeId } });
+
+  // Waiter-related
   await prisma.waiterTable.deleteMany({ where: { storeId } });
   await prisma.waiterShift.deleteMany({ where: { storeId } });
 
-  // DO NOT touch categories/items/modifiers/etc → respect existing menu.
+  // Menu-related
+  await prisma.itemModifier.deleteMany({ where: { storeId } });
+  await prisma.modifierOption.deleteMany({ where: { storeId } });
+  await prisma.modifier.deleteMany({ where: { storeId } });
+  await prisma.item.deleteMany({ where: { storeId } });
+  await prisma.category.deleteMany({ where: { storeId } });
+
+  // ---------- MENU (CATEGORIES + ITEMS) ----------
+  console.log("Creating demo categories and items...");
+
+  const createdCategories = await Promise.all(
+    demoMenu.map((cat) =>
+      prisma.category.create({
+        data: {
+          storeId,
+          slug: cat.slug,
+          title: cat.titleEn,
+          titleEn: cat.titleEn,
+          titleEl: cat.titleEl,
+          sortOrder: cat.sortOrder,
+        },
+      })
+    )
+  );
+
+  const categoryBySlug: Record<string, (typeof createdCategories)[number]> = {};
+  for (const cat of createdCategories) {
+    categoryBySlug[cat.slug] = cat;
+  }
+
+  const createdItems: Awaited<ReturnType<typeof prisma.item.create>>[] = [];
+
+  for (const cat of demoMenu) {
+    const category = categoryBySlug[cat.slug];
+    if (!category) continue;
+
+    let sort = 1;
+    for (const itemCfg of cat.items) {
+      const imageUrl = imageUrlBySlug[itemCfg.slug] || null;
+
+      const item = await prisma.item.create({
+        data: {
+          storeId,
+          categoryId: category.id,
+          slug: itemCfg.slug,
+          title: itemCfg.titleEn,
+          titleEn: itemCfg.titleEn,
+          titleEl: itemCfg.titleEl,
+          description: itemCfg.descriptionEn,
+          descriptionEn: itemCfg.descriptionEn,
+          descriptionEl: itemCfg.descriptionEl,
+          priceCents: itemCfg.priceCents,
+          costCents: itemCfg.costCents ?? null,
+          isAvailable: true,
+          sortOrder: sort++,
+          imageUrl,
+        },
+      });
+
+      createdItems.push(item);
+    }
+  }
+
+  console.log(
+    `Created ${createdItems.length} items across ${createdCategories.length} categories.`
+  );
+
+  // (Optional) simple size modifier for coffees to keep demo realistic
+  console.log("Creating demo modifiers...");
+  const coffeeItemSlugs = [
+    "espresso",
+    "double-espresso",
+    "cappuccino",
+    "latte",
+    "freddo-espresso",
+    "freddo-cappuccino",
+  ];
+
+  const sizeModifier = await prisma.modifier.create({
+    data: {
+      storeId,
+      slug: "size",
+      title: "Size",
+      titleEn: "Size",
+      titleEl: "Μέγεθος",
+      minSelect: 1,
+      maxSelect: 1,
+      isAvailable: true,
+      modifierOptions: {
+        create: [
+          {
+            storeId,
+            slug: "small",
+            title: "Small",
+            titleEn: "Small",
+            titleEl: "Μικρό",
+            priceDeltaCents: 0,
+            sortOrder: 1,
+          },
+          {
+            storeId,
+            slug: "medium",
+            title: "Medium",
+            titleEn: "Medium",
+            titleEl: "Μεσαίο",
+            priceDeltaCents: 50,
+            sortOrder: 2,
+          },
+          {
+            storeId,
+            slug: "large",
+            title: "Large",
+            titleEn: "Large",
+            titleEl: "Μεγάλο",
+            priceDeltaCents: 100,
+            sortOrder: 3,
+          },
+        ],
+      },
+    },
+  });
+
+  const itemsBySlug: Record<string, (typeof createdItems)[number]> = {};
+  for (const item of createdItems) {
+    itemsBySlug[item.slug] = item;
+  }
+
+  for (const slug of coffeeItemSlugs) {
+    const item = itemsBySlug[slug];
+    if (!item) continue;
+
+    await prisma.itemModifier.create({
+      data: {
+        storeId,
+        itemId: item.id,
+        modifierId: sizeModifier.id,
+        isRequired: true,
+      },
+    });
+  }
+
+  console.log("Demo modifiers attached to coffee items.");
 
   // ---------- TABLES ----------
   console.log("Ensuring tables...");
@@ -178,99 +579,47 @@ async function seed() {
     console.log(`Reusing ${tables.length} existing tables.`);
   }
 
-  // ---------- ITEMS FROM EXISTING MENU ----------
-  console.log("Fetching existing items for this store...");
-
-  const items = await prisma.item.findMany({
-    where: { storeId, isAvailable: true },
-    orderBy: { title: "asc" },
-  });
-
-  if (items.length === 0) {
-    console.error(
-      "No items found for this store. Seed or import your menu items first."
-    );
-    process.exit(1);
-  }
-
-  console.log(`Found ${items.length} items.`);
-
-  // ---------- MODIFIERS & OPTIONS FROM EXISTING DATA ----------
-  console.log("Fetching modifiers and options...");
-
-  const itemModifiers = await prisma.itemModifier.findMany({
-    where: { storeId },
-    include: { modifier: true },
-  });
-
-  const modifierOptions = await prisma.modifierOption.findMany({
-    where: { storeId },
-  });
-
-  const modifierOptionsByModifierId: Record<
-    string,
-    { id: string; title: string; priceDeltaCents: number }[]
-  > = modifierOptions.reduce((acc, opt) => {
-    if (!acc[opt.modifierId]) acc[opt.modifierId] = [];
-    acc[opt.modifierId].push({
-      id: opt.id,
-      title: opt.title,
-      priceDeltaCents: opt.priceDeltaCents,
-    });
-    return acc;
-  }, {} as Record<string, { id: string; title: string; priceDeltaCents: number }[]>);
-
-  console.log("Modifiers and options loaded from DB.");
-
-  // ---------- WAITER SHIFTS (last 60 days to match orders window) ----------
-  console.log("Generating waiter shifts (last 60 days)...");
+  // ---------- WAITER TABLE ASSIGNMENTS ----------
+  console.log("Assigning tables to waiters...");
 
   const waiters = [waiter1, waiter2];
-  const today = new Date();
-  const daysForShifts = 60;
 
-  for (let i = 0; i < daysForShifts; i++) {
-    const day = new Date(today);
-    day.setDate(today.getDate() - i);
-    day.setHours(0, 0, 0, 0);
+  await prisma.waiterTable.deleteMany({ where: { storeId } });
 
+  for (const table of tables) {
     for (const waiter of waiters) {
-      const start = new Date(day);
-      start.setHours(18, 0, 0, 0);
-
-      const end = new Date(day);
-      end.setDate(end.getDate() + 1);
-      end.setHours(2, 0, 0, 0);
-
-      await prisma.waiterShift.create({
+      await prisma.waiterTable.create({
         data: {
           storeId,
+          tableId: table.id,
           waiterId: waiter.id,
-          status: ShiftStatus.COMPLETED,
-          startedAt: start,
-          endedAt: end,
         },
       });
     }
   }
 
-  console.log("Waiter shifts generated.");
-
-  // ---------- ORDERS (ONLY PAID, LAST ~2 MONTHS) ----------
   console.log(
-    `Generating ONLY PAID orders for the last ${DAYS_BACK_ORDERS} days (~2 months)...`
+    `Assigned ${tables.length} tables to ${waiters.length} waiters (full mesh).`
   );
+
+  // ---------- ORDERS (LAST 60 DAYS) ----------
+  console.log(
+    `Generating demo orders for the last ${DAYS_BACK_ORDERS} days (~2 months)...`
+  );
+
+  const items = createdItems;
+  if (items.length === 0) {
+    console.error("No items created; cannot generate demo orders.");
+    process.exit(1);
+  }
 
   let globalTicketNumber = 1;
   const now = new Date();
 
-  function getItemModifiersWithOptions(itemId: string) {
-    return itemModifiers.filter((im) => im.itemId === itemId);
-  }
-
   for (let daysAgo = 0; daysAgo < DAYS_BACK_ORDERS; daysAgo++) {
     const day = new Date();
     day.setDate(now.getDate() - daysAgo);
+    day.setHours(0, 0, 0, 0);
 
     const ordersCountToday = randInt(MIN_ORDERS_PER_DAY, MAX_ORDERS_PER_DAY);
 
@@ -283,11 +632,7 @@ async function seed() {
       type Line = {
         item: (typeof items)[number];
         quantity: number;
-        basePrice: number;
-        options: {
-          modifierId: string;
-          option: { id: string; title: string; priceDeltaCents: number };
-        }[];
+        unitPriceCents: number;
       };
 
       const lines: Line[] = [];
@@ -295,70 +640,77 @@ async function seed() {
       for (let j = 0; j < itemsCount; j++) {
         const item = randFromArray(items);
         const quantity = randInt(1, 3);
-        const basePrice = item.priceCents;
-
-        const modsForItem = getItemModifiersWithOptions(item.id);
-        const chosenOptions: Line["options"] = [];
-
-        for (const im of modsForItem) {
-          const opts = modifierOptionsByModifierId[im.modifierId] || [];
-          if (!opts.length) continue;
-
-          const required = im.isRequired || (im.modifier.minSelect ?? 0) > 0;
-
-          let pickCount = 0;
-          if (required) {
-            pickCount = 1;
-          } else {
-            pickCount = Math.random() < 0.5 ? 0 : 1;
-          }
-
-          if (pickCount > 0) {
-            const opt = randFromArray(opts);
-            chosenOptions.push({
-              modifierId: im.modifierId,
-              option: opt,
-            });
-          }
-        }
+        const unitPriceCents = item.priceCents;
 
         lines.push({
           item,
           quantity,
-          basePrice,
-          options: chosenOptions,
+          unitPriceCents,
         });
       }
 
-      // compute total
-      let totalCents = 0;
-      for (const line of lines) {
-        const optionTotal = line.options.reduce(
-          (sum, o) => sum + o.option.priceDeltaCents,
-          0
-        );
-        totalCents += (line.basePrice + optionTotal) * line.quantity;
+      const totalCents = lines.reduce(
+        (sum, line) => sum + line.unitPriceCents * line.quantity,
+        0
+      );
+
+      let status: OrderStatus;
+      let preparingAt: Date | null = null;
+      let readyAt: Date | null = null;
+      let servedAt: Date | null = null;
+      let paidAt: Date | null = null;
+      let cancelledAt: Date | null = null;
+      let cancelReason: string | null = null;
+
+      if (daysAgo > 0) {
+        // Past days: mostly completed & paid
+        status = OrderStatus.PAID;
+        const prepOffset = randInt(2, 10);
+        const readyOffset = prepOffset + randInt(2, 10);
+        const serveOffset = readyOffset + randInt(2, 20);
+        const payOffset = serveOffset + randInt(0, 20);
+
+        preparingAt = new Date(placedAt.getTime() + prepOffset * 60 * 1000);
+        readyAt = new Date(placedAt.getTime() + readyOffset * 60 * 1000);
+        servedAt = new Date(placedAt.getTime() + serveOffset * 60 * 1000);
+        paidAt = new Date(placedAt.getTime() + payOffset * 60 * 1000);
+      } else {
+        // Today: mix of live statuses
+        const roll = Math.random();
+        if (roll < 0.15) {
+          status = OrderStatus.CANCELLED;
+          cancelledAt = new Date(
+            placedAt.getTime() + randInt(1, 10) * 60 * 1000
+          );
+          cancelReason = "Customer changed mind";
+        } else if (roll < 0.35) {
+          status = OrderStatus.PLACED;
+        } else if (roll < 0.6) {
+          status = OrderStatus.PREPARING;
+          preparingAt = new Date(
+            placedAt.getTime() + randInt(2, 10) * 60 * 1000
+          );
+        } else if (roll < 0.8) {
+          status = OrderStatus.READY;
+          preparingAt = new Date(
+            placedAt.getTime() + randInt(2, 10) * 60 * 1000
+          );
+          readyAt = new Date(placedAt.getTime() + randInt(10, 20) * 60 * 1000);
+        } else {
+          status = OrderStatus.PAID;
+          const prepOffset = randInt(2, 10);
+          const readyOffset = prepOffset + randInt(2, 10);
+          const serveOffset = readyOffset + randInt(2, 20);
+          const payOffset = serveOffset + randInt(0, 20);
+
+          preparingAt = new Date(placedAt.getTime() + prepOffset * 60 * 1000);
+          readyAt = new Date(placedAt.getTime() + readyOffset * 60 * 1000);
+          servedAt = new Date(placedAt.getTime() + serveOffset * 60 * 1000);
+          paidAt = new Date(placedAt.getTime() + payOffset * 60 * 1000);
+        }
       }
 
-      // ONLY PAID ORDERS
-      const status: OrderStatus = OrderStatus.PAID;
-
-      // timestamps
-      const prepOffsetMin = randInt(1, 10);
-      const readyOffsetMin = prepOffsetMin + randInt(3, 15);
-      const serveOffsetMin = readyOffsetMin + randInt(1, 10);
-      const payOffsetMin = serveOffsetMin + randInt(0, 30);
-
-      const preparingAt = new Date(
-        placedAt.getTime() + prepOffsetMin * 60 * 1000
-      );
-      const readyAt = new Date(placedAt.getTime() + readyOffsetMin * 60 * 1000);
-      const servedAt = new Date(
-        placedAt.getTime() + serveOffsetMin * 60 * 1000
-      );
-      const paidAt = new Date(placedAt.getTime() + payOffsetMin * 60 * 1000);
-
-      await prisma.order.create({
+      const order = await prisma.order.create({
         data: {
           storeId,
           tableId: table.id,
@@ -367,38 +719,31 @@ async function seed() {
           totalCents,
           placedAt,
           ticketNumber: globalTicketNumber++,
-          cancelReason: null,
+          cancelReason,
           servedAt,
+          cancelledAt,
+          paidAt,
           preparingAt,
           readyAt,
-          paidAt,
-          cancelledAt: null,
           orderItems: {
             create: lines.map((line) => ({
               itemId: line.item.id,
               titleSnapshot: line.item.title,
-              unitPriceCents: line.basePrice,
+              unitPriceCents: line.unitPriceCents,
               quantity: line.quantity,
-              orderItemOptions: {
-                create: line.options.map((o) => ({
-                  modifierId: o.modifierId,
-                  modifierOptionId: o.option.id,
-                  titleSnapshot: o.option.title,
-                  priceDeltaCents: o.option.priceDeltaCents,
-                })),
-              },
             })),
           },
         },
       });
-    }
 
-    if (daysAgo > 0 && daysAgo % 10 === 0) {
-      console.log(`...generated orders up to ${daysAgo} days ago`);
+      if (!order) {
+        console.error("Failed to create order for table", table.label);
+      }
     }
   }
 
-  console.log("Finished generating PAID orders for last 2 months.");
+  console.log("Demo orders successfully generated.");
+  console.log("Demo seed complete.");
 }
 
 async function main() {
