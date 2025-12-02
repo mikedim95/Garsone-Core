@@ -1,11 +1,16 @@
 import { PrismaClient } from '@prisma/client';
+import { applyDbConnection } from './config';
 
 const prismaGlobal = globalThis as unknown as { prisma?: PrismaClient };
 
 const enableQueryLog = process.env.PRISMA_LOG_QUERIES === '1';
+const { target: dbTarget, databaseUrl } = applyDbConnection();
+
 const clientOptions: any = enableQueryLog
   ? { log: [{ emit: 'event', level: 'query' as const }, { emit: 'event', level: 'error' as const }] }
   : {};
+
+clientOptions.datasources = { db: { url: databaseUrl } };
 
 export const db = prismaGlobal.prisma ?? new PrismaClient(clientOptions);
 
@@ -21,4 +26,12 @@ if (enableQueryLog) {
 
 if (process.env.NODE_ENV !== 'production') {
   prismaGlobal.prisma = db;
+
+  try {
+    const { hostname, pathname } = new URL(databaseUrl);
+    const dbName = pathname?.replace('/', '') || '';
+    console.log(`[db] Using ${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ''}`);
+  } catch (err) {
+    console.log(`[db] Using ${dbTarget}`);
+  }
 }

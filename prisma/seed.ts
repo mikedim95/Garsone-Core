@@ -1,7 +1,9 @@
 // prisma/seed.ts
 import { PrismaClient, OrderStatus, ShiftStatus, Role } from "@prisma/client";
 import bcrypt from "bcrypt";
+import { applyDbConnection } from "../src/db/config";
 
+const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
 
 const STORE_SLUG = process.env.STORE_SLUG || "demo-cafe";
@@ -15,6 +17,14 @@ const DEFAULT_PASSWORD =
 const DAYS_BACK_ORDERS = 60; // ~2 months
 const MIN_ORDERS_PER_DAY = 5;
 const MAX_ORDERS_PER_DAY = 25;
+
+try {
+  const { hostname, pathname } = new URL(databaseUrl);
+  const dbName = pathname?.replace("/", "") || "";
+  console.log(`[seed] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`);
+} catch {
+  console.log(`[seed] DB_CONNECTION=${dbTarget}`);
+}
 
 // ---------- helpers ----------
 

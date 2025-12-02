@@ -1,6 +1,8 @@
 import { PrismaClient, Role } from "@prisma/client";
 import bcrypt from "bcrypt";
+import { applyDbConnection } from "../src/db/config";
 
+const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
 
 const STORE_SLUG = process.env.STORE_SLUG || "demo-bar";
@@ -9,6 +11,14 @@ const DEFAULT_PASSWORD =
   process.env.MANAGER_PASSWORD ||
   process.env.WAITER_PASSWORD ||
   "changeme";
+
+try {
+  const { hostname, pathname } = new URL(databaseUrl);
+  const dbName = pathname?.replace("/", "") || "";
+  console.log(`[seedProfiles] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`);
+} catch {
+  console.log(`[seedProfiles] DB_CONNECTION=${dbTarget}`);
+}
 
 async function ensureProfile(
   storeId: string,

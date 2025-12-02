@@ -1,8 +1,18 @@
 // prisma/test_io.ts
 import { PrismaClient, Role, OrderStatus } from "@prisma/client";
 import { performance } from "perf_hooks";
+import { applyDbConnection } from "../src/db/config";
 
+const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
+
+try {
+  const { hostname, pathname } = new URL(databaseUrl);
+  const dbName = pathname?.replace("/", "") || "";
+  console.log(`[test_io] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`);
+} catch {
+  console.log(`[test_io] DB_CONNECTION=${dbTarget}`);
+}
 
 /**
  * CONFIG (override with env vars)
