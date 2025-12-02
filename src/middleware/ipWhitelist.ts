@@ -1,11 +1,11 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 
+const ALLOW_ALL = true; // IP whitelist disabled for now
 const IS_PROD = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER);
 const ALLOWED_IPS_RAW = (process.env.ALLOWED_IPS || '127.0.0.1,::1,::ffff:127.0.0.1')
   .split(',')
   .map(ip => ip.trim())
   .filter(Boolean);
-const ALLOW_ALL = ALLOWED_IPS_RAW.includes('*') || (IS_PROD && !process.env.ALLOWED_IPS);
 
 function normalizeIp(ip: string) {
   // Convert ::ffff:192.168.1.10 -> 192.168.1.10

@@ -32,7 +32,7 @@ function serializeAssignment(assignment: WaiterTableWithRelations) {
 }
 
 export async function waiterTableRoutes(fastify: FastifyInstance) {
-  const managerOnly = [authMiddleware, requireRole(["manager"])];
+  const managerOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
   fastify.get(
     "/waiter-tables",

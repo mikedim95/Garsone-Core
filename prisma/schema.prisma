@@ -25,7 +25,9 @@ model Store {
   orders          Order[]
   profiles        Profile[]
   storeMeta       StoreMeta?
+  tableVisits     TableVisit[]
   tables          Table[]
+  qrTiles         QRTile[]
   waiterShifts    WaiterShift[]
   waiterTables    WaiterTable[]
 
@@ -74,9 +76,51 @@ model Table {
   orders       Order[]
   store        Store         @relation(fields: [storeId], references: [id])
   waiterTables WaiterTable[]
+  tableVisits  TableVisit[]
+  qrTiles      QRTile[]
 
   @@unique([storeId, label])
   @@map("tables")
+}
+
+model QRTile {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  store      Store    @relation(fields: [storeId], references: [id])
+  storeId    String   @db.Uuid
+
+  table      Table?   @relation(fields: [tableId], references: [id])
+  tableId    String?  @db.Uuid
+
+  publicCode String   @unique @db.VarChar(32) // printed in QR
+  label      String?  @db.VarChar(255)
+  isActive   Boolean  @default(true)
+
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+  tableVisits TableVisit[]
+
+  @@index([storeId])
+  @@index([tableId])
+  @@map("qr_tiles")
+}
+
+model TableVisit {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tileId       String           @db.Uuid
+  tableId      String           @db.Uuid
+  storeId      String           @db.Uuid
+  sessionToken String           @unique @db.VarChar(64)
+  status       TableVisitStatus @default(OPEN)
+  expiresAt    DateTime         @db.Timestamp(6)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @updatedAt @db.Timestamp(6)
+  tile         QRTile           @relation(fields: [tileId], references: [id])
+  table        Table            @relation(fields: [tableId], references: [id])
+  store        Store            @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, tableId, status])
+  @@index([expiresAt])
+  @@map("table_visits")
 }
 
 model WaiterTable {
@@ -101,6 +145,8 @@ model Category {
   storeId   String   @db.Uuid
   slug      String   @db.VarChar(100)
   title     String   @db.VarChar(255)
+  titleEn   String   @db.VarChar(255) @default("")
+  titleEl   String   @db.VarChar(255) @default("")
   sortOrder Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamp(6)
   updatedAt DateTime @updatedAt @db.Timestamp(6)
@@ -118,7 +164,11 @@ model Item {
   categoryId    String         @db.Uuid
   slug          String         @db.VarChar(100)
   title         String         @db.VarChar(255)
+  titleEn       String         @db.VarChar(255) @default("")
+  titleEl       String         @db.VarChar(255) @default("")
   description   String?
+  descriptionEn String?        @db.VarChar(1024)
+  descriptionEl String?        @db.VarChar(1024)
   priceCents    Int
   isAvailable   Boolean        @default(true)
   sortOrder     Int            @default(0)
@@ -142,8 +192,11 @@ model Modifier {
   storeId          String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
+  titleEn          String            @db.VarChar(255) @default("")
+  titleEl          String            @db.VarChar(255) @default("")
   minSelect        Int               @default(0)
   maxSelect        Int?
+  isAvailable      Boolean           @default(true)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
   updatedAt        DateTime          @updatedAt @db.Timestamp(6)
   itemModifiers    ItemModifier[]
@@ -161,6 +214,8 @@ model ModifierOption {
   modifierId       String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
+  titleEn          String            @db.VarChar(255) @default("")
+  titleEl          String            @db.VarChar(255) @default("")
   priceDeltaCents  Int               @default(0)
   sortOrder        Int               @default(0)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
@@ -293,6 +348,12 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+enum TableVisitStatus {
+  OPEN
+  CLOSED
+  EXPIRED
+}
+
 enum ShiftStatus {
   SCHEDULED
   ACTIVE
@@ -303,6 +364,7 @@ enum Role {
   WAITER
   MANAGER
   COOK
+  ARCHITECT
 }
 
 enum OrderStatus {

@@ -34,7 +34,14 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
 
-      const role = user.role === "MANAGER" ? "manager" : user.role === "COOK" ? "cook" : "waiter";
+      const role =
+        user.role === "MANAGER"
+          ? "manager"
+          : user.role === "COOK"
+            ? "cook"
+            : user.role === "ARCHITECT"
+              ? "architect"
+              : "waiter";
 
       const token = signToken({
         userId: user.id,

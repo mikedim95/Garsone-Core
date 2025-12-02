@@ -1,16 +1,18 @@
 import { FastifyInstance } from "fastify";
-import { Prisma, OrderStatus } from "@prisma/client";
+import { Prisma, OrderStatus, ShiftStatus } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
-import { publishMessage } from "../lib/mqtt.js";
+import { publishMessage, PublishOptions } from "../lib/mqtt.js";
 import { ensureStore, STORE_SLUG } from "../lib/store.js";
+import { validateTableVisitToken, REQUIRE_TABLE_VISIT } from "../lib/tableVisits.js";
 
 const modifierSelectionSchema = z.record(z.string());
 
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
+  visit: z.string().trim().min(8).max(128).optional(),
   items: z
     .array(
       z.object({
@@ -31,6 +33,7 @@ const updateStatusSchema = z.object({
 
 const callWaiterSchema = z.object({
   tableId: z.string().uuid(),
+  visit: z.string().trim().min(8).max(128).optional(),
 });
 
 type OrderWithRelations = Prisma.OrderGetPayload<{
@@ -68,6 +71,55 @@ const STATUS_TIMESTAMP_FIELDS: Record<OrderStatus, StatusTimestampField | undefi
   [OrderStatus.CANCELLED]: "cancelledAt",
 };
 
+const parsePositiveInt = (value: string | number | undefined, fallback: number) => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? parseInt(value, 10)
+      : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+};
+
+// Increase defaults so month-long histories are returned without trimming
+const ORDERS_DEFAULT_TAKE = parsePositiveInt(process.env.ORDERS_DEFAULT_TAKE, 5000);
+const ORDERS_MAX_TAKE = Math.max(
+  ORDERS_DEFAULT_TAKE,
+  parsePositiveInt(process.env.ORDERS_MAX_TAKE, 10000)
+);
+const REQUIRE_VISIT_TOKEN = REQUIRE_TABLE_VISIT;
+
+const ORDER_ITEM_INCLUDE = {
+  include: {
+    orderItemOptions: true,
+    item: {
+      select: {
+        id: true,
+        title: true,
+        categoryId: true,
+        category: {
+          select: {
+            title: true,
+            slug: true,
+          },
+        },
+      },
+    },
+  },
+};
+
+const pickHeaderToken = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
+
+function getVisitTokenFromRequest(request: any, provided?: unknown) {
+  const bodyToken = typeof provided === "string" ? provided : undefined;
+  const headerToken = pickHeaderToken(
+    (request?.headers as any)?.["x-table-visit"] as string | string[] | undefined
+  );
+  const token = bodyToken || headerToken || "";
+  return typeof token === "string" ? token.trim() : "";
+}
+
 function serializeOrder(order: OrderWithRelations) {
   return {
     id: order.id,
@@ -90,6 +142,10 @@ function serializeOrder(order: OrderWithRelations) {
     items: order.orderItems.map((orderItem) => ({
       id: orderItem.id,
       itemId: orderItem.itemId,
+      categoryId: (orderItem as any)?.item?.categoryId ?? null,
+      categoryTitle:
+        (orderItem as any)?.item?.category?.title ??
+        undefined,
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
@@ -107,11 +163,38 @@ function serializeOrder(order: OrderWithRelations) {
 }
 
 async function getWaiterIdsForTable(storeId: string, tableId: string) {
+  const t0 = Date.now();
   const assignments = await db.waiterTable.findMany({
     where: { storeId, tableId },
     select: { waiterId: true },
   });
+  if (assignments.length === 0) {
+    console.log(
+      "[orders:waiters] no assignments for table",
+      tableId,
+      "store",
+      storeId,
+      `+${Date.now() - t0}ms`
+    );
+  }
   return assignments.map((a) => a.waiterId);
+}
+
+function notifyWaiters(
+  topic: string,
+  payload: any,
+  waiterIds: string[],
+  options?: PublishOptions
+) {
+  if (waiterIds.length === 0) {
+    console.log("[orders:notify] topic", topic, "no waiterIds → broadcast to waiters");
+  }
+  const baseOptions = options ?? {};
+  if (waiterIds.length > 0) {
+    publishMessage(topic, payload, { ...baseOptions, userIds: waiterIds });
+  } else {
+    publishMessage(topic, payload, { ...baseOptions, roles: ["waiter"] });
+  }
 }
 
 function parseModifiers(value?: unknown) {
@@ -144,12 +227,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       try {
+        const t0 = Date.now();
+        const logStep = (label: string) =>
+          console.log(`[orders:create] ${label} +${Date.now() - t0}ms`);
         const body = createOrderSchema.parse(request.body);
+        logStep("parsed");
         const store = await ensureStore();
+        logStep("store");
 
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
         });
+        logStep("table");
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
@@ -174,6 +263,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           },
         });
+        logStep("itemsFetched");
 
         const itemMap = new Map(items.map((item) => [item.id, item]));
 
@@ -262,6 +352,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
         }
+        logStep("computed");
 
         const createdOrder = await db.order.create({
           data: {
@@ -276,13 +367,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
+        logStep("dbCreate");
 
         const waiterIds = await getWaiterIdsForTable(store.id, table.id);
         const placedPayload = {
@@ -303,12 +391,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
-        if (waiterIds.length) {
-          publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
-            userIds: waiterIds,
-            skipMqtt: true,
-          });
-        }
+        notifyWaiters(
+          `${STORE_SLUG}/orders/placed`,
+          placedPayload,
+          waiterIds,
+          { skipMqtt: true }
+        );
+        logStep("published");
+        logStep("total");
 
         return reply
           .status(201)
@@ -336,31 +426,159 @@ export async function orderRoutes(fastify: FastifyInstance) {
       try {
         const store = await ensureStore();
         const query = z
-          .object({ status: z.nativeEnum(OrderStatus).optional() })
+          .object({
+            status: z.nativeEnum(OrderStatus).optional(),
+            tableIds: z.union([z.string(), z.array(z.string())]).optional(),
+          })
           .parse(request.query ?? {});
+        const actor = (request as any).user;
+        let shiftWindow:
+          | {
+              start?: Date;
+              end?: Date | null;
+              id?: string;
+              status?: ShiftStatus;
+            }
+          | undefined;
+        if (actor?.role === "waiter" && actor?.id) {
+          const now = new Date();
+          const activeShift = await db.waiterShift.findFirst({
+            where: {
+              storeId: store.id,
+              waiterId: actor.id,
+              status: ShiftStatus.ACTIVE,
+              startedAt: { lte: now },
+              OR: [{ endedAt: null }, { endedAt: { gte: now } }],
+            },
+            orderBy: { startedAt: "desc" },
+          });
+          const fallbackShift =
+            activeShift ||
+            (await db.waiterShift.findFirst({
+              where: { storeId: store.id, waiterId: actor.id },
+              orderBy: { startedAt: "desc" },
+            }));
+          if (fallbackShift) {
+            shiftWindow = {
+              start: fallbackShift.startedAt,
+              end: fallbackShift.endedAt,
+              id: fallbackShift.id,
+              status: fallbackShift.status,
+            };
+          }
+        }
+        const tableIdList = (() => {
+          const raw = query.tableIds;
+          const arr = Array.isArray(raw)
+            ? raw
+            : typeof raw === "string"
+            ? raw.split(",")
+            : [];
+          const cleaned = arr
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter((value) => value.length > 0);
+          const uuid = z.string().uuid();
+          return cleaned.filter((value) => uuid.safeParse(value).success);
+        })();
 
+        const requestedTake =
+          typeof (request.query as any)?.take !== "undefined"
+            ? Number((request.query as any)?.take)
+            : ORDERS_DEFAULT_TAKE;
         const queryTake = Math.min(
-          Math.max(Number((request.query as any)?.take ?? 30), 1),
-          100
+          Math.max(Number.isFinite(requestedTake) ? requestedTake : ORDERS_DEFAULT_TAKE, 1),
+          ORDERS_MAX_TAKE
+        );
+        console.log(
+          "[orders:list] store",
+          store.slug,
+          "status",
+          query.status ?? "any",
+          "requestedTake",
+          requestedTake,
+          "effectiveTake",
+          queryTake,
+          "tableIds",
+          tableIdList.length,
+          "user",
+          actor?.id ?? "anon",
+          "role",
+          actor?.role ?? "unknown",
+          "shift",
+          shiftWindow?.id ?? "none",
+          shiftWindow?.start?.toISOString(),
+          shiftWindow?.end?.toISOString() ?? "open",
+          shiftWindow?.status ?? "n/a"
         );
         const ordersData = await db.order.findMany({
           where: {
             storeId: store.id,
             ...(query.status ? { status: query.status } : {}),
+            ...(tableIdList.length ? { tableId: { in: tableIdList } } : {}),
+            ...(shiftWindow?.start
+              ? {
+                  placedAt: {
+                    gte: shiftWindow.start,
+                    ...(shiftWindow.end ? { lte: shiftWindow.end } : {}),
+                  },
+                }
+              : {}),
           },
           orderBy: { placedAt: "desc" },
           take: queryTake,
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
+        const placedDates = ordersData
+          .map((o) => o.placedAt || o.createdAt)
+          .filter(Boolean)
+          .map((d) => new Date(d as Date).toISOString())
+          .sort();
+        const tableStats = ordersData.reduce<Record<string, number>>((acc, o) => {
+          const label = (o as any)?.table?.label ?? o.tableId ?? "unknown";
+          acc[label] = (acc[label] ?? 0) + 1;
+          return acc;
+        }, {});
+        const categoryStats = ordersData.reduce<Record<string, number>>((acc, o) => {
+          (o.orderItems || []).forEach((oi) => {
+            const cat =
+              (oi as any)?.item?.category?.title ??
+              (oi as any)?.item?.categoryId ??
+              "Uncategorized";
+            acc[cat] = (acc[cat] ?? 0) + 1;
+          });
+          return acc;
+        }, {});
+        console.log(
+          "[orders:list] returned",
+          ordersData.length,
+          "firstDate",
+          placedDates[0],
+          "lastDate",
+          placedDates[placedDates.length - 1],
+          "tables",
+          Object.entries(tableStats)
+            .slice(0, 6)
+            .map(([table, count]) => `${table}:${count}`),
+          "categorySamples",
+          Object.entries(categoryStats)
+            .slice(0, 5)
+            .map(([cat, count]) => `${cat}:${count}`)
+        );
 
-        return reply.send({ orders: ordersData.map(serializeOrder) });
+        const shiftResponse =
+          shiftWindow?.start != null
+            ? {
+                id: shiftWindow.id,
+                status: shiftWindow.status,
+                start: shiftWindow.start.toISOString(),
+                end: shiftWindow.end ? shiftWindow.end.toISOString() : undefined,
+              }
+            : undefined;
+
+        return reply.send({ orders: ordersData.map(serializeOrder), shift: shiftResponse });
       } catch (error) {
         console.error("Get orders error:", error);
         return reply.status(500).send({ error: "Failed to fetch orders" });
@@ -431,13 +649,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const next = body.status;
         const allowByRole = (role?: string) => {
           if (!role) return false;
+          const isManager = role === "manager" || role === "architect";
           if (next === OrderStatus.SERVED || next === OrderStatus.PAID)
-            return role === "waiter" || role === "manager";
+            return role === "waiter" || isManager;
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
-            return role === "cook" || role === "manager";
+            return role === "cook" || isManager;
           if (next === OrderStatus.CANCELLED)
-            return role === "manager" || role === "cook";
-          return role === "manager";
+            return isManager || role === "cook";
+          return isManager;
         };
 
         if (!allowByRole(actorRole)) {
@@ -558,12 +777,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
             roles: ["cook"],
             ...(skipStatusMqtt ? { skipMqtt: true } : {}),
           });
-          if (waiterIdsForOrder.length) {
-            publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
-              userIds: waiterIdsForOrder,
-              skipMqtt: true,
-            });
-          }
+          notifyWaiters(
+            `${STORE_SLUG}/orders/preparing`,
+            payload,
+            waiterIdsForOrder,
+            { skipMqtt: true }
+          );
           publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
             anonymousOnly: true,
             skipMqtt: true,
@@ -588,12 +807,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
             roles: ["cook"],
           });
-          if (waiterIdsForOrder.length) {
-            publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
-              userIds: waiterIdsForOrder,
-              skipMqtt: true,
-            });
-          }
+          notifyWaiters(`${STORE_SLUG}/orders/ready`, payload, waiterIdsForOrder);
         }
 
         if (body.status === OrderStatus.CANCELLED) {
@@ -614,12 +828,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           publishMessage(`${STORE_SLUG}/orders/canceled`, payload, {
             roles: ["cook"],
           });
-          if (waiterIdsForOrder.length) {
-            publishMessage(`${STORE_SLUG}/orders/canceled`, payload, {
-              userIds: waiterIdsForOrder,
-              skipMqtt: true,
-            });
-          }
+          notifyWaiters(
+            `${STORE_SLUG}/orders/canceled`,
+            payload,
+            waiterIdsForOrder,
+            { skipMqtt: true }
+          );
         }
 
         if (body.status === OrderStatus.SERVED) {
@@ -640,12 +854,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           publishMessage(`${STORE_SLUG}/orders/served`, payload, {
             roles: ["cook"],
           });
-          if (waiterIdsForOrder.length) {
-            publishMessage(`${STORE_SLUG}/orders/served`, payload, {
-              userIds: waiterIdsForOrder,
-              skipMqtt: true,
-            });
-          }
+          notifyWaiters(
+            `${STORE_SLUG}/orders/served`,
+            payload,
+            waiterIdsForOrder,
+            { skipMqtt: true }
+          );
         }
 
         if (body.status === OrderStatus.PAID) {
@@ -666,12 +880,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           publishMessage(`${STORE_SLUG}/orders/paid`, payload, {
             roles: ["cook"],
           });
-          if (waiterIdsForOrder.length) {
-            publishMessage(`${STORE_SLUG}/orders/paid`, payload, {
-              userIds: waiterIdsForOrder,
-              skipMqtt: true,
-            });
-          }
+          notifyWaiters(
+            `${STORE_SLUG}/orders/paid`,
+            payload,
+            waiterIdsForOrder,
+            { skipMqtt: true }
+          );
         }
 
         return reply.send({ order: serializeOrder(updatedOrder) });
@@ -813,7 +1027,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: { include: { orderItemOptions: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
 
@@ -837,12 +1051,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
           roles: ["cook"],
         });
-        if (waiterIds.length) {
-          publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
-            userIds: waiterIds,
-            skipMqtt: true,
-          });
-        }
+        notifyWaiters(
+          `${STORE_SLUG}/orders/placed`,
+          payloadPlaced,
+          waiterIds,
+          { skipMqtt: true }
+        );
 
         return reply.send({ order: serializeOrder(updated) });
       } catch (error) {
@@ -872,31 +1086,34 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const store = await ensureStore();
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
-          include: {
-            table: { select: { id: true, label: true } },
-            orderItems: { include: { orderItemOptions: true } },
-          },
-        });
+        include: {
+          table: { select: { id: true, label: true } },
+          orderItems: ORDER_ITEM_INCLUDE,
+        },
+      });
         if (!order) {
           return reply.status(404).send({ error: "Order not found" });
         }
 
-        const payload = {
+        const preparedPayload = {
           orderId: order.id,
+          tableId: order.tableId,
           tableLabel: order.table?.label ?? "",
+          ticketNumber: (order as any).ticketNumber ?? undefined,
+          status: OrderStatus.PREPARING,
           createdAt: order.createdAt,
-          printedAt: new Date().toISOString(),
+          ts: new Date().toISOString(),
           items: order.orderItems.map((oi) => ({
             title: oi.titleSnapshot,
             quantity: oi.quantity,
             unitPriceCents: oi.unitPriceCents,
-            modifiers: oi.orderItemOptions.map((opt) => ({
-              titleSnapshot: opt.titleSnapshot,
-              priceDeltaCents: opt.priceDeltaCents,
-            })),
+            modifiers: oi.orderItemOptions,
           })),
+          order: serializeOrder(order as any),
         };
-        publishMessage(`${STORE_SLUG}/orders/accepted`, payload);
+        publishMessage(`${STORE_SLUG}/orders/preparing`, preparedPayload, {
+          roles: ["cook"],
+        });
         return reply.send({ success: true });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -931,14 +1148,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         // New waiter call topic: {slug}/waiter/call
         const waiterIds = await getWaiterIdsForTable(store.id, table.id);
-        publishMessage(
+        notifyWaiters(
           `${STORE_SLUG}/waiter/call`,
           {
             tableId: body.tableId,
             action: "called",
             ts: new Date().toISOString(),
           },
-          { userIds: waiterIds }
+          waiterIds
         );
 
         return reply.send({ success: true });

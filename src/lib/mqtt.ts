@@ -63,15 +63,16 @@ const MQTT_CLIENT_ID = buildClientId();
 
 let client: mqtt.MqttClient | null = null;
 let lastConnectLog = 0;
+let clientInitialized = false;
 
 function mqttEnabled() {
   return !MQTT_DISABLED && Boolean(MQTT_BROKER_URL);
 }
 
-export function getMqttClient(): mqtt.MqttClient | null {
+function initClient() {
+  if (clientInitialized) return client;
+  clientInitialized = true;
   if (!mqttEnabled()) return null;
-  if (client) return client;
-
   try {
     const isTLS =
       MQTT_BROKER_URL.startsWith("mqtts://") ||
@@ -124,6 +125,14 @@ export function getMqttClient(): mqtt.MqttClient | null {
   });
 
   return client;
+}
+
+// Eagerly initiate connection on module load so the first publish doesn't block
+initClient();
+
+export function getMqttClient(): mqtt.MqttClient | null {
+  if (!mqttEnabled()) return null;
+  return client ?? initClient();
 }
 
 function dispatchIncomingMessage(topic: string, payload: Buffer) {

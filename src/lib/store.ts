@@ -22,7 +22,7 @@ export async function ensureStore() {
     const created = await db.store.create({
       data: {
         slug: STORE_SLUG,
-        name: 'Demo Cafe',
+        name: 'Garsone Offline Demo',
         settingsJson: {},
       },
       select: { id: true, slug: true, name: true, settingsJson: true },
