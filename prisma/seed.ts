@@ -21,7 +21,11 @@ const MAX_ORDERS_PER_DAY = 25;
 try {
   const { hostname, pathname } = new URL(databaseUrl);
   const dbName = pathname?.replace("/", "") || "";
-  console.log(`[seed] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`);
+  console.log(
+    `[seed] DB_CONNECTION=${dbTarget} -> ${hostname}${
+      dbName ? `/${dbName}` : ""
+    }`
+  );
 } catch {
   console.log(`[seed] DB_CONNECTION=${dbTarget}`);
 }
@@ -332,19 +336,25 @@ const demoMenu: DemoCategoryConfig[] = [
 async function seed() {
   console.log(`Seeding demo data for store slug: ${STORE_SLUG}`);
 
-  const store = await prisma.store.findUnique({
+  // Try to find the store by slug
+  let store = await prisma.store.findUnique({
     where: { slug: STORE_SLUG },
   });
 
+  // If it does not exist, create it once
   if (!store) {
-    console.error(
-      `No store found with slug "${STORE_SLUG}". Create it first or set STORE_SLUG.`
-    );
-    process.exit(1);
+    console.log(`No store found with slug "${STORE_SLUG}", creating it now...`);
+    store = await prisma.store.create({
+      data: {
+        slug: STORE_SLUG,
+        name: "Demo Cafe", // change if you want a different default name
+      },
+    });
   }
 
   const storeId = store.id;
   console.log(`Seeding for store "${store.slug}" (${storeId})`);
+  // ...
 
   // ---------- PROFILES ----------
   const manager = await ensureProfile(
