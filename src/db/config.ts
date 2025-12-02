@@ -1,6 +1,7 @@
 export type DbTarget = 'primary' | 'default' | 'render_internal' | 'render_external';
 
-const maybeEnforceSsl = (url: string, target: DbTarget) => {
+const maybeEnforceSsl = (url: string | undefined, target: DbTarget) => {
+  if (!url) return url;
   if (target !== 'render_external') return url;
   try {
     const u = new URL(url);
