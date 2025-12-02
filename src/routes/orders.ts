@@ -6,7 +6,10 @@ import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
 import { ensureStore, STORE_SLUG } from "../lib/store.js";
-import { validateTableVisitToken, REQUIRE_TABLE_VISIT } from "../lib/tableVisits.js";
+import {
+  validateTableVisitToken,
+  REQUIRE_TABLE_VISIT,
+} from "../lib/tableVisits.js";
 
 const modifierSelectionSchema = z.record(z.string());
 
@@ -62,7 +65,10 @@ type StatusTimestampField =
   | "paidAt"
   | "cancelledAt";
 
-const STATUS_TIMESTAMP_FIELDS: Record<OrderStatus, StatusTimestampField | undefined> = {
+const STATUS_TIMESTAMP_FIELDS: Record<
+  OrderStatus,
+  StatusTimestampField | undefined
+> = {
   [OrderStatus.PLACED]: undefined,
   [OrderStatus.PREPARING]: "preparingAt",
   [OrderStatus.READY]: "readyAt",
@@ -71,7 +77,10 @@ const STATUS_TIMESTAMP_FIELDS: Record<OrderStatus, StatusTimestampField | undefi
   [OrderStatus.CANCELLED]: "cancelledAt",
 };
 
-const parsePositiveInt = (value: string | number | undefined, fallback: number) => {
+const parsePositiveInt = (
+  value: string | number | undefined,
+  fallback: number
+) => {
   const parsed =
     typeof value === "number"
       ? value
@@ -82,7 +91,10 @@ const parsePositiveInt = (value: string | number | undefined, fallback: number) 
 };
 
 // Increase defaults so month-long histories are returned without trimming
-const ORDERS_DEFAULT_TAKE = parsePositiveInt(process.env.ORDERS_DEFAULT_TAKE, 5000);
+const ORDERS_DEFAULT_TAKE = parsePositiveInt(
+  process.env.ORDERS_DEFAULT_TAKE,
+  5000
+);
 const ORDERS_MAX_TAKE = Math.max(
   ORDERS_DEFAULT_TAKE,
   parsePositiveInt(process.env.ORDERS_MAX_TAKE, 10000)
@@ -114,7 +126,10 @@ const pickHeaderToken = (value: string | string[] | undefined) =>
 function getVisitTokenFromRequest(request: any, provided?: unknown) {
   const bodyToken = typeof provided === "string" ? provided : undefined;
   const headerToken = pickHeaderToken(
-    (request?.headers as any)?.["x-table-visit"] as string | string[] | undefined
+    (request?.headers as any)?.["x-table-visit"] as
+      | string
+      | string[]
+      | undefined
   );
   const token = bodyToken || headerToken || "";
   return typeof token === "string" ? token.trim() : "";
@@ -143,9 +158,7 @@ function serializeOrder(order: OrderWithRelations) {
       id: orderItem.id,
       itemId: orderItem.itemId,
       categoryId: (orderItem as any)?.item?.categoryId ?? null,
-      categoryTitle:
-        (orderItem as any)?.item?.category?.title ??
-        undefined,
+      categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
@@ -187,7 +200,11 @@ function notifyWaiters(
   options?: PublishOptions
 ) {
   if (waiterIds.length === 0) {
-    console.log("[orders:notify] topic", topic, "no waiterIds → broadcast to waiters");
+    console.log(
+      "[orders:notify] topic",
+      topic,
+      "no waiterIds → broadcast to waiters"
+    );
   }
   const baseOptions = options ?? {};
   if (waiterIds.length > 0) {
@@ -391,12 +408,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
-        notifyWaiters(
-          `${STORE_SLUG}/orders/placed`,
-          placedPayload,
-          waiterIds,
-          { skipMqtt: true }
-        );
+        notifyWaiters(`${STORE_SLUG}/orders/placed`, placedPayload, waiterIds, {
+          skipMqtt: true,
+        });
         logStep("published");
         logStep("total");
 
@@ -416,21 +430,23 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
   // in your server.ts, near /orders
-fastify.get("/orders-benchmark", async (_request, reply) => {
-  try {
-    const store = await ensureStore();
-    const orders = await db.order.findMany({
-      where: { storeId: store.id },
-      take: 50,
-      orderBy: { createdAt: "desc" },
-    });
+  fastify.get("/orders-benchmark", async (_request, reply) => {
+    try {
+      const store = await ensureStore();
+      const orders = await db.order.findMany({
+        where: { storeId: store.id },
+        take: 50,
+        orderBy: { createdAt: "desc" },
+      });
 
-    return reply.send({ orders });
-  } catch (error) {
-    fastify.log.error("Orders benchmark error:", error);
-    return reply.status(500).send({ error: "Failed to fetch orders (benchmark)" });
-  }
-});
+      return reply.send({ orders });
+    } catch (error) {
+      fastify.log.error("Orders benchmark error:", error);
+      return reply
+        .status(500)
+        .send({ error: "Failed to fetch orders (benchmark)" });
+    }
+  });
 
   // Get orders (protected)
   fastify.get(
@@ -502,7 +518,12 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
             ? Number((request.query as any)?.take)
             : ORDERS_DEFAULT_TAKE;
         const queryTake = Math.min(
-          Math.max(Number.isFinite(requestedTake) ? requestedTake : ORDERS_DEFAULT_TAKE, 1),
+          Math.max(
+            Number.isFinite(requestedTake)
+              ? requestedTake
+              : ORDERS_DEFAULT_TAKE,
+            1
+          ),
           ORDERS_MAX_TAKE
         );
         console.log(
@@ -552,21 +573,27 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
           .filter(Boolean)
           .map((d) => new Date(d as Date).toISOString())
           .sort();
-        const tableStats = ordersData.reduce<Record<string, number>>((acc, o) => {
-          const label = (o as any)?.table?.label ?? o.tableId ?? "unknown";
-          acc[label] = (acc[label] ?? 0) + 1;
-          return acc;
-        }, {});
-        const categoryStats = ordersData.reduce<Record<string, number>>((acc, o) => {
-          (o.orderItems || []).forEach((oi) => {
-            const cat =
-              (oi as any)?.item?.category?.title ??
-              (oi as any)?.item?.categoryId ??
-              "Uncategorized";
-            acc[cat] = (acc[cat] ?? 0) + 1;
-          });
-          return acc;
-        }, {});
+        const tableStats = ordersData.reduce<Record<string, number>>(
+          (acc, o) => {
+            const label = (o as any)?.table?.label ?? o.tableId ?? "unknown";
+            acc[label] = (acc[label] ?? 0) + 1;
+            return acc;
+          },
+          {}
+        );
+        const categoryStats = ordersData.reduce<Record<string, number>>(
+          (acc, o) => {
+            (o.orderItems || []).forEach((oi) => {
+              const cat =
+                (oi as any)?.item?.category?.title ??
+                (oi as any)?.item?.categoryId ??
+                "Uncategorized";
+              acc[cat] = (acc[cat] ?? 0) + 1;
+            });
+            return acc;
+          },
+          {}
+        );
         console.log(
           "[orders:list] returned",
           ordersData.length,
@@ -590,11 +617,16 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
                 id: shiftWindow.id,
                 status: shiftWindow.status,
                 start: shiftWindow.start.toISOString(),
-                end: shiftWindow.end ? shiftWindow.end.toISOString() : undefined,
+                end: shiftWindow.end
+                  ? shiftWindow.end.toISOString()
+                  : undefined,
               }
             : undefined;
 
-        return reply.send({ orders: ordersData.map(serializeOrder), shift: shiftResponse });
+        return reply.send({
+          orders: ordersData.map(serializeOrder),
+          shift: shiftResponse,
+        });
       } catch (error) {
         console.error("Get orders error:", error);
         return reply.status(500).send({ error: "Failed to fetch orders" });
@@ -823,7 +855,11 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
           publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
             roles: ["cook"],
           });
-          notifyWaiters(`${STORE_SLUG}/orders/ready`, payload, waiterIdsForOrder);
+          notifyWaiters(
+            `${STORE_SLUG}/orders/ready`,
+            payload,
+            waiterIdsForOrder
+          );
         }
 
         if (body.status === OrderStatus.CANCELLED) {
@@ -1067,12 +1103,9 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
         publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
           roles: ["cook"],
         });
-        notifyWaiters(
-          `${STORE_SLUG}/orders/placed`,
-          payloadPlaced,
-          waiterIds,
-          { skipMqtt: true }
-        );
+        notifyWaiters(`${STORE_SLUG}/orders/placed`, payloadPlaced, waiterIds, {
+          skipMqtt: true,
+        });
 
         return reply.send({ order: serializeOrder(updated) });
       } catch (error) {
@@ -1102,11 +1135,11 @@ fastify.get("/orders-benchmark", async (_request, reply) => {
         const store = await ensureStore();
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
-        include: {
-          table: { select: { id: true, label: true } },
-          orderItems: ORDER_ITEM_INCLUDE,
-        },
-      });
+          include: {
+            table: { select: { id: true, label: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
+          },
+        });
         if (!order) {
           return reply.status(404).send({ error: "Order not found" });
         }
