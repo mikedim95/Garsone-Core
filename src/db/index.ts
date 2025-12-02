@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { applyDbConnection } from './config';
+import { applyDbConnection } from './config.js';
 
 const prismaGlobal = globalThis as unknown as { prisma?: PrismaClient };
 
