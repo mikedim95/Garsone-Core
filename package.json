@@ -41,6 +41,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
+    "@types/bcrypt": "^5.0.2",
     "cross-env": "^7.0.3",
     "prisma": "^6.19.0",
     "typescript": "^5.5.3"
