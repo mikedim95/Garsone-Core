@@ -415,6 +415,22 @@ export async function orderRoutes(fastify: FastifyInstance) {
       }
     }
   );
+  // in your server.ts, near /orders
+fastify.get("/orders-benchmark", async (_request, reply) => {
+  try {
+    const store = await ensureStore();
+    const orders = await db.order.findMany({
+      where: { storeId: store.id },
+      take: 50,
+      orderBy: { createdAt: "desc" },
+    });
+
+    return reply.send({ orders });
+  } catch (error) {
+    fastify.log.error("Orders benchmark error:", error);
+    return reply.status(500).send({ error: "Failed to fetch orders (benchmark)" });
+  }
+});
 
   // Get orders (protected)
   fastify.get(
