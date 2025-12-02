@@ -441,10 +441,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
       return reply.send({ orders });
     } catch (error) {
-      fastify.log.error("Orders benchmark error:", error);
-      return reply
-        .status(500)
-        .send({ error: "Failed to fetch orders (benchmark)" });
+      fastify.log.error({ error }, "Get orders error");
+      return reply.status(500).send({ error: "Failed to fetch orders" });
     }
   });
 
