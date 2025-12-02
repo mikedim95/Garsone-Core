@@ -24,10 +24,10 @@ model Store {
   modifiers       Modifier[]
   orders          Order[]
   profiles        Profile[]
+  qrTiles         QRTile[]
   storeMeta       StoreMeta?
   tableVisits     TableVisit[]
   tables          Table[]
-  qrTiles         QRTile[]
   waiterShifts    WaiterShift[]
   waiterTables    WaiterTable[]
 
@@ -74,29 +74,26 @@ model Table {
   createdAt    DateTime      @default(now()) @db.Timestamp(6)
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
   orders       Order[]
+  qrTiles      QRTile[]
+  tableVisits  TableVisit[]
   store        Store         @relation(fields: [storeId], references: [id])
   waiterTables WaiterTable[]
-  tableVisits  TableVisit[]
-  qrTiles      QRTile[]
 
   @@unique([storeId, label])
   @@map("tables")
 }
 
 model QRTile {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  store      Store    @relation(fields: [storeId], references: [id])
-  storeId    String   @db.Uuid
-
-  table      Table?   @relation(fields: [tableId], references: [id])
-  tableId    String?  @db.Uuid
-
-  publicCode String   @unique @db.VarChar(32) // printed in QR
-  label      String?  @db.VarChar(255)
-  isActive   Boolean  @default(true)
-
-  createdAt  DateTime @default(now()) @db.Timestamp(6)
-  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId     String       @db.Uuid
+  tableId     String?      @db.Uuid
+  publicCode  String       @unique @db.VarChar(32)
+  label       String?      @db.VarChar(255)
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamp(6)
+  store       Store        @relation(fields: [storeId], references: [id])
+  table       Table?       @relation(fields: [tableId], references: [id])
   tableVisits TableVisit[]
 
   @@index([storeId])
@@ -114,9 +111,9 @@ model TableVisit {
   expiresAt    DateTime         @db.Timestamp(6)
   createdAt    DateTime         @default(now()) @db.Timestamp(6)
   updatedAt    DateTime         @updatedAt @db.Timestamp(6)
-  tile         QRTile           @relation(fields: [tileId], references: [id])
-  table        Table            @relation(fields: [tableId], references: [id])
   store        Store            @relation(fields: [storeId], references: [id])
+  table        Table            @relation(fields: [tableId], references: [id])
+  tile         QRTile           @relation(fields: [tileId], references: [id])
 
   @@index([storeId, tableId, status])
   @@index([expiresAt])
@@ -145,11 +142,11 @@ model Category {
   storeId   String   @db.Uuid
   slug      String   @db.VarChar(100)
   title     String   @db.VarChar(255)
-  titleEn   String   @db.VarChar(255) @default("")
-  titleEl   String   @db.VarChar(255) @default("")
   sortOrder Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamp(6)
   updatedAt DateTime @updatedAt @db.Timestamp(6)
+  titleEl   String   @default("") @db.VarChar(255)
+  titleEn   String   @default("") @db.VarChar(255)
   store     Store    @relation(fields: [storeId], references: [id])
   items     Item[]
 
@@ -164,11 +161,7 @@ model Item {
   categoryId    String         @db.Uuid
   slug          String         @db.VarChar(100)
   title         String         @db.VarChar(255)
-  titleEn       String         @db.VarChar(255) @default("")
-  titleEl       String         @db.VarChar(255) @default("")
   description   String?
-  descriptionEn String?        @db.VarChar(1024)
-  descriptionEl String?        @db.VarChar(1024)
   priceCents    Int
   isAvailable   Boolean        @default(true)
   sortOrder     Int            @default(0)
@@ -176,6 +169,10 @@ model Item {
   updatedAt     DateTime       @updatedAt @db.Timestamp(6)
   imageUrl      String?        @db.VarChar(2048)
   costCents     Int?
+  descriptionEl String?        @db.VarChar(1024)
+  descriptionEn String?        @db.VarChar(1024)
+  titleEl       String         @default("") @db.VarChar(255)
+  titleEn       String         @default("") @db.VarChar(255)
   itemModifiers ItemModifier[]
   category      Category       @relation(fields: [categoryId], references: [id])
   store         Store          @relation(fields: [storeId], references: [id])
@@ -192,13 +189,13 @@ model Modifier {
   storeId          String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
-  titleEn          String            @db.VarChar(255) @default("")
-  titleEl          String            @db.VarChar(255) @default("")
   minSelect        Int               @default(0)
   maxSelect        Int?
-  isAvailable      Boolean           @default(true)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
   updatedAt        DateTime          @updatedAt @db.Timestamp(6)
+  isAvailable      Boolean           @default(true)
+  titleEl          String            @default("") @db.VarChar(255)
+  titleEn          String            @default("") @db.VarChar(255)
   itemModifiers    ItemModifier[]
   modifierOptions  ModifierOption[]
   store            Store             @relation(fields: [storeId], references: [id])
@@ -214,12 +211,12 @@ model ModifierOption {
   modifierId       String            @db.Uuid
   slug             String            @db.VarChar(100)
   title            String            @db.VarChar(255)
-  titleEn          String            @db.VarChar(255) @default("")
-  titleEl          String            @db.VarChar(255) @default("")
   priceDeltaCents  Int               @default(0)
   sortOrder        Int               @default(0)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
   updatedAt        DateTime          @updatedAt @db.Timestamp(6)
+  titleEl          String            @default("") @db.VarChar(255)
+  titleEn          String            @default("") @db.VarChar(255)
   modifier         Modifier          @relation(fields: [modifierId], references: [id], onDelete: Cascade)
   store            Store             @relation(fields: [storeId], references: [id])
   orderItemOptions OrderItemOption[]
