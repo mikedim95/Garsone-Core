@@ -36,13 +36,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },
-        include: {
-          waiterTables: {
-            include: {
-              waiter: true,
-            },
-          },
-        },
+        select: { id: true, label: true, isActive: true },
       });
 
       return reply.send({
@@ -50,11 +44,8 @@ export async function storeRoutes(fastify: FastifyInstance) {
           id: table.id,
           label: table.label,
           active: table.isActive,
-          waiters: table.waiterTables.map((assignment) => ({
-            id: assignment.waiter.id,
-            displayName: assignment.waiter.displayName ?? assignment.waiter.email,
-            email: assignment.waiter.email,
-          })),
+          // Minimal shape sufficient for landing/random live QR
+          waiters: [],
         })),
       });
     } catch (error) {
