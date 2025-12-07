@@ -5,7 +5,7 @@ import { db } from "../db/index.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
-import { ensureStore, STORE_SLUG } from "../lib/store.js";
+import { ensureStore, STORE_SLUG, getRequestedStoreSlug } from "../lib/store.js";
 import {
   validateTableVisitToken,
   REQUIRE_TABLE_VISIT,
@@ -249,7 +249,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
           console.log(`[orders:create] ${label} +${Date.now() - t0}ms`);
         const body = createOrderSchema.parse(request.body);
         logStep("parsed");
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
         logStep("store");
 
         const table = await db.table.findFirst({
@@ -405,10 +406,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
             modifiers: orderItem.orderItemOptions,
           })),
         };
-        publishMessage(`${STORE_SLUG}/orders/placed`, placedPayload, {
+        const topicSlug = store.slug || STORE_SLUG;
+        publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
-        notifyWaiters(`${STORE_SLUG}/orders/placed`, placedPayload, waiterIds, {
+        notifyWaiters(`${topicSlug}/orders/placed`, placedPayload, waiterIds, {
           skipMqtt: true,
         });
         logStep("published");
@@ -432,7 +434,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
   // in your server.ts, near /orders
   fastify.get("/orders-benchmark", async (_request, reply) => {
     try {
-      const store = await ensureStore();
+      const storeSlug = getRequestedStoreSlug(_request);
+      const store = await ensureStore(storeSlug);
       const orders = await db.order.findMany({
         where: { storeId: store.id },
         take: 50,
@@ -454,7 +457,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
         const query = z
           .object({
             status: z.nativeEnum(OrderStatus).optional(),
@@ -640,7 +644,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
 
         const order = await db.order.findFirst({
           where: { id, storeId: store.id },
@@ -677,7 +682,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const { id } = request.params as { id: string };
         const body = updateStatusSchema.parse(request.body);
         const skipStatusMqtt = body.skipMqtt === true;
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
         const actorRole = (request as any).user?.role as string | undefined;
 
         const existing = await db.order.findFirst({
@@ -960,7 +966,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (_request, reply) => {
       try {
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
         const ahead = await db.order.count({
           where: {
             storeId: store.id,
@@ -989,7 +996,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = createOrderSchema.partial().parse(request.body);
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
 
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
@@ -1130,7 +1138,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             id: z.string().uuid(),
           })
           .parse(request.params ?? {});
-        const store = await ensureStore();
+        const storeSlug = getRequestedStoreSlug(request);
+        const store = await ensureStore(storeSlug);
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
           include: {

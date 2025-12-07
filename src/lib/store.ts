@@ -2,18 +2,31 @@ import { db } from '../db/index.js';
 
 export const STORE_SLUG = process.env.STORE_SLUG || 'demo-cafe';
 
-let cachedStore: { id: string; slug: string; name: string; settingsJson?: any } | null = null;
-let lastFetch = 0;
+type CachedStore = { id: string; slug: string; name: string; settingsJson?: any; ts: number };
+const storeCache = new Map<string, CachedStore>();
 const STORE_CACHE_TTL_MS = 60_000; // 60s
 
-export async function ensureStore() {
+export function getRequestedStoreSlug(request?: any): string | undefined {
+  const raw =
+    (request?.headers as any)?.['x-store-slug'] ||
+    (request?.headers as any)?.['X-Store-Slug'] ||
+    (request as any)?.storeSlug ||
+    undefined;
+  if (typeof raw !== 'string') return undefined;
+  const slug = raw.trim();
+  return slug.length > 0 ? slug : undefined;
+}
+
+export async function ensureStore(slugOverride?: string) {
+  const slug = (slugOverride || STORE_SLUG || '').trim() || STORE_SLUG;
   const now = Date.now();
-  if (cachedStore && now - lastFetch < STORE_CACHE_TTL_MS) {
-    return cachedStore;
+  const cached = storeCache.get(slug);
+  if (cached && now - cached.ts < STORE_CACHE_TTL_MS) {
+    return cached;
   }
 
   let store = await db.store.findUnique({
-    where: { slug: STORE_SLUG },
+    where: { slug },
     select: { id: true, slug: true, name: true, settingsJson: true },
   });
 
@@ -21,7 +34,7 @@ export async function ensureStore() {
     // Auto-bootstrap a minimal store so cloud deployments don't 500 when unseeded
     const created = await db.store.create({
       data: {
-        slug: STORE_SLUG,
+        slug,
         name: 'Garsone Offline Demo',
         settingsJson: {},
       },
@@ -42,7 +55,6 @@ export async function ensureStore() {
     store = created;
   }
 
-  cachedStore = store;
-  lastFetch = now;
+  storeCache.set(slug, { ...store, ts: now });
   return store;
 }

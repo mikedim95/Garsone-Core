@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
-import { ensureStore } from "../lib/store.js";
+import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
 
 // naive in-memory cache with TTL
 let cachedMenu: any | null = null;
@@ -22,7 +22,8 @@ export async function menuRoutes(fastify: FastifyInstance) {
       if (cachedMenu && now - cachedMenuTs < MENU_TTL_MS) {
         return reply.send(cachedMenu);
       }
-      const store = await ensureStore();
+      const storeSlug = getRequestedStoreSlug(request);
+      const store = await ensureStore(storeSlug);
 
       const [categories, items, modifiers, itemModifiers] = await Promise.all([
         db.category.findMany({

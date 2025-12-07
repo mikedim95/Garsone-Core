@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
-import { ensureStore } from "../lib/store.js";
+import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
 
 export async function storeRoutes(fastify: FastifyInstance) {
   fastify.get("/landing/stores", async (_request, reply) => {
@@ -75,7 +75,8 @@ export async function storeRoutes(fastify: FastifyInstance) {
 
   fastify.get("/store", async (_request, reply) => {
     try {
-      const store = await ensureStore();
+      const storeSlug = getRequestedStoreSlug(_request);
+      const store = await ensureStore(storeSlug);
       const meta = await db.storeMeta.findUnique({
         where: { storeId: store.id },
       });
@@ -102,7 +103,8 @@ export async function storeRoutes(fastify: FastifyInstance) {
 
   fastify.get("/tables", async (_request, reply) => {
     try {
-      const store = await ensureStore();
+      const storeSlug = getRequestedStoreSlug(_request);
+      const store = await ensureStore(storeSlug);
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },
