@@ -235,6 +235,9 @@ function parseModifiers(value?: unknown) {
   return modifierSelectionSchema.parse(value);
 }
 
+const resolveStoreSlug = (request: any) =>
+  getRequestedStoreSlug(request) || (request as any)?.user?.storeSlug || STORE_SLUG;
+
 export async function orderRoutes(fastify: FastifyInstance) {
   // Create order (IP whitelisted)
   fastify.post(
@@ -249,7 +252,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           console.log(`[orders:create] ${label} +${Date.now() - t0}ms`);
         const body = createOrderSchema.parse(request.body);
         logStep("parsed");
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         logStep("store");
 
@@ -432,9 +435,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
   // in your server.ts, near /orders
-  fastify.get("/orders-benchmark", async (_request, reply) => {
+  fastify.get("/orders-benchmark", async (request, reply) => {
     try {
-      const storeSlug = getRequestedStoreSlug(_request);
+      const storeSlug = resolveStoreSlug(request);
       const store = await ensureStore(storeSlug);
       const orders = await db.order.findMany({
         where: { storeId: store.id },
@@ -457,7 +460,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const query = z
           .object({
@@ -644,7 +647,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
 
         const order = await db.order.findFirst({
@@ -682,7 +685,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const { id } = request.params as { id: string };
         const body = updateStatusSchema.parse(request.body);
         const skipStatusMqtt = body.skipMqtt === true;
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const actorRole = (request as any).user?.role as string | undefined;
 
@@ -825,17 +828,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
             })),
             order: orderSnapshot,
           };
-          publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/preparing`, payload, {
             roles: ["cook"],
             ...(skipStatusMqtt ? { skipMqtt: true } : {}),
           });
           notifyWaiters(
-            `${STORE_SLUG}/orders/preparing`,
+            `${topicBase}/orders/preparing`,
             payload,
             waiterIdsForOrder,
             { skipMqtt: true }
           );
-          publishMessage(`${STORE_SLUG}/orders/preparing`, payload, {
+          publishMessage(`${topicBase}/orders/preparing`, payload, {
             anonymousOnly: true,
             skipMqtt: true,
           });
@@ -856,11 +860,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               modifiers: oi.orderItemOptions,
             })),
           };
-          publishMessage(`${STORE_SLUG}/orders/ready`, payload, {
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/ready`, payload, {
             roles: ["cook"],
           });
           notifyWaiters(
-            `${STORE_SLUG}/orders/ready`,
+            `${topicBase}/orders/ready`,
             payload,
             waiterIdsForOrder
           );
@@ -881,11 +886,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               modifiers: oi.orderItemOptions,
             })),
           };
-          publishMessage(`${STORE_SLUG}/orders/canceled`, payload, {
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/canceled`, payload, {
             roles: ["cook"],
           });
           notifyWaiters(
-            `${STORE_SLUG}/orders/canceled`,
+            `${topicBase}/orders/canceled`,
             payload,
             waiterIdsForOrder,
             { skipMqtt: true }
@@ -907,11 +913,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               modifiers: oi.orderItemOptions,
             })),
           };
-          publishMessage(`${STORE_SLUG}/orders/served`, payload, {
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/served`, payload, {
             roles: ["cook"],
           });
           notifyWaiters(
-            `${STORE_SLUG}/orders/served`,
+            `${topicBase}/orders/served`,
             payload,
             waiterIdsForOrder,
             { skipMqtt: true }
@@ -933,11 +940,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               modifiers: oi.orderItemOptions,
             })),
           };
-          publishMessage(`${STORE_SLUG}/orders/paid`, payload, {
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/paid`, payload, {
             roles: ["cook"],
           });
           notifyWaiters(
-            `${STORE_SLUG}/orders/paid`,
+            `${topicBase}/orders/paid`,
             payload,
             waiterIdsForOrder,
             { skipMqtt: true }
@@ -964,9 +972,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
     {
       preHandler: [ipWhitelistMiddleware],
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       try {
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const ahead = await db.order.count({
           where: {
@@ -996,7 +1004,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = createOrderSchema.partial().parse(request.body);
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
 
         const existing = await db.order.findFirst({
@@ -1106,10 +1114,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
             modifiers: oi.orderItemOptions,
           })),
         };
-        publishMessage(`${STORE_SLUG}/orders/placed`, payloadPlaced, {
+        const topicBase = store.slug;
+        publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
           roles: ["cook"],
         });
-        notifyWaiters(`${STORE_SLUG}/orders/placed`, payloadPlaced, waiterIds, {
+        notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
           skipMqtt: true,
         });
 
@@ -1138,7 +1147,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             id: z.string().uuid(),
           })
           .parse(request.params ?? {});
-        const storeSlug = getRequestedStoreSlug(request);
+        const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
@@ -1167,7 +1176,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           })),
           order: serializeOrder(order as any),
         };
-        publishMessage(`${STORE_SLUG}/orders/preparing`, preparedPayload, {
+        publishMessage(`${store.slug}/orders/preparing`, preparedPayload, {
           roles: ["cook"],
         });
         return reply.send({ success: true });
@@ -1188,15 +1197,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
     "/call-waiter",
     {
       preHandler: [ipWhitelistMiddleware],
-    },
-    async (request, reply) => {
-      try {
-        const body = callWaiterSchema.parse(request.body);
-        const store = await ensureStore();
+      },
+      async (request, reply) => {
+        try {
+          const body = callWaiterSchema.parse(request.body);
+          const store = await ensureStore(resolveStoreSlug(request));
 
-        const table = await db.table.findFirst({
-          where: { id: body.tableId, storeId: store.id },
-        });
+          const table = await db.table.findFirst({
+            where: { id: body.tableId, storeId: store.id },
+          });
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
@@ -1205,7 +1214,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         // New waiter call topic: {slug}/waiter/call
         const waiterIds = await getWaiterIdsForTable(store.id, table.id);
         notifyWaiters(
-          `${STORE_SLUG}/waiter/call`,
+          `${store.slug}/waiter/call`,
           {
             tableId: body.tableId,
             action: "called",

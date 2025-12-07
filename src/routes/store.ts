@@ -73,10 +73,10 @@ export async function storeRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/store", async (_request, reply) => {
+  fastify.get("/store", async (request, reply) => {
     try {
-      const storeSlug = getRequestedStoreSlug(_request);
-      const store = await ensureStore(storeSlug);
+      const storeSlug = getRequestedStoreSlug(request);
+      const store = await ensureStore(storeSlug || request);
       const meta = await db.storeMeta.findUnique({
         where: { storeId: store.id },
       });
@@ -101,10 +101,10 @@ export async function storeRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/tables", async (_request, reply) => {
+  fastify.get("/tables", async (request, reply) => {
     try {
-      const storeSlug = getRequestedStoreSlug(_request);
-      const store = await ensureStore(storeSlug);
+      const storeSlug = getRequestedStoreSlug(request);
+      const store = await ensureStore(storeSlug || request);
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },

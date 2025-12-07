@@ -13,7 +13,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   // Image upload via Supabase (service key). Body: { fileName, mimeType, base64, itemId? }
   fastify.post('/manager/uploads/image', { preHandler: managerOnly }, async (request, reply) => {
     try {
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const body = request.body as any;
       const fileName = String(body?.fileName || '').trim();
       const mimeType = String(body?.mimeType || 'application/octet-stream');
@@ -99,9 +99,9 @@ export async function managerRoutes(fastify: FastifyInstance) {
     });
 
   // Tables CRUD
-  fastify.get('/manager/tables', { preHandler: managerOnly }, async (_req, reply) => {
+  fastify.get('/manager/tables', { preHandler: managerOnly }, async (request, reply) => {
     try {
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const tables = await db.table.findMany({
         where: { storeId: store.id },
         orderBy: { label: 'asc' },
@@ -124,7 +124,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/tables', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = tableCreateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const label = body.label.trim();
 
       const existing = await db.table.findFirst({ where: { storeId: store.id, label } });
@@ -158,7 +158,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     try {
       const body = tableUpdateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
 
       const table = await db.table.findFirst({ where: { id, storeId: store.id } });
       if (!table) {
@@ -202,7 +202,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.delete('/manager/tables/:id', { preHandler: managerOnly }, async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      const store = await ensureStore();
+      const store = await ensureStore(request);
 
       const table = await db.table.findFirst({ where: { id, storeId: store.id } });
       if (!table) {
@@ -228,8 +228,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
   });
 
   // Waiters CRUD
-  fastify.get('/manager/waiters', { preHandler: managerOnly }, async (_req, reply) => {
-    const store = await ensureStore();
+  fastify.get('/manager/waiters', { preHandler: managerOnly }, async (request, reply) => {
+    const store = await ensureStore(request);
     const waiters = await db.profile.findMany({ where: { storeId: store.id, role: 'WAITER' }, orderBy: { displayName: 'asc' } });
     return reply.send({ waiters: waiters.map(w => ({ id: w.id, email: w.email, displayName: w.displayName })) });
   });
@@ -238,7 +238,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/waiters', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = waiterCreateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const passwordHash = await bcrypt.hash(body.password, 10);
       const waiter = await db.profile.create({ data: { storeId: store.id, email: body.email.toLowerCase(), passwordHash, role: 'WAITER', displayName: body.displayName } });
       return reply.status(201).send({ waiter: { id: waiter.id, email: waiter.email, displayName: waiter.displayName } });
@@ -276,8 +276,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
   });
 
   // Items CRUD
-  fastify.get('/manager/items', { preHandler: managerOnly }, async (_req, reply) => {
-    const store = await ensureStore();
+  fastify.get('/manager/items', { preHandler: managerOnly }, async (request, reply) => {
+    const store = await ensureStore(request);
     const items = await db.item.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: 'asc' }, include: { category: true } });
     return reply.send({
       items: items.map(i => ({
@@ -310,7 +310,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/items', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = itemCreateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const slugBase = body.titleEn.toLowerCase().replace(/\s+/g, '-').slice(0, 60);
       const item = await db.item.create({
         data: {
@@ -362,7 +362,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
       }
       const updated = await db.item.update({ where: { id }, data });
       invalidateMenuCache();
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'item.updated', itemId: updated.id, ts: new Date().toISOString() }, { roles: ['manager'] });
       return reply.send({ item: updated });
     } catch (e) {
@@ -383,7 +383,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
       await db.itemModifier.deleteMany({ where: { itemId: id } });
       await db.item.delete({ where: { id } });
       invalidateMenuCache();
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'item.deleted', itemId: id, ts: new Date().toISOString() }, { roles: ['manager'] });
       return reply.send({ success: true });
     } catch (e) {
@@ -414,8 +414,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
   });
 
   // Modifiers CRUD
-  fastify.get('/manager/modifiers', { preHandler: managerOnly }, async (_req, reply) => {
-    const store = await ensureStore();
+  fastify.get('/manager/modifiers', { preHandler: managerOnly }, async (request, reply) => {
+    const store = await ensureStore(request);
     const modifiers = await db.modifier.findMany({ where: { storeId: store.id }, orderBy: { title: 'asc' }, include: { modifierOptions: { orderBy: { sortOrder: 'asc' } } } });
     return reply.send({ modifiers });
   });
@@ -430,7 +430,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/modifiers', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = modifierCreateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const slug = `${body.titleEn.toLowerCase().replace(/\s+/g, '-').slice(0, 60)}-${Math.random().toString(16).slice(2, 6)}`;
       const modifier = await db.modifier.create({
         data: {
@@ -474,7 +474,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
       }
       const updated = await db.modifier.update({ where: { id }, data });
       invalidateMenuCache();
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       publishMessage(`stores/${store.slug}/menu/updated`, { type: 'modifier.updated', modifierId: updated.id, ts: new Date().toISOString() }, { roles: ['manager'] });
       return reply.send({ modifier: updated });
     } catch (e) {
@@ -504,7 +504,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/modifier-options', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = optionCreateSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const opt = await db.modifierOption.create({
         data: {
           storeId: store.id,
@@ -565,7 +565,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/item-modifiers', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = linkSchema.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const link = await db.itemModifier.upsert({
         where: { itemId_modifierId: { itemId: body.itemId, modifierId: body.modifierId } },
         update: { isRequired: body.isRequired },
@@ -611,8 +611,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
   });
 
   // Categories CRUD
-  fastify.get('/manager/categories', { preHandler: managerOnly }, async (_req, reply) => {
-    const store = await ensureStore();
+  fastify.get('/manager/categories', { preHandler: managerOnly }, async (request, reply) => {
+    const store = await ensureStore(request);
     const categories = await db.category.findMany({ where: { storeId: store.id }, orderBy: { sortOrder: 'asc' } });
     return reply.send({ categories });
   });
@@ -625,7 +625,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   fastify.post('/manager/categories', { preHandler: managerOnly }, async (request, reply) => {
     try {
       const body = categoryCreate.parse(request.body);
-      const store = await ensureStore();
+      const store = await ensureStore(request);
       const slug = (body.titleEn.toLowerCase().replace(/\s+/g, '-') + '-' + Math.random().toString(16).slice(2, 6)).slice(0, 100);
       const cat = await db.category.create({
         data: {

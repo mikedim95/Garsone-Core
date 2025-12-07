@@ -39,9 +39,9 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
     {
       preHandler: managerOnly,
     },
-    async (_request, reply) => {
+    async (request, reply) => {
       try {
-        const store = await ensureStore();
+        const store = await ensureStore(request);
 
         const [assignments, waiters, tables] = await Promise.all([
           db.waiterTable.findMany({
@@ -92,7 +92,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const body = assignmentSchema.parse(request.body);
-        const store = await ensureStore();
+        const store = await ensureStore(request);
 
         const [waiter, table] = await Promise.all([
           db.profile.findFirst({
@@ -157,7 +157,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const body = assignmentSchema.parse(request.body);
-        const store = await ensureStore();
+        const store = await ensureStore(request);
 
         await db.waiterTable.delete({
           where: {

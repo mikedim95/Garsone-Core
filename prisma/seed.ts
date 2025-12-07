@@ -6,7 +6,7 @@ import { applyDbConnection } from "../src/db/config";
 const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
 
-const STORE_SLUG = process.env.STORE_SLUG || "demo-cafe";
+const STORE_SLUG = (process.env.STORE_SLUG || "default-store").trim();
 
 const DEFAULT_PASSWORD =
   process.env.DEFAULT_PASSWORD ||
@@ -79,7 +79,7 @@ async function ensureProfile(
 // ---------- DEMO MENU CONFIG ----------
 
 const IMAGE_BASE =
-  "https://oupwquepcjydgevdfnlm.supabase.co/storage/v1/object/public/assets/demo-cafe/";
+  "https://oupwquepcjydgevdfnlm.supabase.co/storage/v1/object/public/assets/sample-menu/";
 
 const imageUrlBySlug: Record<string, string> = {
   "espresso-martini": IMAGE_BASE + "Espresso%20Martini.jpg",

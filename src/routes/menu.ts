@@ -1,16 +1,14 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
-import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
+import { ensureStore } from "../lib/store.js";
 
-// naive in-memory cache with TTL
-let cachedMenu: any | null = null;
-let cachedMenuTs = 0;
+// naive in-memory cache with TTL (per store)
+const menuCache = new Map<string, { payload: any; ts: number }>();
 // Keep TTL short so manager changes reflect quickly
 const MENU_TTL_MS = 5_000; // 5s
 
 export function invalidateMenuCache() {
-  cachedMenu = null;
-  cachedMenuTs = 0;
+  menuCache.clear();
 }
 
 export async function menuRoutes(fastify: FastifyInstance) {
@@ -19,11 +17,11 @@ export async function menuRoutes(fastify: FastifyInstance) {
       const acceptLang = (request.headers["accept-language"] || "").toString().toLowerCase();
       const preferGreek = acceptLang.includes("el");
       const now = Date.now();
-      if (cachedMenu && now - cachedMenuTs < MENU_TTL_MS) {
-        return reply.send(cachedMenu);
+      const store = await ensureStore(request);
+      const cached = menuCache.get(store.slug);
+      if (cached && now - cached.ts < MENU_TTL_MS) {
+        return reply.send(cached.payload);
       }
-      const storeSlug = getRequestedStoreSlug(request);
-      const store = await ensureStore(storeSlug);
 
       const [categories, items, modifiers, itemModifiers] = await Promise.all([
         db.category.findMany({
@@ -160,8 +158,7 @@ export async function menuRoutes(fastify: FastifyInstance) {
         items: itemsResponse,
         modifiers: Array.from(modifierMap.values()),
       };
-      cachedMenu = payload;
-      cachedMenuTs = now;
+      menuCache.set(store.slug, { payload, ts: now });
       return reply.send(payload);
     } catch (error) {
       console.error("Menu fetch error:", error);

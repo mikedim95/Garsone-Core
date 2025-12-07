@@ -7,6 +7,8 @@ export interface JWTPayload {
   userId: string;
   email: string;
   role: 'waiter' | 'manager' | 'cook' | 'architect';
+  storeId: string;
+  storeSlug: string;
 }
 
 export function signToken(payload: JWTPayload): string {

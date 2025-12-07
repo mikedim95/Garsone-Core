@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
 
-export const STORE_SLUG = process.env.STORE_SLUG || 'demo-cafe';
+export const STORE_SLUG = (process.env.STORE_SLUG || 'default-store').trim();
 
 type CachedStore = { id: string; slug: string; name: string; settingsJson?: any; ts: number };
 const storeCache = new Map<string, CachedStore>();
@@ -11,14 +11,24 @@ export function getRequestedStoreSlug(request?: any): string | undefined {
     (request?.headers as any)?.['x-store-slug'] ||
     (request?.headers as any)?.['X-Store-Slug'] ||
     (request as any)?.storeSlug ||
+    (request as any)?.user?.storeSlug ||
     undefined;
   if (typeof raw !== 'string') return undefined;
   const slug = raw.trim();
   return slug.length > 0 ? slug : undefined;
 }
 
-export async function ensureStore(slugOverride?: string) {
-  const slug = (slugOverride || STORE_SLUG || '').trim() || STORE_SLUG;
+const deriveSlug = (maybeRequestOrSlug?: string | any) => {
+  if (typeof maybeRequestOrSlug === 'string') {
+    return maybeRequestOrSlug;
+  }
+  const request = maybeRequestOrSlug;
+  const slugFromRequest = getRequestedStoreSlug(request);
+  return slugFromRequest || STORE_SLUG;
+};
+
+export async function ensureStore(slugOrRequest?: string | any) {
+  const slug = (deriveSlug(slugOrRequest) || STORE_SLUG || '').trim() || STORE_SLUG;
   const now = Date.now();
   const cached = storeCache.get(slug);
   if (cached && now - cached.ts < STORE_CACHE_TTL_MS) {

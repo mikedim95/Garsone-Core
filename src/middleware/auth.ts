@@ -12,8 +12,11 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
     const token = authHeader.substring(7);
     const payload = verifyToken(token);
     
-    // Attach user to request
+    // Attach user and store context to request
     (request as any).user = payload;
+    if (payload.storeSlug) {
+      (request as any).storeSlug = payload.storeSlug;
+    }
   } catch (error) {
     return reply.status(401).send({ error: 'Invalid or expired token' });
   }
