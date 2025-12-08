@@ -250,9 +250,10 @@ async function seedStore(cfg: StoreConfig) {
 
   // Profiles
   const passwordHash = await hashPassword();
+  const waiterProfiles: { id: string }[] = [];
 
   for (const p of cfg.profiles) {
-    await prisma.profile.create({
+    const created = await prisma.profile.create({
       data: {
         storeId,
         email: p.email,
@@ -261,6 +262,10 @@ async function seedStore(cfg: StoreConfig) {
         displayName: p.displayName,
       },
     });
+
+    if (p.role === Role.WAITER) {
+      waiterProfiles.push({ id: created.id });
+    }
   }
 
   // Tables T1..T10
@@ -275,6 +280,19 @@ async function seedStore(cfg: StoreConfig) {
       })
     )
   );
+
+  // Link all waiters to all tables in this store
+  for (const waiter of waiterProfiles) {
+    for (const table of tables) {
+      await prisma.waiterTable.create({
+        data: {
+          storeId,
+          waiterId: waiter.id,
+          tableId: table.id,
+        },
+      });
+    }
+  }
 
   // Categories + Items
   const allItems: {

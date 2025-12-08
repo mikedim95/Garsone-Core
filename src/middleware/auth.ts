@@ -4,13 +4,27 @@ import { verifyToken } from '../lib/jwt.js';
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
   try {
     const authHeader = request.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const bearer = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
+    const token =
+      bearer ||
+      (typeof (request.query as any)?.token === 'string' ? (request.query as any).token : undefined) ||
+      (request.headers['x-auth-token'] as string | undefined);
+
+    console.log("[authMiddleware] path", (request as any).url, "hasBearer", Boolean(bearer), "hasHeaderToken", Boolean(authHeader), "hasQueryToken", typeof (request.query as any)?.token === 'string', "hasXAuth", Boolean((request.headers['x-auth-token'] as string | undefined)));
+
+    if (!token) {
+      console.warn("[authMiddleware] missing token for", (request as any).url);
       return reply.status(401).send({ error: 'Missing or invalid authorization header' });
     }
 
-    const token = authHeader.substring(7);
-    const payload = verifyToken(token);
+    const tokenTrimmed = token.trim();
+    if (!tokenTrimmed) {
+      console.warn("[authMiddleware] blank token for", (request as any).url);
+      return reply.status(401).send({ error: 'Missing or invalid authorization header' });
+    }
+
+    const payload = verifyToken(tokenTrimmed);
+    console.log("[authMiddleware] verified", { url: (request as any).url, userId: (payload as any)?.userId, role: (payload as any)?.role, storeSlug: (payload as any)?.storeSlug });
     
     // Attach user and store context to request
     (request as any).user = payload;

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { ensureStore } from "../lib/store.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { publishMessage } from "../lib/mqtt.js";
 
 const assignmentSchema = z.object({
   waiterId: z.string().uuid(),
@@ -131,6 +132,13 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
           },
         });
 
+        publishMessage(`${store.slug}/waiter/assignments`, {
+          action: "assigned",
+          waiterId: waiter.id,
+          tableId: table.id,
+          tableLabel: table.label,
+        }, { roles: ["waiter"] });
+
         return reply.status(201).send({
           assignment: serializeAssignment(assignment),
         });
@@ -169,6 +177,12 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
           },
         });
 
+        publishMessage(`${store.slug}/waiter/assignments`, {
+          action: "removed",
+          waiterId: body.waiterId,
+          tableId: body.tableId,
+        }, { roles: ["waiter"] });
+
         return reply.send({ success: true });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -188,6 +202,62 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
         return reply
           .status(500)
           .send({ error: "Failed to remove waiter assignment" });
+      }
+    }
+  );
+
+  // Waiter: get my assigned tables (scoped)
+  fastify.get(
+    "/waiter/my-tables",
+    {
+      preHandler: [authMiddleware, requireRole(["waiter"])],
+    },
+    async (request, reply) => {
+      try {
+        const store = await ensureStore(request);
+        const user = (request as any).user;
+        const waiterId = (user as any)?.userId || (user as any)?.id;
+        console.log("[waiter/my-tables] user payload", user, "resolvedWaiterId", waiterId, "store", store.slug);
+        if (!waiterId) {
+          return reply.status(401).send({ error: "Unauthorized" });
+        }
+        const assignments = await db.waiterTable.findMany({
+          where: { storeId: store.id, waiterId },
+          include: {
+            waiter: true,
+            table: { select: { id: true, label: true, isActive: true } },
+          },
+          orderBy: { createdAt: "asc" },
+        });
+        const tables = await db.table.findMany({
+          where: { storeId: store.id, isActive: true },
+          orderBy: { label: "asc" },
+          select: { id: true, label: true, isActive: true },
+        });
+
+        console.log("[waiter/my-tables] result", {
+          store: store.slug,
+          waiterId,
+          assignments: assignments.map((a) => ({
+            tableId: a.tableId,
+            tableLabel: a.table?.label,
+            waiterId: a.waiterId,
+          })),
+          tables: tables.map((t) => ({ id: t.id, label: t.label, active: t.isActive })),
+        });
+
+        return reply.send({
+          assignments: assignments.map(serializeAssignment),
+          tables: tables.map((table) => ({
+            id: table.id,
+            label: table.label,
+            active: table.isActive,
+          })),
+          waiters: [], // not needed for waiter scope
+        });
+      } catch (error) {
+        console.error("Waiter assignments fetch error:", error);
+        return reply.status(500).send({ error: "Failed to fetch assignments" });
       }
     }
   );
