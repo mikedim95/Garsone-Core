@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
+import { verifyToken } from "../lib/jwt.js";
 
 export async function storeRoutes(fastify: FastifyInstance) {
   fastify.get("/landing/stores", async (_request, reply) => {
@@ -103,8 +104,39 @@ export async function storeRoutes(fastify: FastifyInstance) {
 
   fastify.get("/tables", async (request, reply) => {
     try {
+      // Try to read auth context to return waiter assignments only for the authenticated waiter
+      const authHeader = request.headers.authorization;
+      let userId: string | undefined;
+      let userRole: string | undefined;
+      try {
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+          const token = authHeader.substring(7);
+          const payload = verifyToken(token);
+          userId = payload.userId;
+          userRole = payload.role;
+        }
+      } catch {
+        // ignore invalid tokens; endpoint stays public
+      }
+
       const storeSlug = getRequestedStoreSlug(request);
       const store = await ensureStore(storeSlug || request);
+      let waiterAssignmentsByTable = new Map<string, string[]>();
+
+      if (userRole === "waiter" && userId) {
+        const assignments = await db.waiterTable.findMany({
+          where: { storeId: store.id, waiterId: userId },
+          select: { tableId: true, waiterId: true },
+        });
+        waiterAssignmentsByTable = assignments.reduce<Map<string, string[]>>((acc, a) => {
+          if (!a.tableId) return acc;
+          const list = acc.get(a.tableId) ?? [];
+          list.push(a.waiterId);
+          acc.set(a.tableId, list);
+          return acc;
+        }, new Map());
+      }
+
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },
@@ -116,8 +148,11 @@ export async function storeRoutes(fastify: FastifyInstance) {
           id: table.id,
           label: table.label,
           active: table.isActive,
-          // Minimal shape sufficient for landing/random live QR
-          waiters: [],
+          // Include waiter assignment only for the authenticated waiter (scopes waiter dashboard)
+          waiters:
+            userRole === "waiter"
+              ? (waiterAssignmentsByTable.get(table.id) ?? []).map((wid) => ({ id: wid }))
+              : [],
         })),
       });
     } catch (error) {
