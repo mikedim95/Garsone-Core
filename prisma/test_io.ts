@@ -9,7 +9,11 @@ const prisma = new PrismaClient();
 try {
   const { hostname, pathname } = new URL(databaseUrl);
   const dbName = pathname?.replace("/", "") || "";
-  console.log(`[test_io] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`);
+  console.log(
+    `[test_io] DB_CONNECTION=${dbTarget} -> ${hostname}${
+      dbName ? `/${dbName}` : ""
+    }`
+  );
 } catch {
   console.log(`[test_io] DB_CONNECTION=${dbTarget}`);
 }
@@ -17,14 +21,17 @@ try {
 /**
  * CONFIG (override with env vars)
  *
- * TEST_STORE_SLUG: which store to hit
- * TEST_CONCURRENCY: how many workers in parallel
- * TEST_DURATION_SEC: how long to run the test
+ * TEST_STORE_SLUG   : which store to hit
+ * TEST_CONCURRENCY  : how many workers in parallel
+ * TEST_DURATION_SEC : how long to run the test
+ * TEST_MODE         : "read" (safe for build) or "rw" (read+write)
  */
 const STORE_SLUG =
-  process.env.TEST_STORE_SLUG || process.env.STORE_SLUG || "demo-bar";
+  process.env.TEST_STORE_SLUG || process.env.STORE_SLUG || "downtown-espresso";
 const CONCURRENCY = Number(process.env.TEST_CONCURRENCY || 5);
-const DURATION_SEC = Number(process.env.TEST_DURATION_SEC || 60);
+const DURATION_SEC = Number(process.env.TEST_DURATION_SEC || 30);
+// "read" = read-only (use this in build), "rw" = create/update/read
+const MODE: "read" | "rw" = (process.env.TEST_MODE as "read" | "rw") || "read";
 
 type OpName = "create" | "update" | "read";
 
@@ -51,7 +58,7 @@ type TestContext = {
   tables: Awaited<ReturnType<typeof prisma.table.findMany>>;
   items: Awaited<ReturnType<typeof prisma.item.findMany>>;
   waiters: Awaited<ReturnType<typeof prisma.profile.findMany>>;
-  orderIds: string[]; // new: in-memory pool of order ids
+  orderIds: string[]; // in-memory pool of order ids
 };
 
 async function prepareContext(): Promise<TestContext> {
@@ -64,9 +71,14 @@ async function prepareContext(): Promise<TestContext> {
     );
   }
 
-  const tables = await prisma.table.findMany({ where: { storeId: store.id } });
+  // Table has isActive in your schema
+  const tables = await prisma.table.findMany({
+    where: { storeId: store.id, isActive: true },
+  });
   if (!tables.length) {
-    throw new Error("No tables found for this store. Run db:seed first.");
+    throw new Error(
+      "No active tables found for this store. Run db:seed first."
+    );
   }
 
   const items = await prisma.item.findMany({
@@ -87,7 +99,7 @@ async function prepareContext(): Promise<TestContext> {
     where: { storeId: store.id },
     select: { id: true },
     orderBy: { placedAt: "desc" },
-    take: 1000, // enough for randomization
+    take: 1000,
   });
 
   return {
@@ -135,7 +147,7 @@ async function opCreateOrder(ctx: TestContext) {
       status: OrderStatus.PLACED,
       totalCents,
       placedAt,
-      ticketNumber: undefined, // let your logic fill if you have triggers, else null
+      // ticketNumber stays null; KitchenCounter increment is app logic, not needed for IO test
       orderItems: {
         create: orderItemsData,
       },
@@ -151,7 +163,7 @@ async function opCreateOrder(ctx: TestContext) {
 }
 
 async function opUpdateRandomOrder(ctx: TestContext) {
-  const { store, orderIds } = ctx;
+  const { orderIds } = ctx;
   if (!orderIds.length) return;
 
   const orderId = pickRandom(orderIds);
@@ -163,18 +175,33 @@ async function opUpdateRandomOrder(ctx: TestContext) {
     OrderStatus.PAID,
   ];
   const newStatus = pickRandom(targetStatusPool);
+  const now = new Date();
+
+  // Touch timestamp fields that exist in your schema
+  const timestampPatch: Partial<{
+    preparingAt: Date;
+    readyAt: Date;
+    servedAt: Date;
+    paidAt: Date;
+  }> = {};
+  if (newStatus === OrderStatus.PREPARING) timestampPatch.preparingAt = now;
+  if (newStatus === OrderStatus.READY) timestampPatch.readyAt = now;
+  if (newStatus === OrderStatus.SERVED) timestampPatch.servedAt = now;
+  if (newStatus === OrderStatus.PAID) timestampPatch.paidAt = now;
 
   await prisma.order.update({
     where: { id: orderId },
     data: {
       status: newStatus,
-      note: Math.random() < 0.2 ? "Updated during benchmark" : undefined,
+      note: Math.random() < 0.1 ? "Updated during benchmark" : undefined,
+      ...timestampPatch,
     },
   });
 }
 
 async function opReadRecentOrders(ctx: TestContext) {
   const { store } = ctx;
+  // Uses your indexed (storeId, status, placedAt desc)
   await prisma.order.findMany({
     where: { storeId: store!.id },
     orderBy: { placedAt: "desc" },
@@ -186,19 +213,25 @@ async function opReadRecentOrders(ctx: TestContext) {
 
 async function runWorker(id: number, ctx: TestContext, endAt: number) {
   while (Date.now() < endAt) {
-    const roll = Math.random();
     let op: OpName;
     let fn: (ctx: TestContext) => Promise<void>;
 
-    if (roll < 0.3) {
-      op = "create";
-      fn = opCreateOrder;
-    } else if (roll < 0.6) {
-      op = "update";
-      fn = opUpdateRandomOrder;
-    } else {
+    if (MODE === "read") {
+      // Safe mode for builds: read-only traffic
       op = "read";
       fn = opReadRecentOrders;
+    } else {
+      const roll = Math.random();
+      if (roll < 0.3) {
+        op = "create";
+        fn = opCreateOrder;
+      } else if (roll < 0.6) {
+        op = "update";
+        fn = opUpdateRandomOrder;
+      } else {
+        op = "read";
+        fn = opReadRecentOrders;
+      }
     }
 
     const start = performance.now();
@@ -208,8 +241,11 @@ async function runWorker(id: number, ctx: TestContext, endAt: number) {
       stats[op].samples.push(dur);
     } catch (err: any) {
       stats[op].errors++;
-      // optional verbose:
-      // console.warn(`[worker ${id}] ${op} failed:`, err?.message || err);
+      console.warn(`[worker ${id}] ${op} failed:`, err?.message || err);
+      // If DB is totally unreachable, let it fail fast
+      if (stats[op].errors > 5 && stats[op].samples.length === 0) {
+        throw err;
+      }
     }
   }
   console.log(`[worker ${id}] finished`);
@@ -233,6 +269,7 @@ function summarizeStats(totalDurationSec: number) {
 
   console.log("\n===== DB I/O BENCHMARK RESULTS =====");
   console.log(`Store        : ${STORE_SLUG}`);
+  console.log(`Mode         : ${MODE}`);
   console.log(`Concurrency  : ${CONCURRENCY}`);
   console.log(`Duration     : ${totalDurationSec.toFixed(1)} s`);
   console.log(`Total ops    : ${totalOps}`);
@@ -242,7 +279,7 @@ function summarizeStats(totalDurationSec: number) {
     const bucket = stats[name];
     const n = bucket.samples.length;
     if (!n) {
-      console.log(`${name.toUpperCase()}: no samples`);
+      console.log(`${name.toUpperCase()}: no samples (mode=${MODE})`);
       return;
     }
     const sum = bucket.samples.reduce((a, b) => a + b, 0);
@@ -266,11 +303,17 @@ function summarizeStats(totalDurationSec: number) {
   console.log("====================================\n");
 }
 
+// ------------- UTILS -------------
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 // ------------- MAIN -------------
 
 async function main() {
   console.log(
-    `Starting DB I/O test for store=${STORE_SLUG} concurrency=${CONCURRENCY} duration=${DURATION_SEC}s`
+    `Starting DB I/O test for store=${STORE_SLUG} mode=${MODE} concurrency=${CONCURRENCY} duration=${DURATION_SEC}s`
   );
 
   const ctx = await prepareContext();
@@ -280,10 +323,23 @@ async function main() {
 
   const start = Date.now();
   const endAt = start + DURATION_SEC * 1000;
+  const totalMs = endAt - start;
 
-  await Promise.all(
-    Array.from({ length: CONCURRENCY }, (_, i) => runWorker(i + 1, ctx, endAt))
+  const progressPromise = (async () => {
+    while (Date.now() < endAt) {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(100, (elapsed / totalMs) * 100);
+      process.stdout.write(`\rProgress: ${pct.toFixed(1)}%`);
+      await sleep(1000);
+    }
+    process.stdout.write(`\rProgress: 100.0%\n`);
+  })();
+
+  const workerPromises = Array.from({ length: CONCURRENCY }, (_, i) =>
+    runWorker(i + 1, ctx, endAt)
   );
+
+  await Promise.all([...workerPromises, progressPromise]);
 
   const totalDurationSec = (Date.now() - start) / 1000;
   summarizeStats(totalDurationSec);
