@@ -1,3 +1,4 @@
+// @ts-ignore – Render's tsc sometimes can't resolve jsonwebtoken types
 import jwt, { SignOptions, Secret } from "jsonwebtoken";
 
 const JWT_SECRET: Secret = process.env.JWT_SECRET || "your-secret-key";
