@@ -55,10 +55,10 @@ export async function authRoutes(fastify: FastifyInstance) {
         user.role === "MANAGER"
           ? "manager"
           : user.role === "COOK"
-            ? "cook"
-            : user.role === "ARCHITECT"
-              ? "architect"
-              : "waiter";
+          ? "cook"
+          : user.role === "ARCHITECT"
+          ? "architect"
+          : "waiter";
 
       const token = signToken({
         userId: user.id,
