@@ -1,12 +1,13 @@
-import jwt, { SignOptions, Secret } from 'jsonwebtoken';
-
-const JWT_SECRET: Secret = process.env.JWT_SECRET || 'your-secret-key';
-const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
+import * as jwt from "jsonwebtoken";
+import { SignOptions, Secret } from "jsonwebtoken";
+const JWT_SECRET: Secret = process.env.JWT_SECRET || "your-secret-key";
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ||
+  "7d") as SignOptions["expiresIn"];
 
 export interface JWTPayload {
   userId: string;
   email: string;
-  role: 'waiter' | 'manager' | 'cook' | 'architect';
+  role: "waiter" | "manager" | "cook" | "architect";
   storeId: string;
   storeSlug: string;
 }
