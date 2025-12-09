@@ -35,8 +35,6 @@
     "seed": "tsx prisma/seed.ts"
   },
   "devDependencies": {
-    "@types/bcrypt": "^5.0.2",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.14.10",
     "cross-env": "^7.0.3",
     "prisma": "^6.19.0",
