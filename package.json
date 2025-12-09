@@ -1,20 +1,23 @@
 {
-  "name": "Garsone-Core",
+  "name": "orderflow-backend",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "npm run prisma:gen && tsc",
+    "build": "tsc",
     "start": "node dist/server.js",
-    "prisma:gen": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy",
-    "db:test-io": "node dist/prisma/test_io.js",
-    "db:test": "tsx prisma/test_io.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "prisma db seed",
     "db:seed:render_internal": "cross-env DB_CONNECTION=render_internal prisma db seed",
     "db:seed:render_external": "cross-env DB_CONNECTION=render_external prisma db seed",
-    "db:store_onboard": "tsx prisma/store_onboard.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:push": "prisma db push",
+    "db:test": "tsx prisma/test_io.ts",
+    "seed": "npm run db:seed",
+    "prisma:gen": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:db-push": "prisma db push"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
@@ -25,7 +28,7 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "jsonwebtoken": "^9.0.3",
+    "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.14.1",
     "ws": "^8.18.0",
     "zod": "^3.23.8",
@@ -38,7 +41,6 @@
     "@types/node": "^20.14.10",
     "cross-env": "^7.0.3",
     "prisma": "^6.19.0",
-    "tsx": "^4.21.0",
     "typescript": "^5.5.3"
   }
 }
