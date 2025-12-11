@@ -10,6 +10,7 @@ import {
   validateTableVisitToken,
   REQUIRE_TABLE_VISIT,
 } from "../lib/tableVisits.js";
+import { createVivaPaymentOrder } from "../lib/viva.js";
 
 const modifierSelectionSchema = z.record(z.string());
 
@@ -154,6 +155,9 @@ function serializeOrder(order: OrderWithRelations) {
     paidAt: order.paidAt,
     cancelledAt: order.cancelledAt,
     cancelReason: order.cancelReason,
+    paymentStatus: (order as any).paymentStatus ?? "PENDING",
+    paymentProvider: (order as any).paymentProvider ?? null,
+    paymentId: (order as any).paymentId ?? null,
     items: order.orderItems.map((orderItem) => ({
       id: orderItem.id,
       itemId: orderItem.itemId,
@@ -1235,4 +1239,61 @@ export async function orderRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  // Generate demo Viva payment URL before placing order
+  fastify.post(
+    "/payment/viva/checkout-url",
+    {
+      preHandler: [ipWhitelistMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const body = z
+          .object({
+            tableId: z.string().uuid(),
+            amount: z.number().positive(),
+            description: z.string().optional(),
+          })
+          .parse(request.body);
+
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+
+        const table = await db.table.findFirst({
+          where: { id: body.tableId, storeId: store.id },
+        });
+
+        if (!table) {
+          return reply.status(404).send({ error: "Table not found" });
+        }
+
+        // Generate unique session ID for this payment attempt
+        const sessionId = `${store.id}_${body.tableId}_${Date.now()}`;
+
+        // Create payment order via Viva Smart Checkout API
+        const paymentSession = await createVivaPaymentOrder({
+          amount: body.amount,
+          orderId: sessionId,
+          tableId: body.tableId,
+          description: body.description || "Restaurant Order",
+        });
+
+        return reply.send({
+          checkoutUrl: paymentSession.checkoutUrl,
+          sessionId: sessionId,
+          amount: paymentSession.amount,
+          tableId: body.tableId,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Payment URL generation error:", error);
+        return reply.status(500).send({ error: "Failed to generate payment URL" });
+      }
+    }
+  );
 }
+

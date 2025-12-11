@@ -242,6 +242,14 @@ model ItemModifier {
   @@map("item_modifiers")
 }
 
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
 model Order {
   id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId      String      @db.Uuid
@@ -259,12 +267,17 @@ model Order {
   paidAt       DateTime?   @db.Timestamp(6)
   preparingAt  DateTime?   @db.Timestamp(6)
   readyAt      DateTime?   @db.Timestamp(6)
+  paymentStatus PaymentStatus @default(PENDING)
+  paymentProvider String?   @db.VarChar(50)
+  paymentId    String?     @db.VarChar(255)
+  paymentError String?
   orderItems   OrderItem[]
   store        Store       @relation(fields: [storeId], references: [id])
   table        Table       @relation(fields: [tableId], references: [id])
 
   @@index([storeId, status, placedAt(sort: Desc)])
   @@index([storeId, tableId, placedAt(sort: Desc)])
+  @@index([storeId, paymentStatus])
   @@map("orders")
 }
 
