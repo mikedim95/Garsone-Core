@@ -5,7 +5,11 @@ import { db } from "../db/index.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
-import { ensureStore, STORE_SLUG, getRequestedStoreSlug } from "../lib/store.js";
+import {
+  ensureStore,
+  STORE_SLUG,
+  getRequestedStoreSlug,
+} from "../lib/store.js";
 import {
   validateTableVisitToken,
   REQUIRE_TABLE_VISIT,
@@ -240,7 +244,9 @@ function parseModifiers(value?: unknown) {
 }
 
 const resolveStoreSlug = (request: any) =>
-  getRequestedStoreSlug(request) || (request as any)?.user?.storeSlug || STORE_SLUG;
+  getRequestedStoreSlug(request) ||
+  (request as any)?.user?.storeSlug ||
+  STORE_SLUG;
 
 export async function orderRoutes(fastify: FastifyInstance) {
   // Create order (IP whitelisted)
@@ -1201,15 +1207,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
     "/call-waiter",
     {
       preHandler: [ipWhitelistMiddleware],
-      },
-      async (request, reply) => {
-        try {
-          const body = callWaiterSchema.parse(request.body);
-          const store = await ensureStore(resolveStoreSlug(request));
+    },
+    async (request, reply) => {
+      try {
+        const body = callWaiterSchema.parse(request.body);
+        const store = await ensureStore(resolveStoreSlug(request));
 
-          const table = await db.table.findFirst({
-            where: { id: body.tableId, storeId: store.id },
-          });
+        const table = await db.table.findFirst({
+          where: { id: body.tableId, storeId: store.id },
+        });
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
@@ -1291,9 +1297,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .send({ error: "Invalid request", details: error.errors });
         }
         console.error("Payment URL generation error:", error);
-        return reply.status(500).send({ error: "Failed to generate payment URL" });
+        return reply
+          .status(500)
+          .send({ error: "Failed to generate payment URL" });
       }
     }
   );
 }
-

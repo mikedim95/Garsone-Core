@@ -4,6 +4,7 @@ This guide walks through setting up Viva Payments Smart Checkout in the Garsone 
 
 ⚠️ **Official Viva Guidelines Followed:**
 This implementation strictly adheres to Viva's official specifications:
+
 - [Smart Checkout Integration](https://developer.viva.com/smart-checkout/smart-checkout-integration/)
 - [Payment API](https://developer.viva.com/apis-for-payments/payment-api/)
 - [Webhooks for Payments](https://developer.viva.com/webhooks-for-payments/)
@@ -11,6 +12,7 @@ This implementation strictly adheres to Viva's official specifications:
 ## Overview
 
 The integration enables customers to:
+
 1. Place an order from the restaurant menu
 2. Backend creates a payment order via Viva Payment API
 3. User is redirected to Viva Smart Checkout portal (full page redirect, not iframe)
@@ -19,19 +21,22 @@ The integration enables customers to:
 6. Order is created in the database
 
 **Key Implementation Details:**
+
 - ✅ Backend-created orders (secure, PCI-compliant)
 - ✅ Full page redirect (best payment method support per Viva guidelines)
 - ✅ NOT embedded in iframe (Viva does not recommend iframe embedding)
 - ✅ Webhook-ready for payment status notifications (optional)
 
 The payment flow is:
+
 ```
-Menu → Checkout → Backend Creates Viva Payment Order 
+Menu → Checkout → Backend Creates Viva Payment Order
   → Returns OrderCode to Frontend → Full Page Redirect to Smart Checkout Portal
   → User Completes Payment → Viva Redirects Back → Order Created → Confirmation
 ```
 
 **Viva Payment Methods Supported:**
+
 - Credit/Debit Cards (Visa, Mastercard, etc.)
 - Bank Transfers
 - Digital Wallets
@@ -81,17 +86,20 @@ VIVA_SOURCE_CODE=1234
 ```
 
 Replace:
+
 - `your_api_key_here` with your actual Viva API key
 - `1234` with your actual payment source code
 
 ### 5. Set the Return URL
 
 The payment completion URL is:
+
 ```
 http://localhost:5173/payment-complete
 ```
 
 When you deploy to production, update this in:
+
 - Frontend: `Garsone-Front/src/features/menu/TableMenu.tsx` (handleCheckout function)
 - Viva Dashboard: Set your domain in Settings → Redirect URLs
 
@@ -102,12 +110,14 @@ When you deploy to production, update this in:
 Use these Viva test card numbers (available at https://developer.viva.com/getting-started/test-cards):
 
 **Successful Payment:**
+
 - Card: `4111111111111111`
 - Expiry: Any future date
 - CVV: Any 3 digits
 - Amount: €0.30 or more
 
 **Failed Payment:**
+
 - Card: `4111111111111112`
 - Expiry: Any future date
 - CVV: Any 3 digits
@@ -115,6 +125,7 @@ Use these Viva test card numbers (available at https://developer.viva.com/gettin
 ### 2. Test the Flow
 
 1. Start the development servers:
+
    ```bash
    # Terminal 1: Backend
    cd Garsone-Core
@@ -139,13 +150,16 @@ Use these Viva test card numbers (available at https://developer.viva.com/gettin
 ### Backend (Garsone-Core)
 
 **Key Files:**
+
 - `src/lib/viva.ts` - Viva API integration library
+
   - `createVivaPaymentOrder()` - Creates payment order with Viva API
   - `parseVivaRedirectParams()` - Parses Viva's redirect query parameters
   - `verifyVivaWebhook()` - Validates webhook payload (optional)
   - `isPaymentSuccessful()` - Checks payment status
 
 - `src/routes/orders.ts`
+
   - `POST /payment/viva/checkout-url` - Generates checkout URL
   - Accepts: tableId, amount, description
   - Returns: checkoutUrl, sessionId, amount, tableId
@@ -157,7 +171,9 @@ Use these Viva test card numbers (available at https://developer.viva.com/gettin
 ### Frontend (Garsone-Front)
 
 **Key Files:**
+
 - `src/features/menu/TableMenu.tsx`
+
   - `handleCheckout()` - Initiates payment flow
   - Calculates total with modifiers
   - Calls backend to get Viva checkout URL
@@ -165,12 +181,14 @@ Use these Viva test card numbers (available at https://developer.viva.com/gettin
   - Redirects to Viva payment portal
 
 - `src/features/payment/PaymentCompletePage.tsx`
+
   - Handles redirect from Viva
   - Verifies table ID matches pending order
   - Creates order in database
   - Clears cart and redirects to order confirmation
 
 - `src/lib/api.ts`
+
   - `getVivaCheckoutUrl()` - API call to backend payment endpoint
 
 - `src/App.tsx`
@@ -179,6 +197,7 @@ Use these Viva test card numbers (available at https://developer.viva.com/gettin
 ## API Endpoints
 
 ### Create Payment Order
+
 ```http
 POST /payment/viva/checkout-url
 Content-Type: application/json
@@ -191,39 +210,44 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "checkoutUrl": "https://demo.vivapayments.com/web/checkout?ref=1234567890123456",
   "sessionId": "store-id_table-id_timestamp",
-  "amount": 42.50,
+  "amount": 42.5,
   "tableId": "uuid-here"
 }
 ```
 
 ## Environment Variables Reference
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `VIVA_API_KEY` | Your Viva demo API key | `Bearer token from Viva dashboard` |
-| `VIVA_SOURCE_CODE` | Payment source code (4 digits) | `1234` |
+| Variable           | Description                    | Example                            |
+| ------------------ | ------------------------------ | ---------------------------------- |
+| `VIVA_API_KEY`     | Your Viva demo API key         | `Bearer token from Viva dashboard` |
+| `VIVA_SOURCE_CODE` | Payment source code (4 digits) | `1234`                             |
 
 ## Troubleshooting
 
 ### "Viva API key not configured"
+
 - Ensure `VIVA_API_KEY` is set in `.env.local`
 - Restart the backend server after adding environment variables
 
 ### "OrderOrderCodeNotFound" error from Viva
+
 - This means the order creation API call failed
 - Check that `VIVA_API_KEY` and `VIVA_SOURCE_CODE` are correct
 - Verify the API key has sufficient permissions in Viva dashboard
 
 ### Payment redirect doesn't work
+
 - Ensure `/payment-complete` route exists in frontend (it does by default)
 - Check browser console for JavaScript errors
 - Verify sessionStorage is available (not disabled)
 
 ### Order doesn't appear after payment
+
 - Check that payment was actually successful on Viva portal
 - Look at browser console for API errors
 - Verify table ID matches between payment and order creation
@@ -238,6 +262,7 @@ Visit https://www.vivapayments.com to create a production merchant account.
 ### 2. Update Configuration
 
 Change environment variables:
+
 ```env
 # Production Viva credentials
 VIVA_API_KEY=your_production_api_key
@@ -245,6 +270,7 @@ VIVA_SOURCE_CODE=your_production_source_code
 ```
 
 Update API endpoints in `src/lib/viva.ts`:
+
 ```typescript
 // Change from:
 const VIVA_DEMO_API_URL = "https://demo-api.vivapayments.com";
@@ -258,6 +284,7 @@ const VIVA_CHECKOUT_URL = "https://www.vivapayments.com/web/checkout";
 ### 3. Update Frontend Return URL
 
 Update the return URL in `TableMenu.tsx` to your production domain:
+
 ```typescript
 const baseUrl = "https://your-domain.com"; // instead of localhost
 ```
@@ -265,6 +292,7 @@ const baseUrl = "https://your-domain.com"; // instead of localhost
 ### 4. Register Webhook
 
 In Viva dashboard, register webhook URL for payment notifications:
+
 ```
 https://your-domain.com/webhooks/payments/viva/webhook
 ```
@@ -280,12 +308,14 @@ This optional webhook receives payment confirmation after redirect.
 ## Security Notes - Viva Compliance
 
 ✅ **PCI Compliance:**
+
 - Payment details are entered on Viva's secure servers, NOT your application
 - Your backend never handles raw payment card data
 - Fully compliant with PCI DSS standards
 - Viva handles all compliance requirements
 
 ✅ **Implementation Security:**
+
 - Store API key securely in environment variables only
 - Never commit `.env.local` to version control
 - Use HTTPS in production (required by Viva)
@@ -294,6 +324,7 @@ This optional webhook receives payment confirmation after redirect.
 - Use Bearer token authentication (OAuth2) for API calls
 
 ✅ **Payment Flow Security (Redirect-Based):**
+
 - User is redirected to Viva's official domain (not embedded)
 - All payment processing happens on Viva's secure servers
 - Session tokens used to match pending orders
@@ -301,6 +332,7 @@ This optional webhook receives payment confirmation after redirect.
 - No sensitive data transmitted through your frontend
 
 ✅ **Do NOT (Per Viva Guidelines):**
+
 - ❌ Never embed Smart Checkout in an iframe (Viva does not recommend)
 - ❌ Never attempt to capture card data directly
 - ❌ Never store unencrypted payment information
@@ -310,6 +342,7 @@ This optional webhook receives payment confirmation after redirect.
 ## Support
 
 For issues with the Viva API:
+
 - Official Docs: https://developer.viva.com/
 - Smart Checkout Guide: https://developer.viva.com/smart-checkout/smart-checkout-integration/
 - Payment API: https://developer.viva.com/apis-for-payments/payment-api/
@@ -319,6 +352,7 @@ For issues with the Viva API:
 - Customization: https://developer.viva.com/smart-checkout/customization-options/
 
 For Garsone integration issues, check:
+
 - Backend logs: `Garsone-Core/logs`
 - Frontend console: Browser DevTools → Console
 - Database: Check Order records and payment status

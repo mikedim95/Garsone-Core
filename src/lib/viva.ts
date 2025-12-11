@@ -1,7 +1,7 @@
 /**
  * Viva Payments Smart Checkout Integration
  * Uses Viva's official Smart Checkout API for sandbox/demo environment
- * 
+ *
  * Setup Instructions:
  * 1. Create account at https://demo.vivapayments.com
  * 2. Create a payment source to get sourceCode
@@ -48,7 +48,7 @@ export interface VivaWebhookPayload {
 /**
  * Create a payment order with Viva Smart Checkout API
  * This must be called from the backend with proper authentication
- * 
+ *
  * Viva Documentation: https://developer.viva.com/smart-checkout/smart-checkout-integration/
  */
 export async function createVivaPaymentOrder(
@@ -88,17 +88,14 @@ export async function createVivaPaymentOrder(
       ],
     };
 
-    const response = await fetch(
-      `${VIVA_DEMO_API_URL}/checkout/v2/orders`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${VIVA_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(orderPayload),
-      }
-    );
+    const response = await fetch(`${VIVA_DEMO_API_URL}/checkout/v2/orders`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${VIVA_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(orderPayload),
+    });
 
     if (!response.ok) {
       const error = await response.text();
