@@ -91,7 +91,7 @@ function buildPublicRedirectUrl(
   requestProtocol?: string
 ) {
   const slug = (storeSlug || "").trim() || "www";
-  const params = new URLSearchParams({ visit: sessionToken });
+  const params = new URLSearchParams({ visit: sessionToken, storeSlug: slug });
 
   // If explicit base is provided, prefer it (supports {storeSlug})
   if (PUBLIC_APP_BASE_URL.length > 0) {
@@ -186,6 +186,31 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           )
         );
     }
+  });
+
+  // Resolve a tableId to its store slug/label for QR redirects that lack storeSlug param
+  fastify.get("/public/table/:tableId", async (request, reply) => {
+    const { tableId } = request.params as { tableId: string };
+    if (!tableId) {
+      return reply.status(400).send({ error: "TABLE_ID_REQUIRED" });
+    }
+    const table = await db.table.findUnique({
+      where: { id: tableId },
+      select: {
+        id: true,
+        label: true,
+        store: { select: { slug: true, name: true } },
+      },
+    });
+    if (!table || !table.store?.slug) {
+      return reply.status(404).send({ error: "TABLE_NOT_FOUND" });
+    }
+    return reply.send({
+      tableId: table.id,
+      tableLabel: table.label,
+      storeSlug: table.store.slug,
+      storeName: table.store.name,
+    });
   });
 
   fastify.get("/q/:publicCode", async (request, reply) => {

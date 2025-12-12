@@ -1254,6 +1254,18 @@ export async function orderRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       try {
+        // Log the exact incoming payload for debugging Viva checkout URL failures
+        try {
+          console.log(
+            "[payment/checkout-url] incoming body:",
+            JSON.stringify(request.body)
+          );
+        } catch (e) {
+          console.log(
+            "[payment/checkout-url] incoming body (raw):",
+            request.body
+          );
+        }
         const body = z
           .object({
             tableId: z.string().uuid(),
@@ -1277,12 +1289,41 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const sessionId = `${store.id}_${body.tableId}_${Date.now()}`;
 
         // Create payment order via Viva Smart Checkout API
-        const paymentSession = await createVivaPaymentOrder({
+        console.log("[payment/checkout-url] creating Viva payment order", {
           amount: body.amount,
           orderId: sessionId,
           tableId: body.tableId,
           description: body.description || "Restaurant Order",
         });
+
+        // Build return URL for after payment completion
+        // Prefer explicit FRONTEND_BASE_URL env var. Otherwise derive from headers/hostname
+        const frontendBase =
+          process.env.FRONTEND_BASE_URL ||
+          (() => {
+            const h = ((request.headers as any)["x-forwarded-host"] ||
+              (request.headers as any)["host"] ||
+              request.hostname) as string;
+            const hostOnly = String(h).split(":")[0];
+            const port = process.env.FRONTEND_PORT || "8080";
+            return `${request.protocol}://${hostOnly}${port ? `:${port}` : ""}`;
+          })();
+
+        const returnUrl = `${frontendBase}/payment-complete?sessionId=${sessionId}&tableId=${body.tableId}`;
+        console.log("[payment/checkout-url] return URL for Viva:", returnUrl);
+
+        const paymentSession = await createVivaPaymentOrder({
+          amount: body.amount,
+          orderId: sessionId,
+          tableId: body.tableId,
+          description: body.description || "Restaurant Order",
+          returnUrl: returnUrl,
+        });
+
+        console.log(
+          "[payment/checkout-url] Viva returned session:",
+          paymentSession
+        );
 
         return reply.send({
           checkoutUrl: paymentSession.checkoutUrl,
