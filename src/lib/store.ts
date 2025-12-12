@@ -2,7 +2,15 @@ import { db } from '../db/index.js';
 
 export const STORE_SLUG = (process.env.STORE_SLUG || 'default-store').trim();
 
-type CachedStore = { id: string; slug: string; name: string; settingsJson?: any; ts: number };
+type CachedStore = {
+  id: string;
+  slug: string;
+  name: string;
+  settingsJson?: any;
+  createdAt?: Date;
+  updatedAt?: Date;
+  ts: number;
+};
 const storeCache = new Map<string, CachedStore>();
 const STORE_CACHE_TTL_MS = 60_000; // 60s
 
@@ -37,7 +45,7 @@ export async function ensureStore(slugOrRequest?: string | any) {
 
   let store = await db.store.findUnique({
     where: { slug },
-    select: { id: true, slug: true, name: true, settingsJson: true },
+    select: { id: true, slug: true, name: true, settingsJson: true, updatedAt: true, createdAt: true },
   });
 
   if (!store) {
@@ -48,7 +56,7 @@ export async function ensureStore(slugOrRequest?: string | any) {
         name: 'Garsone Offline Demo',
         settingsJson: {},
       },
-      select: { id: true, slug: true, name: true, settingsJson: true },
+      select: { id: true, slug: true, name: true, settingsJson: true, updatedAt: true, createdAt: true },
     });
 
     // Also create default meta if missing

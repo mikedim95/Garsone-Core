@@ -10,6 +10,7 @@ import { managerRoutes } from "./routes/manager.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { eventsRoutes } from "./routes/events.js";
 import { qrTileRoutes } from "./routes/qrTiles.js";
+import { publicMenuBootstrapRoutes } from "./routes/publicMenuBootstrap.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
 
@@ -53,6 +54,7 @@ await fastify.register(managerRoutes);
 await fastify.register(webhookRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(qrTileRoutes);
+await fastify.register(publicMenuBootstrapRoutes);
 
 // Start server
 try {

@@ -32,15 +32,15 @@ export async function webhookRoutes(fastify: FastifyInstance) {
             storeSlug: STORE_SLUG,
             transactionId: payload.transactionId,
             orderCode: payload.orderCode,
-            statusCode: payload.statusCode,
+            statusId: payload.statusId,
           },
           "Received Viva webhook"
         );
 
         // Check if payment was successful
-        if (!isPaymentSuccessful(payload.statusCode)) {
+        if (!isPaymentSuccessful(payload.statusId)) {
           fastify.log.warn(
-            { statusCode: payload.statusCode, orderCode: payload.orderCode },
+            { statusId: payload.statusId, orderCode: payload.orderCode },
             "Viva payment not successful"
           );
           return reply.status(200).send({ ok: true });

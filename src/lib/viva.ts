@@ -137,7 +137,7 @@ export interface VivaWebhookPayload {
   transactionId: string;
   orderCode: string | number;
   amount: number;
-  statusId: string;
+  statusId: string | number;
   timeStamp: string;
 }
 
@@ -259,9 +259,9 @@ export function verifyVivaWebhook(
   const p = payload as Record<string, unknown>;
   return (
     typeof p.transactionId === "string" &&
-    typeof p.orderCode === "string" &&
+    (typeof p.orderCode === "string" || typeof p.orderCode === "number") &&
     typeof p.amount === "number" &&
-    typeof p.statusCode === "number" &&
+    (typeof p.statusId === "string" || typeof p.statusId === "number") &&
     typeof p.merchantId === "string"
   );
 }
@@ -270,8 +270,10 @@ export function verifyVivaWebhook(
  * Check if payment was successful based on status code
  * Viva status codes: 1000 = captured, 1001 = pending
  */
-export function isPaymentSuccessful(statusCode: number): boolean {
-  return statusCode === 1000;
+export function isPaymentSuccessful(statusCode: number | string): boolean {
+  const code =
+    typeof statusCode === "string" ? parseInt(statusCode, 10) : statusCode;
+  return code === 1000;
 }
 
 /**

@@ -2,12 +2,13 @@ import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
 import { verifyToken } from "../lib/jwt.js";
+import { applyCacheHeaders, buildEtag, isNotModified } from "../lib/httpCache.js";
 
 export async function storeRoutes(fastify: FastifyInstance) {
   fastify.get("/landing/stores", async (_request, reply) => {
     try {
       const stores = await db.store.findMany({
-        select: { id: true, slug: true, name: true },
+        select: { id: true, slug: true, name: true, updatedAt: true },
         orderBy: { name: "asc" },
       });
 
@@ -20,7 +21,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
         db.table.findMany({
           where: { storeId: { in: storeIds }, isActive: true },
           orderBy: [{ label: "asc" }, { createdAt: "asc" }],
-          select: { id: true, label: true, storeId: true },
+          select: { id: true, label: true, storeId: true, updatedAt: true },
         }),
         db.qRTile.findMany({
           where: {
@@ -67,6 +68,18 @@ export async function storeRoutes(fastify: FastifyInstance) {
         };
       });
 
+      const lastModified = Math.max(
+        ...stores.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)),
+        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        ...tiles.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        Date.now()
+      );
+      const etag = buildEtag({ stores: payload.length, updatedAt: lastModified });
+      if (isNotModified(_request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({ stores: payload });
     } catch (error) {
       console.error("Landing stores fetch error:", error);
@@ -82,6 +95,18 @@ export async function storeRoutes(fastify: FastifyInstance) {
         where: { storeId: store.id },
       });
 
+      const lastModified = Math.max(
+        store.updatedAt ? new Date(store.updatedAt).getTime() : 0,
+        meta?.updatedAt ? new Date(meta.updatedAt).getTime() : 0,
+        Date.now()
+      );
+      const etag = buildEtag({ store: store.slug, updatedAt: lastModified });
+      if (isNotModified(request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({
         store: {
           id: store.id,
@@ -140,9 +165,20 @@ export async function storeRoutes(fastify: FastifyInstance) {
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },
-        select: { id: true, label: true, isActive: true },
+        select: { id: true, label: true, isActive: true, updatedAt: true },
       });
 
+      const lastModified = Math.max(
+        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        Date.now()
+      );
+      const etag = buildEtag({ store: store.slug, tables: tables.length, updatedAt: lastModified });
+      if (isNotModified(request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({
         tables: tables.map((table) => ({
           id: table.id,
