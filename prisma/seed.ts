@@ -1,22 +1,34 @@
+/**
+ * prisma/seed.ts
+ *
+ * Requirements covered:
+ * - Reads STATIC publicCodes from prisma/qr-tiles.txt (random-looking, stable forever)
+ * - Generates prisma/qr-print-list.txt with URLs:
+ *     ${PUBLIC_APP_URL}/publiccode/${publicCode}
+ * - Seeds 3 stores, 10 tables/store, 10 qrTiles/store
+ * - Seeds central architect (architect@demo.local / changeme) with NON-NULL storeId:
+ *     assigned to a RANDOM existing store id
+ * - Progress bars
+ * - No migrations
+ * - Avoids nested relation writes for Order -> OrderItem (schema-name agnostic)
+ */
+
 import { PrismaClient, Role, OrderStatus } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcrypt";
-import crypto from "crypto";
+import crypto from "node:crypto";
 
 const prisma = new PrismaClient();
 
+// ===== runtime config =====
 const SEED_RESET = process.env.SEED_RESET !== "0";
 const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
 ).replace(/\/+$/, "");
-const QR_PATH_PREFIX = "/publiccode"; // <-- matches your production pattern
+const QR_PATH_PREFIX = "/publiccode";
 
-/**
- * =========================
- * progress bars
- * =========================
- */
+// ===== progress bars =====
 function bar(label: string, current: number, total: number, width = 28) {
   const pct = total === 0 ? 1 : current / total;
   const filled = Math.round(width * pct);
@@ -32,31 +44,33 @@ function section(title: string) {
   process.stdout.write(`\n=== ${title} ===\n`);
 }
 
-/**
- * =========================
- * helpers
- * =========================
- */
+// ===== helpers =====
 type QrLine = { storeSlug: string; tableLabel: string; publicCode: string };
 
 function loadQrTilesFile(): QrLine[] {
   const file = path.join(process.cwd(), "prisma", "qr-tiles.txt");
-  const raw = fs.readFileSync(file, "utf8");
+  if (!fs.existsSync(file)) throw new Error(`Missing file: ${file}`);
 
+  const raw = fs.readFileSync(file, "utf8");
   const lines = raw
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
 
   const parsed: QrLine[] = [];
-
   for (const line of lines) {
     const parts = line.split(",").map((p) => p.trim());
-    if (parts.length !== 3) throw new Error(`Bad qr-tiles.txt line: "${line}"`);
+    if (parts.length !== 3)
+      throw new Error(
+        `Bad qr-tiles.txt line (expected 3 CSV values): "${line}"`
+      );
     const [storeSlug, tableLabel, publicCode] = parts;
+    if (!storeSlug || !tableLabel || !publicCode)
+      throw new Error(`Bad qr-tiles.txt line (empty value): "${line}"`);
     parsed.push({ storeSlug, tableLabel, publicCode });
   }
 
+  // enforce unique publicCode
   const seen = new Set<string>();
   for (const x of parsed) {
     if (seen.has(x.publicCode))
@@ -90,25 +104,20 @@ function randInt(min: number, max: number): number {
 function randFromArray<T>(arr: T[]): T {
   return arr[randInt(0, arr.length - 1)];
 }
-function randomDateOnDay(base: Date): Date {
-  const d = new Date(base);
-  d.setHours(0, 0, 0, 0);
-  d.setMinutes(randInt(60, 60 * 23));
-  d.setSeconds(randInt(0, 59));
+function randomDateWithinDaysBack(daysBack: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - randInt(0, daysBack));
+  d.setHours(randInt(9, 23), randInt(0, 59), randInt(0, 59), 0);
   return d;
-}
-function sessionToken(): string {
-  return crypto.randomBytes(32).toString("hex"); // 64 chars
 }
 async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 10);
 }
+function sessionToken64(): string {
+  return crypto.randomBytes(32).toString("hex"); // 64 chars
+}
 
-/**
- * =========================
- * seed config
- * =========================
- */
+// ===== seed config =====
 type StoreConfig = {
   slug: string;
   name: string;
@@ -137,62 +146,42 @@ const STORES: StoreConfig[] = [
       {
         email: "waiter1@downtown-espresso.local",
         role: Role.WAITER,
-        displayName: "Alex Barista",
+        displayName: "Alex Waiter",
       },
       {
         email: "cook1@downtown-espresso.local",
         role: Role.COOK,
-        displayName: "Kitchen Mike",
+        displayName: "Kitchen 1",
       },
     ],
     categories: [
       {
-        slug: "espresso-bar",
-        title: "Espresso Bar",
+        slug: "coffee",
+        title: "Coffee",
         items: [
-          {
-            slug: "single-espresso",
-            title: "Single Espresso",
-            priceCents: 220,
-          },
+          { slug: "espresso", title: "Espresso", priceCents: 220 },
           {
             slug: "double-espresso",
             title: "Double Espresso",
             priceCents: 280,
           },
-          {
-            slug: "freddo-espresso",
-            title: "Freddo Espresso",
-            priceCents: 320,
-          },
+          { slug: "cappuccino", title: "Cappuccino", priceCents: 340 },
         ],
       },
       {
-        slug: "milk-coffees",
-        title: "Milk Coffees",
+        slug: "snacks",
+        title: "Snacks",
         items: [
-          {
-            slug: "cappuccino-classic",
-            title: "Cappuccino Classic",
-            priceCents: 340,
-          },
-          { slug: "flat-white", title: "Flat White", priceCents: 380 },
+          { slug: "croissant", title: "Croissant", priceCents: 250 },
+          { slug: "toast", title: "Toast", priceCents: 350 },
         ],
       },
       {
-        slug: "pastries",
-        title: "Pastries",
+        slug: "soft-drinks",
+        title: "Soft Drinks",
         items: [
-          {
-            slug: "butter-croissant",
-            title: "Butter Croissant",
-            priceCents: 250,
-          },
-          {
-            slug: "chocolate-croissant",
-            title: "Chocolate Croissant",
-            priceCents: 280,
-          },
+          { slug: "cola", title: "Cola", priceCents: 200 },
+          { slug: "water", title: "Water", priceCents: 100 },
         ],
       },
     ],
@@ -216,32 +205,32 @@ const STORES: StoreConfig[] = [
       {
         email: "cook1@harbor-breeze.local",
         role: Role.COOK,
-        displayName: "Sea Chef",
+        displayName: "Bar Kitchen",
       },
     ],
     categories: [
       {
         slug: "cocktails",
-        title: "Signature Cocktails",
+        title: "Cocktails",
         items: [
-          { slug: "harbor-mojito", title: "Harbor Mojito", priceCents: 800 },
-          { slug: "sunset-spritz", title: "Sunset Spritz", priceCents: 850 },
+          { slug: "mojito", title: "Mojito", priceCents: 850 },
+          { slug: "spritz", title: "Spritz", priceCents: 900 },
         ],
       },
       {
         slug: "spirits",
         title: "Spirits",
         items: [
-          { slug: "single-whisky", title: "Single Whisky", priceCents: 700 },
-          { slug: "gin-tonic", title: "Gin & Tonic", priceCents: 750 },
+          { slug: "gin-tonic", title: "Gin & Tonic", priceCents: 800 },
+          { slug: "whisky", title: "Whisky", priceCents: 900 },
         ],
       },
       {
         slug: "bar-snacks",
         title: "Bar Snacks",
         items: [
-          { slug: "nachos", title: "Loaded Nachos", priceCents: 650 },
-          { slug: "cheese-platter", title: "Cheese Platter", priceCents: 1200 },
+          { slug: "nachos", title: "Nachos", priceCents: 650 },
+          { slug: "nuts", title: "Mixed Nuts", priceCents: 350 },
         ],
       },
     ],
@@ -270,15 +259,11 @@ const STORES: StoreConfig[] = [
     ],
     categories: [
       {
-        slug: "souvas",
+        slug: "souvlaki",
         title: "Souvlaki",
         items: [
-          { slug: "pita-pork", title: "Pita Pork Souvlaki", priceCents: 350 },
-          {
-            slug: "pita-chicken",
-            title: "Pita Chicken Souvlaki",
-            priceCents: 380,
-          },
+          { slug: "pita-pork", title: "Pita Pork", priceCents: 350 },
+          { slug: "pita-chicken", title: "Pita Chicken", priceCents: 380 },
         ],
       },
       {
@@ -293,75 +278,294 @@ const STORES: StoreConfig[] = [
         slug: "drinks",
         title: "Drinks",
         items: [
-          { slug: "cola-can", title: "Cola Can", priceCents: 200 },
-          { slug: "beer-draft", title: "Draft Beer", priceCents: 450 },
+          { slug: "cola", title: "Cola", priceCents: 200 },
+          { slug: "beer", title: "Beer", priceCents: 450 },
         ],
       },
     ],
   },
 ];
 
-/**
- * =========================
- * reset (best-effort)
- * NOTE: uses your existing tables; keep if it works for you.
- * =========================
- */
+// ===== reset (best-effort order) =====
 async function resetAll() {
   section("Resetting DB");
-  const steps = [
-    async () => prisma.orderItemOption.deleteMany(),
-    async () => prisma.orderItem.deleteMany(),
-    async () => prisma.order.deleteMany(),
+  const steps: Array<{ label: string; fn: () => Promise<any> }> = [
+    {
+      label: "orderItemOptions",
+      fn: () => prisma.orderItemOption.deleteMany(),
+    },
+    { label: "orderItems", fn: () => prisma.orderItem.deleteMany() },
+    { label: "orders", fn: () => prisma.order.deleteMany() },
 
-    async () => prisma.itemModifier.deleteMany(),
-    async () => prisma.modifierOption.deleteMany(),
-    async () => prisma.modifier.deleteMany(),
+    { label: "itemModifiers", fn: () => prisma.itemModifier.deleteMany() },
+    { label: "modifierOptions", fn: () => prisma.modifierOption.deleteMany() },
+    { label: "modifiers", fn: () => prisma.modifier.deleteMany() },
 
-    async () => prisma.item.deleteMany(),
-    async () => prisma.category.deleteMany(),
+    { label: "items", fn: () => prisma.item.deleteMany() },
+    { label: "categories", fn: () => prisma.category.deleteMany() },
 
-    async () => prisma.waiterTable.deleteMany(),
-    async () => prisma.waiterShift.deleteMany(),
+    { label: "waiterTables", fn: () => prisma.waiterTable.deleteMany() },
+    { label: "waiterShifts", fn: () => prisma.waiterShift.deleteMany() },
 
-    async () => prisma.tableVisit.deleteMany(),
-    async () => prisma.qRTile.deleteMany(),
-    async () => prisma.table.deleteMany(),
+    { label: "tableVisits", fn: () => prisma.tableVisit.deleteMany() },
+    { label: "qrTiles", fn: () => prisma.qRTile.deleteMany() },
+    { label: "tables", fn: () => prisma.table.deleteMany() },
 
-    async () => prisma.auditLog.deleteMany(),
-    async () => prisma.profile.deleteMany(),
+    { label: "auditLogs", fn: () => prisma.auditLog.deleteMany() },
+    { label: "profiles", fn: () => prisma.profile.deleteMany() },
 
-    async () => prisma.kitchenCounter.deleteMany(),
-    async () => prisma.storeMeta.deleteMany(),
-    async () => prisma.store.deleteMany(),
+    { label: "kitchenCounters", fn: () => prisma.kitchenCounter.deleteMany() },
+    { label: "storeMeta", fn: () => prisma.storeMeta.deleteMany() },
+    { label: "stores", fn: () => prisma.store.deleteMany() },
   ];
 
   for (let i = 0; i < steps.length; i++) {
     bar("reset", i, steps.length);
-    await steps[i]();
+    await steps[i].fn();
   }
   bar("reset", steps.length, steps.length);
 }
 
-async function seedGlobalArchitect() {
-  section("Seeding global architect");
-  const email = "architect@dome.local";
+// ===== seed pieces =====
+async function seedStoresAndData(qrAll: QrLine[]) {
+  const storeIds: string[] = [];
+
+  for (let si = 0; si < STORES.length; si++) {
+    const cfg = STORES[si];
+    section(`Store ${si + 1}/${STORES.length}: ${cfg.slug}`);
+
+    const store = await prisma.store.upsert({
+      where: { slug: cfg.slug },
+      update: { name: cfg.name },
+      create: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
+    });
+    const storeId = store.id;
+    storeIds.push(storeId);
+
+    await prisma.storeMeta.upsert({
+      where: { storeId },
+      update: { currencyCode: cfg.currencyCode, locale: cfg.locale },
+      create: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
+    });
+
+    // store-scoped profiles (all pass = changeme)
+    const pw = await hashPassword("changeme");
+    for (let i = 0; i < cfg.profiles.length; i++) {
+      const p = cfg.profiles[i];
+      await prisma.profile.upsert({
+        where: { storeId_email: { storeId, email: p.email } },
+        update: {
+          role: p.role,
+          displayName: p.displayName,
+          passwordHash: pw,
+          isVerified: true,
+        },
+        create: {
+          storeId,
+          email: p.email,
+          role: p.role,
+          displayName: p.displayName,
+          passwordHash: pw,
+          isVerified: true,
+        },
+      });
+      bar("store:profiles", i + 1, cfg.profiles.length);
+    }
+
+    // tables T1..T10
+    const tables = [];
+    for (let i = 1; i <= 10; i++) {
+      const t = await prisma.table.upsert({
+        where: { storeId_label: { storeId, label: `T${i}` } },
+        update: { isActive: true },
+        create: { storeId, label: `T${i}`, isActive: true },
+      });
+      tables.push(t);
+    }
+    bar("store:tables", 10, 10);
+
+    // qr tiles from qr-tiles.txt (MUST be 10/store)
+    const storeQr = qrAll.filter((x) => x.storeSlug === cfg.slug);
+    if (storeQr.length !== 10)
+      throw new Error(
+        `qr-tiles.txt must have exactly 10 entries for ${cfg.slug} (found ${storeQr.length})`
+      );
+
+    for (let i = 0; i < storeQr.length; i++) {
+      const x = storeQr[i];
+      const table = tables.find((t) => t.label === x.tableLabel);
+      if (!table)
+        throw new Error(
+          `qr-tiles.txt references missing table ${cfg.slug}/${x.tableLabel}`
+        );
+
+      await prisma.qRTile.upsert({
+        where: { publicCode: x.publicCode },
+        update: {
+          storeId,
+          tableId: table.id,
+          label: `Tile ${x.tableLabel}`,
+          isActive: true,
+        },
+        create: {
+          storeId,
+          tableId: table.id,
+          publicCode: x.publicCode,
+          label: `Tile ${x.tableLabel}`,
+          isActive: true,
+        },
+      });
+
+      bar("store:qrTiles", i + 1, storeQr.length);
+    }
+
+    // categories + items
+    const items: Array<{ id: string; title: string; priceCents: number }> = [];
+
+    for (let ci = 0; ci < cfg.categories.length; ci++) {
+      const cat = cfg.categories[ci];
+      const category = await prisma.category.upsert({
+        where: { storeId_slug: { storeId, slug: cat.slug } },
+        update: {
+          title: cat.title,
+          titleEl: cat.title,
+          titleEn: cat.title,
+          sortOrder: ci,
+        },
+        create: {
+          storeId,
+          slug: cat.slug,
+          title: cat.title,
+          titleEl: cat.title,
+          titleEn: cat.title,
+          sortOrder: ci,
+        },
+      });
+
+      for (let ii = 0; ii < cat.items.length; ii++) {
+        const it = cat.items[ii];
+        const created = await prisma.item.upsert({
+          where: { storeId_slug: { storeId, slug: it.slug } },
+          update: {
+            categoryId: category.id,
+            title: it.title,
+            titleEl: it.title,
+            titleEn: it.title,
+            priceCents: it.priceCents,
+            isAvailable: true,
+          },
+          create: {
+            storeId,
+            categoryId: category.id,
+            slug: it.slug,
+            title: it.title,
+            titleEl: it.title,
+            titleEn: it.title,
+            priceCents: it.priceCents,
+            isAvailable: true,
+            sortOrder: ii,
+          },
+        });
+        items.push({
+          id: created.id,
+          title: created.title,
+          priceCents: created.priceCents,
+        });
+      }
+
+      bar("store:categories", ci + 1, cfg.categories.length);
+    }
+
+    // a couple OPEN visits
+    for (let v = 0; v < 2; v++) {
+      const table = randFromArray(tables);
+      const tile = storeQr.find((x) => x.tableLabel === table.label);
+      if (!tile) continue;
+
+      const tileRow = await prisma.qRTile.findUnique({
+        where: { publicCode: tile.publicCode },
+      });
+      if (!tileRow) continue;
+
+      await prisma.tableVisit.create({
+        data: {
+          storeId,
+          tableId: table.id,
+          tileId: tileRow.id,
+          sessionToken: sessionToken64(),
+          status: "OPEN" as any,
+        },
+      });
+    }
+    bar("store:visits", 2, 2);
+
+    // orders (simple, schema-agnostic: Order then OrderItem)
+    section(`Orders for ${cfg.slug}`);
+    const totalOrders = 80;
+    for (let oi = 0; oi < totalOrders; oi++) {
+      const table = randFromArray(tables);
+      const it = randFromArray(items);
+      const qty = randInt(1, 2);
+
+      const placedAt = randomDateWithinDaysBack(30);
+      const paidAt = new Date(placedAt.getTime() + randInt(2, 35) * 60_000);
+
+      const order = await prisma.order.create({
+        data: {
+          storeId,
+          tableId: table.id,
+          status: OrderStatus.PAID,
+          totalCents: it.priceCents * qty,
+          placedAt,
+          paidAt,
+          // if your DB enforces this NOT NULL, keep it:
+          paymentStatus: "COMPLETED" as any,
+        } as any,
+      });
+
+      await prisma.orderItem.create({
+        data: {
+          orderId: order.id,
+          itemId: it.id,
+          titleSnapshot: it.title,
+          unitPriceCents: it.priceCents,
+          quantity: qty,
+        },
+      });
+
+      bar("orders", oi + 1, totalOrders);
+    }
+  }
+
+  return storeIds;
+}
+
+async function seedArchitectAssignedToRandomStore(storeIds: string[]) {
+  section("Seeding architect (random storeId, not null)");
+
+  if (storeIds.length === 0)
+    throw new Error("No stores were seeded; cannot assign architect storeId.");
+
+  const email = "architect@demo.local";
   const passwordHash = await hashPassword("changeme");
+
+  const randomStoreId = randFromArray(storeIds);
 
   await prisma.profile.upsert({
     where: { globalKey: email },
     update: {
-      storeId: null,
+      storeId: randomStoreId,
       email,
+      globalKey: email,
       role: Role.ARCHITECT,
       displayName: "Central Architect",
       passwordHash,
       isVerified: true,
     },
     create: {
-      storeId: null,
-      globalKey: email,
+      storeId: randomStoreId,
       email,
+      globalKey: email,
       role: Role.ARCHITECT,
       displayName: "Central Architect",
       passwordHash,
@@ -372,205 +576,24 @@ async function seedGlobalArchitect() {
   bar("architect", 1, 1);
 }
 
-async function seedStore(cfg: StoreConfig, qrAll: QrLine[]) {
-  section(`Store: ${cfg.slug}`);
-
-  const store = await prisma.store.upsert({
-    where: { slug: cfg.slug },
-    update: { name: cfg.name },
-    create: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
-  });
-  const storeId = store.id;
-
-  await prisma.storeMeta.upsert({
-    where: { storeId },
-    update: { currencyCode: cfg.currencyCode, locale: cfg.locale },
-    create: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
-  });
-
-  // profiles
-  const pw = await hashPassword("changeme");
-  for (let i = 0; i < cfg.profiles.length; i++) {
-    const p = cfg.profiles[i];
-    await prisma.profile.upsert({
-      where: { storeId_email: { storeId, email: p.email } },
-      update: {
-        role: p.role,
-        displayName: p.displayName,
-        passwordHash: pw,
-        isVerified: true,
-      },
-      create: {
-        storeId,
-        email: p.email,
-        role: p.role,
-        displayName: p.displayName,
-        passwordHash: pw,
-        isVerified: true,
-      },
-    });
-    bar("profiles", i + 1, cfg.profiles.length);
-  }
-
-  // tables (T1..T10)
-  const tables = await Promise.all(
-    Array.from({ length: 10 }).map((_, i) =>
-      prisma.table.upsert({
-        where: { storeId_label: { storeId, label: `T${i + 1}` } },
-        update: { isActive: true },
-        create: { storeId, label: `T${i + 1}`, isActive: true },
-      })
-    )
-  );
-  bar("tables", 10, 10);
-
-  // QR tiles from txt (STATIC publicCode)
-  const storeQr = qrAll.filter((x) => x.storeSlug === cfg.slug);
-  if (storeQr.length !== 10)
-    throw new Error(
-      `qr-tiles.txt must have exactly 10 entries for ${cfg.slug}`
-    );
-
-  for (let i = 0; i < storeQr.length; i++) {
-    const x = storeQr[i];
-    const table = tables.find((t) => t.label === x.tableLabel);
-    if (!table)
-      throw new Error(
-        `qr-tiles.txt references missing table ${cfg.slug}/${x.tableLabel}`
-      );
-
-    await prisma.qRTile.upsert({
-      where: { publicCode: x.publicCode },
-      update: {
-        storeId,
-        tableId: table.id,
-        label: `Tile ${x.tableLabel}`,
-        isActive: true,
-      },
-      create: {
-        storeId,
-        tableId: table.id,
-        publicCode: x.publicCode,
-        label: `Tile ${x.tableLabel}`,
-        isActive: true,
-      },
-    });
-
-    bar("qrTiles", i + 1, storeQr.length);
-  }
-
-  // categories + items
-  const items: { id: string; title: string; priceCents: number }[] = [];
-  for (let ci = 0; ci < cfg.categories.length; ci++) {
-    const cat = cfg.categories[ci];
-    const category = await prisma.category.upsert({
-      where: { storeId_slug: { storeId, slug: cat.slug } },
-      update: {
-        title: cat.title,
-        titleEl: cat.title,
-        titleEn: cat.title,
-        sortOrder: 0,
-      },
-      create: {
-        storeId,
-        slug: cat.slug,
-        title: cat.title,
-        titleEl: cat.title,
-        titleEn: cat.title,
-        sortOrder: 0,
-      },
-    });
-
-    for (const it of cat.items) {
-      const created = await prisma.item.upsert({
-        where: { storeId_slug: { storeId, slug: it.slug } },
-        update: {
-          categoryId: category.id,
-          title: it.title,
-          titleEl: it.title,
-          titleEn: it.title,
-          priceCents: it.priceCents,
-          isAvailable: true,
-        },
-        create: {
-          storeId,
-          categoryId: category.id,
-          slug: it.slug,
-          title: it.title,
-          titleEl: it.title,
-          titleEn: it.title,
-          priceCents: it.priceCents,
-          isAvailable: true,
-          sortOrder: 0,
-        },
-      });
-      items.push({
-        id: created.id,
-        title: created.title,
-        priceCents: created.priceCents,
-      });
-    }
-    bar("categories", ci + 1, cfg.categories.length);
-  }
-
-  // minimal orders (optional)
-  const now = new Date();
-  const approx = 120;
-  for (let i = 0; i < approx; i++) {
-    const day = new Date(now);
-    day.setDate(now.getDate() - randInt(0, 30));
-    const placedAt = randomDateOnDay(day);
-    const table = randFromArray(tables);
-    const item = randFromArray(items);
-    const qty = randInt(1, 2);
-    const status = OrderStatus.PAID;
-
-    const order = await prisma.order.create({
-      data: {
-        storeId,
-        tableId: table.id,
-        status,
-        totalCents: item.priceCents * qty,
-        placedAt,
-        paidAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 30)),
-        paymentStatus: "COMPLETED" as any,
-      },
-    });
-
-    await prisma.orderItem.create({
-      data: {
-        orderId: order.id,
-        itemId: item.id,
-        titleSnapshot: item.title,
-        unitPriceCents: item.priceCents,
-        quantity: qty,
-      },
-    });
-
-    bar("orders", i + 1, approx);
-  }
-}
-
+// ===== main =====
 async function main() {
   section("Seed start");
 
   const qrAll = loadQrTilesFile();
   writeQrPrintList(qrAll);
 
+  section("Generated print list");
+  console.log(
+    `prisma/qr-print-list.txt -> ${PUBLIC_APP_URL}${QR_PATH_PREFIX}/<publicCode>`
+  );
+
   if (SEED_RESET) await resetAll();
 
-  await seedGlobalArchitect();
-
-  for (let i = 0; i < STORES.length; i++) {
-    await seedStore(STORES[i], qrAll);
-    bar("stores", i + 1, STORES.length);
-  }
+  const storeIds = await seedStoresAndData(qrAll);
+  await seedArchitectAssignedToRandomStore(storeIds);
 
   section("Seed done");
-  section("Generated");
-  console.log(
-    `- prisma/qr-print-list.txt  (URLs: ${PUBLIC_APP_URL}${QR_PATH_PREFIX}/<publicCode>)`
-  );
 }
 
 main()
