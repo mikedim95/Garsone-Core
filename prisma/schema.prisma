@@ -31,110 +31,20 @@ model Store {
   waiterShifts    WaiterShift[]
   waiterTables    WaiterTable[]
 
+  @@index([createdAt(sort: Desc)])
   @@map("stores")
 }
 
 model StoreMeta {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String   @unique @db.Uuid
-  currencyCode String   @default("EUR") @db.VarChar(3)
-  locale       String   @default("en") @db.VarChar(10)
+  storeId      String   @id @db.Uuid
+  currencyCode String   @db.VarChar(8)
+  locale       String   @db.VarChar(16)
   createdAt    DateTime @default(now()) @db.Timestamp(6)
   updatedAt    DateTime @updatedAt @db.Timestamp(6)
-  store        Store    @relation(fields: [storeId], references: [id])
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@map("store_meta")
-}
-
-model Profile {
-  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String        @db.Uuid
-  email        String        @unique @db.VarChar(255)
-  passwordHash String        @db.VarChar(255)
-  role         Role
-  displayName  String?       @db.VarChar(255)
-  createdAt    DateTime      @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime      @updatedAt @db.Timestamp(6)
-  ratingAvg    Decimal?      @db.Decimal(4, 2)
-  isVerified   Boolean       @default(false)
-  auditLogs    AuditLog[]
-  store        Store         @relation(fields: [storeId], references: [id])
-  waiterShifts WaiterShift[]
-  waiterTables WaiterTable[]
-
-  @@index([storeId, role])
-  @@map("profiles")
-}
-
-model Table {
-  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String        @db.Uuid
-  label        String        @db.VarChar(50)
-  isActive     Boolean       @default(true)
-  createdAt    DateTime      @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime      @updatedAt @db.Timestamp(6)
-  orders       Order[]
-  qrTiles      QRTile[]
-  tableVisits  TableVisit[]
-  store        Store         @relation(fields: [storeId], references: [id])
-  waiterTables WaiterTable[]
-
-  @@unique([storeId, label])
-  @@map("tables")
-}
-
-model QRTile {
-  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId     String       @db.Uuid
-  tableId     String?      @db.Uuid
-  publicCode  String       @unique @db.VarChar(32)
-  label       String?      @db.VarChar(255)
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime     @updatedAt @db.Timestamp(6)
-  store       Store        @relation(fields: [storeId], references: [id])
-  table       Table?       @relation(fields: [tableId], references: [id])
-  tableVisits TableVisit[]
-
-  @@index([storeId])
-  @@index([tableId])
-  @@map("qr_tiles")
-}
-
-model TableVisit {
-  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tileId       String           @db.Uuid
-  tableId      String           @db.Uuid
-  storeId      String           @db.Uuid
-  sessionToken String           @unique @db.VarChar(64)
-  status       TableVisitStatus @default(OPEN)
-  expiresAt    DateTime         @db.Timestamp(6)
-  createdAt    DateTime         @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime         @updatedAt @db.Timestamp(6)
-  store        Store            @relation(fields: [storeId], references: [id])
-  table        Table            @relation(fields: [tableId], references: [id])
-  tile         QRTile           @relation(fields: [tileId], references: [id])
-
-  @@index([storeId, tableId, status])
-  @@index([expiresAt])
-  @@map("table_visits")
-}
-
-model WaiterTable {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId   String   @db.Uuid
-  waiterId  String   @db.Uuid
-  tableId   String   @db.Uuid
-  createdAt DateTime @default(now()) @db.Timestamp(6)
-  updatedAt DateTime @updatedAt @db.Timestamp(6)
-  store     Store    @relation(fields: [storeId], references: [id])
-  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
-  waiter    Profile  @relation(fields: [waiterId], references: [id], onDelete: Cascade)
-
-  @@unique([storeId, waiterId, tableId])
-  @@index([storeId, waiterId])
-  @@index([storeId, tableId])
-  @@map("waiter_tables")
 }
 
 model Category {
@@ -142,13 +52,14 @@ model Category {
   storeId   String   @db.Uuid
   slug      String   @db.VarChar(100)
   title     String   @db.VarChar(255)
+  titleEl   String?  @db.VarChar(255)
+  titleEn   String?  @db.VarChar(255)
   sortOrder Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamp(6)
   updatedAt DateTime @updatedAt @db.Timestamp(6)
-  titleEl   String   @default("") @db.VarChar(255)
-  titleEn   String   @default("") @db.VarChar(255)
-  store     Store    @relation(fields: [storeId], references: [id])
-  items     Item[]
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  items Item[]
 
   @@unique([storeId, slug])
   @@index([storeId, sortOrder])
@@ -156,73 +67,72 @@ model Category {
 }
 
 model Item {
-  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId       String         @db.Uuid
-  categoryId    String         @db.Uuid
-  slug          String         @db.VarChar(100)
-  title         String         @db.VarChar(255)
-  description   String?
-  priceCents    Int
-  isAvailable   Boolean        @default(true)
-  sortOrder     Int            @default(0)
-  createdAt     DateTime       @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime       @updatedAt @db.Timestamp(6)
-  imageUrl      String?        @db.VarChar(2048)
-  costCents     Int?
-  descriptionEl String?        @db.VarChar(1024)
-  descriptionEn String?        @db.VarChar(1024)
-  titleEl       String         @default("") @db.VarChar(255)
-  titleEn       String         @default("") @db.VarChar(255)
-  itemModifiers ItemModifier[]
-  category      Category       @relation(fields: [categoryId], references: [id])
-  store         Store          @relation(fields: [storeId], references: [id])
-  orderItems    OrderItem[]
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String   @db.Uuid
+  categoryId   String   @db.Uuid
+  slug         String   @db.VarChar(120)
+  title        String   @db.VarChar(255)
+  titleEl      String?  @db.VarChar(255)
+  titleEn      String?  @db.VarChar(255)
+  description  String?  @db.VarChar(2000)
+  priceCents   Int
+  isAvailable  Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime @updatedAt @db.Timestamp(6)
+
+  store      Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category   Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  modifiers  ItemModifier[]
+  orderItems OrderItem[]
 
   @@unique([storeId, slug])
   @@index([storeId, categoryId, sortOrder])
-  @@index([storeId, isAvailable])
   @@map("items")
 }
 
 model Modifier {
-  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId          String            @db.Uuid
-  slug             String            @db.VarChar(100)
-  title            String            @db.VarChar(255)
-  minSelect        Int               @default(0)
-  maxSelect        Int?
-  createdAt        DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
-  isAvailable      Boolean           @default(true)
-  titleEl          String            @default("") @db.VarChar(255)
-  titleEn          String            @default("") @db.VarChar(255)
-  itemModifiers    ItemModifier[]
-  modifierOptions  ModifierOption[]
-  store            Store             @relation(fields: [storeId], references: [id])
-  orderItemOptions OrderItemOption[]
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId     String   @db.Uuid
+  slug        String   @db.VarChar(120)
+  title       String   @db.VarChar(255)
+  titleEl     String?  @db.VarChar(255)
+  titleEn     String?  @db.VarChar(255)
+  minSelect   Int      @default(0)
+  maxSelect   Int      @default(1)
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime @updatedAt @db.Timestamp(6)
+
+  store        Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  options      ModifierOption[]
+  itemLinks    ItemModifier[]
+  orderOptions OrderItemOption[]
 
   @@unique([storeId, slug])
+  @@index([storeId])
   @@map("modifiers")
 }
 
 model ModifierOption {
-  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId          String            @db.Uuid
-  modifierId       String            @db.Uuid
-  slug             String            @db.VarChar(100)
-  title            String            @db.VarChar(255)
-  priceDeltaCents  Int               @default(0)
-  sortOrder        Int               @default(0)
-  createdAt        DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
-  titleEl          String            @default("") @db.VarChar(255)
-  titleEn          String            @default("") @db.VarChar(255)
-  modifier         Modifier          @relation(fields: [modifierId], references: [id], onDelete: Cascade)
-  store            Store             @relation(fields: [storeId], references: [id])
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId         String   @db.Uuid
+  modifierId      String   @db.Uuid
+  slug            String   @db.VarChar(120)
+  title           String   @db.VarChar(255)
+  titleEl         String?  @db.VarChar(255)
+  titleEn         String?  @db.VarChar(255)
+  priceDeltaCents Int      @default(0)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @updatedAt @db.Timestamp(6)
+
+  store            Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  modifier         Modifier         @relation(fields: [modifierId], references: [id], onDelete: Cascade)
   orderItemOptions OrderItemOption[]
 
-  @@unique([modifierId, slug])
-  @@index([modifierId, sortOrder])
+  @@unique([storeId, modifierId, slug])
+  @@index([storeId, modifierId, sortOrder])
   @@map("modifier_options")
 }
 
@@ -234,130 +144,248 @@ model ItemModifier {
   isRequired Boolean  @default(false)
   createdAt  DateTime @default(now()) @db.Timestamp(6)
   updatedAt  DateTime @updatedAt @db.Timestamp(6)
-  item       Item     @relation(fields: [itemId], references: [id])
-  modifier   Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
-  store      Store    @relation(fields: [storeId], references: [id])
 
-  @@unique([itemId, modifierId])
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  modifier Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, itemId, modifierId])
+  @@index([storeId, itemId])
   @@map("item_modifiers")
 }
 
-enum PaymentStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-  CANCELLED
+model Table {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId    String   @db.Uuid
+  label      String   @db.VarChar(50)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+
+  store        Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  qrTiles      QRTile[]
+  orders       Order[]
+  tableVisits  TableVisit[]
+  waiterTables WaiterTable[]
+
+  @@unique([storeId, label])
+  @@index([storeId])
+  @@map("tables")
+}
+
+model QRTile {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId    String   @db.Uuid
+  tableId    String   @db.Uuid
+  publicCode String   @unique @db.VarChar(32)
+  label      String?  @db.VarChar(100)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @updatedAt @db.Timestamp(6)
+
+  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table       Table       @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  tableVisits TableVisit[]
+
+  @@unique([storeId, tableId])
+  @@index([storeId])
+  @@index([tableId])
+  @@map("qr_tiles")
+}
+
+model TableVisit {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String           @db.Uuid
+  tableId      String           @db.Uuid
+  tileId       String           @db.Uuid
+  sessionToken String           @unique @db.VarChar(64)
+  status       TableVisitStatus @default(OPEN)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @updatedAt @db.Timestamp(6)
+  expiresAt    DateTime?        @db.Timestamp(6)
+  closedAt     DateTime?        @db.Timestamp(6)
+
+  store Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table Table  @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  tile  QRTile @relation(fields: [tileId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status])
+  @@index([tableId])
+  @@map("table_visits")
 }
 
 model Order {
-  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String      @db.Uuid
-  tableId      String      @db.Uuid
-  status       OrderStatus @default(PLACED)
-  note         String?
-  totalCents   Int
-  placedAt     DateTime    @default(now()) @db.Timestamp(6)
-  createdAt    DateTime    @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime    @updatedAt @db.Timestamp(6)
-  ticketNumber Int?
-  cancelReason String?     @db.VarChar(255)
-  servedAt     DateTime?   @db.Timestamp(6)
-  cancelledAt  DateTime?   @db.Timestamp(6)
-  paidAt       DateTime?   @db.Timestamp(6)
-  preparingAt  DateTime?   @db.Timestamp(6)
-  readyAt      DateTime?   @db.Timestamp(6)
-  paymentStatus PaymentStatus @default(PENDING)
-  paymentProvider String?   @db.VarChar(50)
-  paymentId    String?     @db.VarChar(255)
-  paymentError String?
-  orderItems   OrderItem[]
-  store        Store       @relation(fields: [storeId], references: [id])
-  table        Table       @relation(fields: [tableId], references: [id])
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId       String        @db.Uuid
+  tableId       String        @db.Uuid
+  status        OrderStatus   @default(PLACED)
 
-  @@index([storeId, status, placedAt(sort: Desc)])
-  @@index([storeId, tableId, placedAt(sort: Desc)])
-  @@index([storeId, paymentStatus])
+  // REQUIRED BY YOUR DB (seed crashed on NULL constraint)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  totalCents    Int           @default(0)
+
+  placedAt      DateTime      @default(now()) @db.Timestamp(6)
+  preparingAt   DateTime?     @db.Timestamp(6)
+  readyAt       DateTime?     @db.Timestamp(6)
+  servedAt      DateTime?     @db.Timestamp(6)
+  cancelledAt   DateTime?     @db.Timestamp(6)
+  paidAt        DateTime?     @db.Timestamp(6)
+
+  cancelReason  String?       @db.VarChar(255)
+
+  createdAt     DateTime      @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime      @updatedAt @db.Timestamp(6)
+
+  store Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table Table   @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  items OrderItem[]
+
+  @@index([storeId, placedAt(sort: Desc)])
+  @@index([tableId, placedAt(sort: Desc)])
   @@map("orders")
+}
+
+model OrderItem {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String   @db.Uuid
+  itemId         String   @db.Uuid
+  titleSnapshot  String   @db.VarChar(255)
+  unitPriceCents Int
+  quantity       Int      @default(1)
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @updatedAt @db.Timestamp(6)
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  options OrderItemOption[]
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderItemOption {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderItemId     String   @db.Uuid
+  modifierId      String   @db.Uuid
+  modifierOptionId String  @db.Uuid
+  titleSnapshot   String   @db.VarChar(255)
+  priceDeltaCents Int      @default(0)
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @updatedAt @db.Timestamp(6)
+
+  orderItem      OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modifier       Modifier       @relation(fields: [modifierId], references: [id], onDelete: Restrict)
+  modifierOption ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Restrict)
+
+  @@index([orderItemId])
+  @@map("order_item_options")
+}
+
+model KitchenCounter {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  slug      String   @db.VarChar(100)
+  title     String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, slug])
+  @@index([storeId])
+  @@map("kitchen_counters")
 }
 
 model WaiterShift {
   id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId   String      @db.Uuid
   waiterId  String      @db.Uuid
-  startedAt DateTime    @default(now()) @db.Timestamp(6)
-  endedAt   DateTime?   @db.Timestamp(6)
   status    ShiftStatus @default(SCHEDULED)
+  startedAt DateTime?   @db.Timestamp(6)
+  endedAt   DateTime?   @db.Timestamp(6)
   createdAt DateTime    @default(now()) @db.Timestamp(6)
   updatedAt DateTime    @updatedAt @db.Timestamp(6)
-  store     Store       @relation(fields: [storeId], references: [id])
-  waiter    Profile     @relation(fields: [waiterId], references: [id], onDelete: Cascade)
+
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  waiter Profile @relation(fields: [waiterId], references: [id], onDelete: Restrict)
 
   @@index([storeId, status])
-  @@index([storeId, waiterId, startedAt(sort: Desc)])
+  @@index([waiterId])
   @@map("waiter_shifts")
 }
 
-/// Per-store daily counter to allocate kitchen ticket numbers (#priority)
-model KitchenCounter {
-  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId String @db.Uuid
-  day     String @db.VarChar(10)
-  seq     Int    @default(0)
-  store   Store  @relation(fields: [storeId], references: [id])
+model WaiterTable {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId  String @db.Uuid
+  waiterId String @db.Uuid
+  tableId  String @db.Uuid
 
-  @@unique([storeId, day])
-  @@map("kitchen_counters")
-}
+  store  Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  waiter Profile @relation(fields: [waiterId], references: [id], onDelete: Restrict)
+  table  Table   @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
-model OrderItem {
-  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  orderId          String            @db.Uuid
-  itemId           String            @db.Uuid
-  titleSnapshot    String            @db.VarChar(255)
-  unitPriceCents   Int
-  quantity         Int               @default(1)
-  createdAt        DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt        DateTime          @updatedAt @db.Timestamp(6)
-  orderItemOptions OrderItemOption[]
-  item             Item              @relation(fields: [itemId], references: [id])
-  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@map("order_items")
-}
-
-model OrderItemOption {
-  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  orderItemId      String         @db.Uuid
-  modifierId       String         @db.Uuid
-  modifierOptionId String         @db.Uuid
-  titleSnapshot    String         @db.VarChar(255)
-  priceDeltaCents  Int            @default(0)
-  createdAt        DateTime       @default(now()) @db.Timestamp(6)
-  updatedAt        DateTime       @updatedAt @db.Timestamp(6)
-  modifier         Modifier       @relation(fields: [modifierId], references: [id])
-  modifierOption   ModifierOption @relation(fields: [modifierOptionId], references: [id])
-  orderItem        OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-
-  @@map("order_item_options")
+  @@unique([storeId, waiterId, tableId])
+  @@index([storeId])
+  @@index([waiterId])
+  @@index([tableId])
+  @@map("waiter_tables")
 }
 
 model AuditLog {
   id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId        String   @db.Uuid
-  actorProfileId String?  @db.Uuid
-  action         String   @db.VarChar(100)
-  entity         String   @db.VarChar(100)
-  entityId       String   @db.Uuid
-  diff           Json?
   ts             DateTime @default(now()) @db.Timestamp(6)
-  actorProfile   Profile? @relation(fields: [actorProfileId], references: [id])
-  store          Store    @relation(fields: [storeId], references: [id])
+  action         String   @db.VarChar(100)
+  entityType     String   @db.VarChar(100)
+  entityId       String?  @db.Uuid
+  metaJson       Json?
+  actorProfileId String?  @db.Uuid
+
+  actorProfile Profile? @relation(fields: [actorProfileId], references: [id])
+  store        Store    @relation(fields: [storeId], references: [id])
 
   @@index([storeId, ts(sort: Desc)])
   @@map("audit_logs")
 }
 
+model Profile {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // NULL => global profile (e.g. central ARCHITECT)
+  storeId      String?  @db.Uuid
+
+  // Store-scoped email (global uniqueness handled via globalKey for global users)
+  email        String   @db.VarChar(255)
+
+  // For global users only: set to email (e.g. "architect@dome.local") to enforce uniqueness.
+  // Store users keep this NULL.
+  globalKey    String?  @unique @db.VarChar(300)
+
+  passwordHash String   @db.VarChar(255)
+  role         Role
+  displayName  String?  @db.VarChar(255)
+  createdAt    DateTime @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime @updatedAt @db.Timestamp(6)
+  ratingAvg    Decimal? @db.Decimal(4, 2)
+  isVerified   Boolean  @default(false)
+
+  auditLogs    AuditLog[]
+  store        Store?   @relation(fields: [storeId], references: [id])
+  waiterShifts WaiterShift[]
+  waiterTables WaiterTable[]
+
+  @@unique([storeId, email])
+  @@index([storeId, role])
+  @@index([email])
+  @@map("profiles")
+}
+
+/**
+ * =========================
+ * Enums
+ * =========================
+ */
 enum TableVisitStatus {
   OPEN
   CLOSED
@@ -367,10 +395,11 @@ enum TableVisitStatus {
 enum ShiftStatus {
   SCHEDULED
   ACTIVE
-  COMPLETED
+  ENDED
 }
 
 enum Role {
+  GUEST
   WAITER
   MANAGER
   COOK
@@ -384,4 +413,11 @@ enum OrderStatus {
   SERVED
   CANCELLED
   PAID
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  FAILED
 }

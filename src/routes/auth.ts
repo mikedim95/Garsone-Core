@@ -28,7 +28,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
       if (!user) {
         user = await db.profile.findFirst({ where: { email } });
-        if (user) {
+        if (user && user.storeId) {
           // ensure we have the store that owns this profile
           if (!store || store.id !== user.storeId) {
             store = await db.store.findUnique({
@@ -38,7 +38,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
       }
 
-      if (!user || !store || user.storeId !== store.id) {
+      if (!user || !user.storeId || !store || user.storeId !== store.id) {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
 

@@ -3,34 +3,58 @@ import {
   PrismaClient,
   Role,
   OrderStatus,
-  PaymentStatus,
   TableVisitStatus,
   ShiftStatus,
+  PaymentStatus, // <-- required if DB has paymentStatus enum
 } from "@prisma/client";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 
 const prisma = new PrismaClient();
 
-// =========================
-// Seed knobs
-// =========================
+/**
+ * =========================
+ * Seed knobs
+ * =========================
+ */
 const DAYS_BACK = 60;
 
-// Keep the same intent you used before:
-// - Everything PAID except: 10 cancelled total per store (spread across the past)
-// - On the most recent day: 3 placed, 3 preparing, 3 served (unpaid), rest paid
+// Intent:
+// - Everything PAID except: 10 CANCELLED total per store (spread across past days)
+// - On the most recent day: 3 PLACED, 3 PREPARING, 3 SERVED (unpaid), rest PAID
 const CANCELLED_TOTAL_PER_STORE = 10;
 const LAST_DAY_PLACED = 3;
 const LAST_DAY_PREPARING = 3;
 const LAST_DAY_SERVED = 3;
 
-// Optional: set SEED_RESET=0 to avoid wiping (default wipes)
+// SEED_RESET=0 -> do not wipe. Default wipes.
 const SEED_RESET = process.env.SEED_RESET !== "0";
 
-// =========================
-// Data config
-// =========================
+/**
+ * =========================
+ * Lightweight progress bars
+ * =========================
+ */
+function bar(label: string, current: number, total: number, width = 28) {
+  const pct = total === 0 ? 1 : current / total;
+  const filled = Math.round(width * pct);
+  const empty = Math.max(0, width - filled);
+  const p = Math.round(pct * 100);
+  const line = `${label} [${"█".repeat(filled)}${" ".repeat(empty)}] ${String(
+    p
+  ).padStart(3)}% (${current}/${total})`;
+  process.stdout.write("\r" + line);
+  if (current >= total) process.stdout.write("\n");
+}
+function section(title: string) {
+  process.stdout.write(`\n=== ${title} ===\n`);
+}
+
+/**
+ * =========================
+ * Data config
+ * =========================
+ */
 type StoreConfig = {
   slug: string;
   name: string;
@@ -223,9 +247,11 @@ const STORES: StoreConfig[] = [
   },
 ];
 
-// =========================
-// Helpers
-// =========================
+/**
+ * =========================
+ * Helpers
+ * =========================
+ */
 function randInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -240,143 +266,254 @@ function randomDateOnDay(base: Date): Date {
   return d;
 }
 function publicCode(): string {
-  // 32 chars, matches schema @db.VarChar(32)
-  return crypto.randomBytes(16).toString("hex");
+  return crypto.randomBytes(16).toString("hex"); // 32 chars
 }
 function sessionToken(): string {
-  // 64 chars, matches schema @db.VarChar(64)
-  return crypto.randomBytes(32).toString("hex");
+  return crypto.randomBytes(32).toString("hex"); // 64 chars
 }
-async function hashPassword(): Promise<string> {
-  return bcrypt.hash("changeme", 10);
+async function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, 10);
 }
 
+/**
+ * =========================
+ * RESET (dev only)
+ * =========================
+ */
 async function resetAll() {
-  // Order matters (FK constraints)
-  await prisma.orderItemOption.deleteMany();
-  await prisma.orderItem.deleteMany();
-  await prisma.order.deleteMany();
+  section("Resetting DB");
+  const steps = [
+    async () => prisma.orderItemOption.deleteMany(),
+    async () => prisma.orderItem.deleteMany(),
+    async () => prisma.order.deleteMany(),
 
-  await prisma.itemModifier.deleteMany();
-  await prisma.modifierOption.deleteMany();
-  await prisma.modifier.deleteMany();
+    async () => prisma.itemModifier.deleteMany(),
+    async () => prisma.modifierOption.deleteMany(),
+    async () => prisma.modifier.deleteMany(),
 
-  await prisma.item.deleteMany();
-  await prisma.category.deleteMany();
+    async () => prisma.item.deleteMany(),
+    async () => prisma.category.deleteMany(),
 
-  await prisma.waiterTable.deleteMany();
-  await prisma.waiterShift.deleteMany();
+    async () => prisma.waiterTable.deleteMany(),
+    async () => prisma.waiterShift.deleteMany(),
 
-  await prisma.tableVisit.deleteMany();
-  await prisma.qRTile.deleteMany();
-  await prisma.table.deleteMany();
+    async () => prisma.tableVisit.deleteMany(),
+    async () => prisma.qRTile.deleteMany(),
+    async () => prisma.table.deleteMany(),
 
-  await prisma.auditLog.deleteMany();
-  await prisma.profile.deleteMany();
+    async () => prisma.auditLog.deleteMany(),
+    async () => prisma.profile.deleteMany(),
 
-  await prisma.kitchenCounter.deleteMany();
-  await prisma.storeMeta.deleteMany();
-  await prisma.store.deleteMany();
+    async () => prisma.kitchenCounter.deleteMany(),
+    async () => prisma.storeMeta.deleteMany(),
+    async () => prisma.store.deleteMany(),
+  ];
+
+  for (let i = 0; i < steps.length; i++) {
+    bar("reset", i, steps.length);
+    await steps[i]();
+  }
+  bar("reset", steps.length, steps.length);
 }
 
-async function seedStore(cfg: StoreConfig) {
-  console.log(`\nSeeding store: ${cfg.slug}`);
+/**
+ * =========================
+ * GLOBAL ARCHITECT
+ * Requires schema changes:
+ * - Profile.storeId nullable (String?)
+ * - Profile.globalKey unique (String? @unique)
+ * - @@unique([storeId, email]) still present
+ * =========================
+ */
+async function seedGlobalArchitect() {
+  section("Seeding global architect");
 
-  const store = await prisma.store.create({
-    data: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
+  const email = "architect@dome.local";
+  const passwordHash = await hashPassword("changeme");
+
+  await prisma.profile.upsert({
+    where: { globalKey: email },
+    update: {
+      storeId: null,
+      email,
+      role: Role.ARCHITECT,
+      displayName: "Central Architect",
+      passwordHash,
+      isVerified: true,
+    },
+    create: {
+      storeId: null,
+      globalKey: email,
+      email,
+      role: Role.ARCHITECT,
+      displayName: "Central Architect",
+      passwordHash,
+      isVerified: true,
+    },
   });
+
+  bar("architect", 1, 1);
+}
+
+/**
+ * =========================
+ * Order/payment invariants
+ * =========================
+ */
+function derivePaymentStatus(status: OrderStatus): PaymentStatus {
+  // Works with typical enum: PENDING | COMPLETED | CANCELLED
+  // If your enum differs, adjust here.
+  if (status === OrderStatus.PAID) return PaymentStatus.COMPLETED;
+  if (status === OrderStatus.CANCELLED) return PaymentStatus.CANCELLED;
+  return PaymentStatus.PENDING;
+}
+
+function derivePaymentTimestamps(
+  status: OrderStatus,
+  placedAt: Date
+): { paidAt?: Date; cancelledAt?: Date } {
+  if (status === OrderStatus.PAID) {
+    return {
+      paidAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(3, 60)),
+    };
+  }
+  if (status === OrderStatus.CANCELLED) {
+    return {
+      cancelledAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 20)),
+    };
+  }
+  return {};
+}
+
+/**
+ * =========================
+ * Per-store seed
+ * =========================
+ */
+async function seedStore(
+  cfg: StoreConfig,
+  storeIndex: number,
+  storeTotal: number
+) {
+  section(`Store ${storeIndex + 1}/${storeTotal}: ${cfg.slug}`);
+
+  // Store + meta
+  const store = await prisma.store.upsert({
+    where: { slug: cfg.slug },
+    update: { name: cfg.name },
+    create: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
+  });
+
   const storeId = store.id;
 
-  await prisma.storeMeta.create({
-    data: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
+  await prisma.storeMeta.upsert({
+    where: { storeId },
+    update: { currencyCode: cfg.currencyCode, locale: cfg.locale },
+    create: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
   });
 
-  // Profiles
-  const passwordHash = await hashPassword();
+  // Profiles (per-store)
+  const storePasswordHash = await hashPassword("changeme");
   const waiterIds: string[] = [];
 
-  for (const p of cfg.profiles) {
-    const created = await prisma.profile.create({
-      data: {
-        storeId,
-        email: p.email,
-        passwordHash,
+  for (let i = 0; i < cfg.profiles.length; i++) {
+    const p = cfg.profiles[i];
+    const created = await prisma.profile.upsert({
+      where: { storeId_email: { storeId, email: p.email } },
+      update: {
         role: p.role,
         displayName: p.displayName,
+        passwordHash: storePasswordHash,
+        isVerified: true,
+      },
+      create: {
+        storeId,
+        email: p.email,
+        role: p.role,
+        displayName: p.displayName,
+        passwordHash: storePasswordHash,
         isVerified: true,
       },
     });
     if (p.role === Role.WAITER) waiterIds.push(created.id);
+    bar("store:profiles", i + 1, cfg.profiles.length);
   }
 
-  // Tables T1..T10
+  // Tables
   const tables = await Promise.all(
     Array.from({ length: 10 }).map((_, i) =>
-      prisma.table.create({
-        data: { storeId, label: `T${i + 1}`, isActive: true },
+      prisma.table.upsert({
+        where: { storeId_label: { storeId, label: `T${i + 1}` } },
+        update: { isActive: true },
+        create: { storeId, label: `T${i + 1}`, isActive: true },
       })
     )
   );
 
-  // Assign waiter(s) to all tables
+  // WaiterTable mapping
+  let wtCount = 0;
+  const wtTotal = waiterIds.length * tables.length;
   for (const waiterId of waiterIds) {
-    for (const table of tables) {
-      await prisma.waiterTable.create({
-        data: { storeId, waiterId, tableId: table.id },
+    for (const t of tables) {
+      await prisma.waiterTable.upsert({
+        where: {
+          storeId_waiterId_tableId: { storeId, waiterId, tableId: t.id },
+        },
+        update: {},
+        create: { storeId, waiterId, tableId: t.id },
       });
+      wtCount++;
+      bar("store:waiterTables", wtCount, Math.max(1, wtTotal));
     }
   }
 
-  // QR tiles (1 per table)
-  const tiles = await Promise.all(
-    tables.map((t) =>
-      prisma.qRTile.create({
-        data: {
-          storeId,
-          tableId: t.id,
-          publicCode: publicCode(),
-          label: `Tile ${t.label}`,
-          isActive: true,
-        },
-      })
-    )
-  );
-
-  // Some OPEN table visits (so your QR flow has real sessions)
-  // 2 per store, expiring in 8 hours
-  const now = new Date();
-  for (let i = 0; i < 2; i++) {
-    const t = randFromArray(tables);
-    const tile = tiles.find((x) => x.tableId === t.id)!;
-    await prisma.tableVisit.create({
+  // QRTiles: schema only has publicCode unique => easiest is wipe per store and re-create
+  await prisma.qRTile.deleteMany({ where: { storeId } });
+  for (let i = 0; i < tables.length; i++) {
+    const t = tables[i];
+    await prisma.qRTile.create({
       data: {
         storeId,
         tableId: t.id,
-        tileId: tile.id,
-        sessionToken: sessionToken(),
-        status: TableVisitStatus.OPEN,
-        expiresAt: new Date(now.getTime() + 1000 * 60 * 60 * 8),
+        publicCode: publicCode(),
+        label: `Tile ${t.label}`,
+        isActive: true,
       },
     });
+    bar("store:qrTiles", i + 1, tables.length);
   }
+  const tiles = await prisma.qRTile.findMany({ where: { storeId } });
 
-  // Menu: categories + items
+  // Menu
   const allItems: { id: string; title: string; priceCents: number }[] = [];
-  for (const cat of cfg.categories) {
-    const category = await prisma.category.create({
-      data: {
+  for (let ci = 0; ci < cfg.categories.length; ci++) {
+    const cat = cfg.categories[ci];
+
+    const category = await prisma.category.upsert({
+      where: { storeId_slug: { storeId, slug: cat.slug } },
+      update: { title: cat.title, titleEl: cat.title, titleEn: cat.title },
+      create: {
         storeId,
         slug: cat.slug,
         title: cat.title,
-        sortOrder: 0,
         titleEl: cat.title,
         titleEn: cat.title,
+        sortOrder: 0,
       },
     });
 
     for (const it of cat.items) {
-      const created = await prisma.item.create({
-        data: {
+      const created = await prisma.item.upsert({
+        where: { storeId_slug: { storeId, slug: it.slug } },
+        update: {
+          categoryId: category.id,
+          title: it.title,
+          titleEl: it.title,
+          titleEn: it.title,
+          priceCents: it.priceCents,
+          isAvailable: true,
+        },
+        create: {
           storeId,
           categoryId: category.id,
           slug: it.slug,
@@ -394,12 +531,22 @@ async function seedStore(cfg: StoreConfig) {
         priceCents: created.priceCents,
       });
     }
+
+    bar("store:categories", ci + 1, cfg.categories.length);
   }
 
-  // Modifiers (minimal but complete graph: Modifier -> Options -> ItemModifier -> OrderItemOption)
-  // 1) "Extras" (optional)
-  const extras = await prisma.modifier.create({
-    data: {
+  // Modifiers graph
+  const extras = await prisma.modifier.upsert({
+    where: { storeId_slug: { storeId, slug: "extras" } },
+    update: {
+      title: "Extras",
+      titleEl: "Extras",
+      titleEn: "Extras",
+      minSelect: 0,
+      maxSelect: 2,
+      isAvailable: true,
+    },
+    create: {
       storeId,
       slug: "extras",
       title: "Extras",
@@ -411,50 +558,87 @@ async function seedStore(cfg: StoreConfig) {
     },
   });
 
-  const extraOptions = await Promise.all([
-    prisma.modifierOption.create({
-      data: {
+  const extraCheese = await prisma.modifierOption.upsert({
+    where: {
+      storeId_modifierId_slug: {
         storeId,
         modifierId: extras.id,
         slug: "extra-cheese",
-        title: "Extra cheese",
-        titleEl: "Extra cheese",
-        titleEn: "Extra cheese",
-        priceDeltaCents: 100,
-        sortOrder: 1,
       },
-    }),
-    prisma.modifierOption.create({
-      data: {
+    },
+    update: {
+      title: "Extra cheese",
+      titleEl: "Extra cheese",
+      titleEn: "Extra cheese",
+      priceDeltaCents: 100,
+      sortOrder: 1,
+    },
+    create: {
+      storeId,
+      modifierId: extras.id,
+      slug: "extra-cheese",
+      title: "Extra cheese",
+      titleEl: "Extra cheese",
+      titleEn: "Extra cheese",
+      priceDeltaCents: 100,
+      sortOrder: 1,
+    },
+  });
+
+  const extraSauce = await prisma.modifierOption.upsert({
+    where: {
+      storeId_modifierId_slug: {
         storeId,
         modifierId: extras.id,
         slug: "extra-sauce",
-        title: "Extra sauce",
-        titleEl: "Extra sauce",
-        titleEn: "Extra sauce",
-        priceDeltaCents: 50,
-        sortOrder: 2,
       },
-    }),
-  ]);
+    },
+    update: {
+      title: "Extra sauce",
+      titleEl: "Extra sauce",
+      titleEn: "Extra sauce",
+      priceDeltaCents: 50,
+      sortOrder: 2,
+    },
+    create: {
+      storeId,
+      modifierId: extras.id,
+      slug: "extra-sauce",
+      title: "Extra sauce",
+      titleEl: "Extra sauce",
+      titleEn: "Extra sauce",
+      priceDeltaCents: 50,
+      sortOrder: 2,
+    },
+  });
 
-  // Attach modifier to ~half items
   const attachCount = Math.max(1, Math.floor(allItems.length / 2));
-  const shuffledItems = [...allItems]
+  const attachItems = [...allItems]
     .sort(() => Math.random() - 0.5)
     .slice(0, attachCount);
-  for (const it of shuffledItems) {
-    await prisma.itemModifier.create({
-      data: {
+  for (let i = 0; i < attachItems.length; i++) {
+    const it = attachItems[i];
+    await prisma.itemModifier.upsert({
+      where: {
+        storeId_itemId_modifierId: {
+          storeId,
+          itemId: it.id,
+          modifierId: extras.id,
+        },
+      },
+      update: { isRequired: false },
+      create: {
         storeId,
         itemId: it.id,
         modifierId: extras.id,
         isRequired: false,
       },
     });
+    bar("store:itemModifiers", i + 1, attachItems.length);
   }
 
-  // Waiter shift (so dashboards can show it)
+  // Waiter shift
+  const now = new Date();
   if (waiterIds.length > 0) {
     await prisma.waiterShift.create({
       data: {
@@ -466,11 +650,32 @@ async function seedStore(cfg: StoreConfig) {
     });
   }
 
-  // Orders over last 60 days
+  // TableVisits
+  for (let i = 0; i < 2; i++) {
+    const t = randFromArray(tables);
+    const tile = tiles.find((x) => x.tableId === t.id)!;
+    await prisma.tableVisit.create({
+      data: {
+        storeId,
+        tableId: t.id,
+        tileId: tile.id,
+        sessionToken: sessionToken(),
+        status: TableVisitStatus.OPEN,
+        expiresAt: new Date(now.getTime() + 1000 * 60 * 60 * 8),
+      },
+    });
+    bar("store:visits", i + 1, 2);
+  }
+
+  // Orders
+  section(`Orders for ${cfg.slug}`);
   let cancelledLeft = CANCELLED_TOTAL_PER_STORE;
   let lastDayPlacedLeft = LAST_DAY_PLACED;
   let lastDayPreparingLeft = LAST_DAY_PREPARING;
   let lastDayServedLeft = LAST_DAY_SERVED;
+
+  const approxTotalOrders = DAYS_BACK * 12;
+  let createdOrders = 0;
 
   for (let d = 0; d < DAYS_BACK; d++) {
     const day = new Date(now);
@@ -486,40 +691,30 @@ async function seedStore(cfg: StoreConfig) {
       const item = randFromArray(allItems);
       const qty = randInt(1, 3);
 
-      // Default: paid historical orders
       let status: OrderStatus = OrderStatus.PAID;
-      let paymentStatus: PaymentStatus = PaymentStatus.COMPLETED;
 
       if (isLastDay) {
-        // Keep a few active/unpaid orders on "today"
         if (lastDayPlacedLeft > 0) {
           status = OrderStatus.PLACED;
-          paymentStatus = PaymentStatus.PENDING;
           lastDayPlacedLeft--;
         } else if (lastDayPreparingLeft > 0) {
           status = OrderStatus.PREPARING;
-          paymentStatus = PaymentStatus.PENDING;
           lastDayPreparingLeft--;
         } else if (lastDayServedLeft > 0) {
           status = OrderStatus.SERVED;
-          paymentStatus = PaymentStatus.PENDING;
           lastDayServedLeft--;
         } else {
           status = OrderStatus.PAID;
-          paymentStatus = PaymentStatus.COMPLETED;
         }
       } else if (cancelledLeft > 0) {
         status = OrderStatus.CANCELLED;
-        paymentStatus = PaymentStatus.CANCELLED;
         cancelledLeft--;
       } else {
         status = OrderStatus.PAID;
-        paymentStatus = PaymentStatus.COMPLETED;
       }
 
       const placedAt = randomDateOnDay(day);
 
-      // Timestamps aligned to both order status + paymentStatus
       const preparingAt =
         status === OrderStatus.PREPARING ||
         status === OrderStatus.SERVED ||
@@ -532,30 +727,16 @@ async function seedStore(cfg: StoreConfig) {
           ? new Date(placedAt.getTime() + 1000 * 60 * randInt(10, 45))
           : undefined;
 
-      const paidAt =
-        paymentStatus === PaymentStatus.COMPLETED
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(3, 60))
-          : undefined;
-
-      const cancelledAt =
-        status === OrderStatus.CANCELLED
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 20))
-          : undefined;
-
-      // Optional payment details
-      const paymentProvider =
-        paymentStatus === PaymentStatus.COMPLETED ? "VIVA" : undefined;
-      const paymentId =
-        paymentStatus === PaymentStatus.COMPLETED
-          ? `pay_${crypto.randomBytes(8).toString("hex")}`
-          : undefined;
+      const { paidAt, cancelledAt } = derivePaymentTimestamps(status, placedAt);
+      const paymentStatus = derivePaymentStatus(status);
 
       const baseTotal = item.priceCents * qty;
 
-      // If item has the modifier attached, sometimes add 1 option
-      const canHaveExtras = shuffledItems.some((x) => x.id === item.id);
+      const canHaveExtras = attachItems.some((x) => x.id === item.id);
       const addExtra = canHaveExtras && Math.random() < 0.35;
-      const chosenExtra = addExtra ? randFromArray(extraOptions) : undefined;
+      const chosenExtra = addExtra
+        ? randFromArray([extraCheese, extraSauce])
+        : undefined;
 
       const totalCents =
         baseTotal + (chosenExtra ? chosenExtra.priceDeltaCents : 0);
@@ -567,24 +748,17 @@ async function seedStore(cfg: StoreConfig) {
           status,
           totalCents,
           placedAt,
-
           preparingAt: preparingAt ?? undefined,
           servedAt: servedAt ?? undefined,
           paidAt: paidAt ?? undefined,
           cancelledAt: cancelledAt ?? undefined,
-
           cancelReason:
             status === OrderStatus.CANCELLED
               ? randFromArray(["Customer left", "Out of stock", "Duplicate"])
               : undefined,
 
+          // <-- FIX for your crash:
           paymentStatus,
-          paymentProvider: paymentProvider ?? undefined,
-          paymentId: paymentId ?? undefined,
-          paymentError:
-            paymentStatus === PaymentStatus.FAILED
-              ? "Simulated payment failure"
-              : undefined,
         },
       });
 
@@ -609,25 +783,38 @@ async function seedStore(cfg: StoreConfig) {
           },
         });
       }
-    }
-  }
 
-  console.log(`Seeded store: ${cfg.slug}`);
+      createdOrders++;
+      bar(
+        "orders",
+        Math.min(createdOrders, approxTotalOrders),
+        approxTotalOrders
+      );
+    }
+
+    bar("days", d + 1, DAYS_BACK);
+  }
 }
 
+/**
+ * =========================
+ * Main
+ * =========================
+ */
 async function main() {
-  console.log("Starting seed...");
+  section("Seed start");
 
-  if (SEED_RESET) {
-    console.log("Resetting DB...");
-    await resetAll();
+  if (SEED_RESET) await resetAll();
+  else section("SEED_RESET=0 (no wipe)");
+
+  await seedGlobalArchitect();
+
+  for (let i = 0; i < STORES.length; i++) {
+    await seedStore(STORES[i], i, STORES.length);
+    bar("stores", i + 1, STORES.length);
   }
 
-  for (const store of STORES) {
-    await seedStore(store);
-  }
-
-  console.log("Seed completed.");
+  section("Seed done");
 }
 
 main()
