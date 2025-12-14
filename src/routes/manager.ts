@@ -625,7 +625,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
     minSelect: z.number().int().min(0).default(0),
-    maxSelect: z.number().int().nullable().optional(),
+    maxSelect: z.number().int().min(0).optional(),
     isAvailable: z.boolean().optional(),
   });
   fastify.post(
@@ -647,7 +647,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             titleEn: body.titleEn,
             titleEl: body.titleEl,
             minSelect: body.minSelect,
-            maxSelect: body.maxSelect ?? null,
+            maxSelect:
+              typeof body.maxSelect === "number" ? body.maxSelect : undefined,
             isAvailable: body.isAvailable ?? true,
           },
         });
@@ -677,7 +678,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
     minSelect: z.number().int().min(0).optional(),
-    maxSelect: z.number().int().nullable().optional(),
+    maxSelect: z.number().int().min(0).optional(),
     isAvailable: z.boolean().optional(),
   });
   fastify.patch(
@@ -693,6 +694,9 @@ export async function managerRoutes(fastify: FastifyInstance) {
         } else if (body.title) {
           data.title = body.title;
           data.titleEn = body.title;
+        }
+        if (typeof body.maxSelect !== "number") {
+          delete data.maxSelect;
         }
         const updated = await db.modifier.update({ where: { id }, data });
         invalidateMenuCache();
@@ -736,8 +740,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     modifierId: z.string().uuid(),
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
-    priceDeltaCents: z.number().int().default(0),
-    sortOrder: z.number().int().default(0),
+    priceDeltaCents: z.number().int().nullable().optional().default(0),
+    sortOrder: z.number().int().nullable().optional().default(0),
   });
   fastify.post(
     "/manager/modifier-options",
@@ -757,8 +761,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             title: body.titleEn,
             titleEn: body.titleEn,
             titleEl: body.titleEl,
-            priceDeltaCents: body.priceDeltaCents,
-            sortOrder: body.sortOrder,
+            priceDeltaCents: body.priceDeltaCents ?? 0,
+            sortOrder: body.sortOrder ?? 0,
           },
         });
         return reply.status(201).send({ option: opt });
@@ -778,8 +782,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
-    priceDeltaCents: z.number().int().optional(),
-    sortOrder: z.number().int().optional(),
+    priceDeltaCents: z.number().int().nullable().optional(),
+    sortOrder: z.number().int().nullable().optional(),
   });
   fastify.patch(
     "/manager/modifier-options/:id",
@@ -795,7 +799,18 @@ export async function managerRoutes(fastify: FastifyInstance) {
           data.title = body.title;
           data.titleEn = body.title;
         }
-        const updated = await db.modifierOption.update({ where: { id }, data });
+        const updated = await db.modifierOption.update({
+          where: { id },
+          data: {
+            ...data,
+            priceDeltaCents:
+              typeof data.priceDeltaCents === "number"
+                ? data.priceDeltaCents
+                : undefined,
+            sortOrder:
+              typeof data.sortOrder === "number" ? data.sortOrder : undefined,
+          },
+        });
         return reply.send({ option: updated });
       } catch (e) {
         if (e instanceof z.ZodError)

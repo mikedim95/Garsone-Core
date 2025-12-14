@@ -444,4 +444,5 @@ enum PaymentStatus {
   PENDING
   COMPLETED
   CANCELLED
+  FAILED
 }

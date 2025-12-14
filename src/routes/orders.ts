@@ -481,7 +481,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const actor = (request as any).user;
         let shiftWindow:
           | {
-              start?: Date;
+              start?: Date | null;
               end?: Date | null;
               id?: string;
               status?: ShiftStatus;
