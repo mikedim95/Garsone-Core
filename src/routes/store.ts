@@ -23,7 +23,14 @@ export async function storeRoutes(fastify: FastifyInstance) {
         select: { id: true, label: true, storeId: true, updatedAt: true },
       });
 
-      let tiles: Array<(typeof tables)[number] & { publicCode?: string | null }> = [];
+      type TileInfo = {
+        storeId: string;
+        tableId: string | null;
+        publicCode: string | null;
+        updatedAt: Date | null;
+        table?: { id: string; label: string } | null;
+      };
+      let tiles: TileInfo[] = [];
       try {
         tiles = await db.qRTile.findMany({
           where: {
@@ -35,7 +42,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
             table: { select: { id: true, label: true } },
           },
           orderBy: [{ updatedAt: "desc" }],
-        }) as any;
+        }) as TileInfo[];
       } catch (error: any) {
         // If the QR tiles table is missing on an older database, don't fail the landing page.
         if (error?.code === "P2021" || error?.code === "P2022") {
@@ -53,7 +60,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
         }
       }
 
-      const tileByStore = new Map<string, (typeof tiles)[number]>();
+      const tileByStore = new Map<string, TileInfo>();
       for (const tile of tiles) {
         if (tile.tableId && !tileByStore.has(tile.storeId)) {
           tileByStore.set(tile.storeId, tile);
