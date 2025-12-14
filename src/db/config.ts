@@ -17,9 +17,13 @@ const maybeEnforceSsl = (url: string | undefined, target: DbTarget) => {
 
 export function resolveDbConfig() {
   const normalizeTarget = (value: string | undefined): DbTarget => {
-    const normalized = (value || 'primary').toLowerCase();
+    const normalized = (value || '').toLowerCase();
     if (normalized === 'render_internal' || normalized === 'render_external' || normalized === 'default') {
       return normalized;
+    }
+    // When running on Render with missing/mis-set DB_CONNECTION, prefer the hosted DB (external) over Supabase.
+    if (process.env.RENDER || (process.env.NODE_ENV || '').toLowerCase() === 'production') {
+      return 'render_external';
     }
     return 'primary';
   };
