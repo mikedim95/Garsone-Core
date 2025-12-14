@@ -1,38 +1,20 @@
-// prisma/seed.ts
-import {
-  PrismaClient,
-  Role,
-  OrderStatus,
-  TableVisitStatus,
-  ShiftStatus,
-  PaymentStatus, // <-- required if DB has paymentStatus enum
-} from "@prisma/client";
+import { PrismaClient, Role, OrderStatus } from "@prisma/client";
+import fs from "node:fs";
+import path from "node:path";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
 
 const prisma = new PrismaClient();
 
-/**
- * =========================
- * Seed knobs
- * =========================
- */
-const DAYS_BACK = 60;
-
-// Intent:
-// - Everything PAID except: 10 CANCELLED total per store (spread across past days)
-// - On the most recent day: 3 PLACED, 3 PREPARING, 3 SERVED (unpaid), rest PAID
-const CANCELLED_TOTAL_PER_STORE = 10;
-const LAST_DAY_PLACED = 3;
-const LAST_DAY_PREPARING = 3;
-const LAST_DAY_SERVED = 3;
-
-// SEED_RESET=0 -> do not wipe. Default wipes.
 const SEED_RESET = process.env.SEED_RESET !== "0";
+const PUBLIC_APP_URL = (
+  process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
+).replace(/\/+$/, "");
+const QR_PATH_PREFIX = "/publiccode"; // <-- matches your production pattern
 
 /**
  * =========================
- * Lightweight progress bars
+ * progress bars
  * =========================
  */
 function bar(label: string, current: number, total: number, width = 28) {
@@ -52,7 +34,79 @@ function section(title: string) {
 
 /**
  * =========================
- * Data config
+ * helpers
+ * =========================
+ */
+type QrLine = { storeSlug: string; tableLabel: string; publicCode: string };
+
+function loadQrTilesFile(): QrLine[] {
+  const file = path.join(process.cwd(), "prisma", "qr-tiles.txt");
+  const raw = fs.readFileSync(file, "utf8");
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+
+  const parsed: QrLine[] = [];
+
+  for (const line of lines) {
+    const parts = line.split(",").map((p) => p.trim());
+    if (parts.length !== 3) throw new Error(`Bad qr-tiles.txt line: "${line}"`);
+    const [storeSlug, tableLabel, publicCode] = parts;
+    parsed.push({ storeSlug, tableLabel, publicCode });
+  }
+
+  const seen = new Set<string>();
+  for (const x of parsed) {
+    if (seen.has(x.publicCode))
+      throw new Error(`Duplicate publicCode in qr-tiles.txt: ${x.publicCode}`);
+    seen.add(x.publicCode);
+  }
+
+  return parsed;
+}
+
+function writeQrPrintList(all: QrLine[]) {
+  const out = [
+    "# url,storeSlug,tableLabel,publicCode",
+    ...all.map(
+      (x) =>
+        `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${x.publicCode},${x.storeSlug},${x.tableLabel},${x.publicCode}`
+    ),
+    "",
+  ].join("\n");
+
+  fs.writeFileSync(
+    path.join(process.cwd(), "prisma", "qr-print-list.txt"),
+    out,
+    "utf8"
+  );
+}
+
+function randInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function randFromArray<T>(arr: T[]): T {
+  return arr[randInt(0, arr.length - 1)];
+}
+function randomDateOnDay(base: Date): Date {
+  const d = new Date(base);
+  d.setHours(0, 0, 0, 0);
+  d.setMinutes(randInt(60, 60 * 23));
+  d.setSeconds(randInt(0, 59));
+  return d;
+}
+function sessionToken(): string {
+  return crypto.randomBytes(32).toString("hex"); // 64 chars
+}
+async function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, 10);
+}
+
+/**
+ * =========================
+ * seed config
  * =========================
  */
 type StoreConfig = {
@@ -249,35 +303,8 @@ const STORES: StoreConfig[] = [
 
 /**
  * =========================
- * Helpers
- * =========================
- */
-function randInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-function randFromArray<T>(arr: T[]): T {
-  return arr[randInt(0, arr.length - 1)];
-}
-function randomDateOnDay(base: Date): Date {
-  const d = new Date(base);
-  d.setHours(0, 0, 0, 0);
-  d.setMinutes(randInt(60, 60 * 23));
-  d.setSeconds(randInt(0, 59));
-  return d;
-}
-function publicCode(): string {
-  return crypto.randomBytes(16).toString("hex"); // 32 chars
-}
-function sessionToken(): string {
-  return crypto.randomBytes(32).toString("hex"); // 64 chars
-}
-async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, 10);
-}
-
-/**
- * =========================
- * RESET (dev only)
+ * reset (best-effort)
+ * NOTE: uses your existing tables; keep if it works for you.
  * =========================
  */
 async function resetAll() {
@@ -316,18 +343,8 @@ async function resetAll() {
   bar("reset", steps.length, steps.length);
 }
 
-/**
- * =========================
- * GLOBAL ARCHITECT
- * Requires schema changes:
- * - Profile.storeId nullable (String?)
- * - Profile.globalKey unique (String? @unique)
- * - @@unique([storeId, email]) still present
- * =========================
- */
 async function seedGlobalArchitect() {
   section("Seeding global architect");
-
   const email = "architect@dome.local";
   const passwordHash = await hashPassword("changeme");
 
@@ -355,55 +372,14 @@ async function seedGlobalArchitect() {
   bar("architect", 1, 1);
 }
 
-/**
- * =========================
- * Order/payment invariants
- * =========================
- */
-function derivePaymentStatus(status: OrderStatus): PaymentStatus {
-  // Works with typical enum: PENDING | COMPLETED | CANCELLED
-  // If your enum differs, adjust here.
-  if (status === OrderStatus.PAID) return PaymentStatus.COMPLETED;
-  if (status === OrderStatus.CANCELLED) return PaymentStatus.CANCELLED;
-  return PaymentStatus.PENDING;
-}
+async function seedStore(cfg: StoreConfig, qrAll: QrLine[]) {
+  section(`Store: ${cfg.slug}`);
 
-function derivePaymentTimestamps(
-  status: OrderStatus,
-  placedAt: Date
-): { paidAt?: Date; cancelledAt?: Date } {
-  if (status === OrderStatus.PAID) {
-    return {
-      paidAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(3, 60)),
-    };
-  }
-  if (status === OrderStatus.CANCELLED) {
-    return {
-      cancelledAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 20)),
-    };
-  }
-  return {};
-}
-
-/**
- * =========================
- * Per-store seed
- * =========================
- */
-async function seedStore(
-  cfg: StoreConfig,
-  storeIndex: number,
-  storeTotal: number
-) {
-  section(`Store ${storeIndex + 1}/${storeTotal}: ${cfg.slug}`);
-
-  // Store + meta
   const store = await prisma.store.upsert({
     where: { slug: cfg.slug },
     update: { name: cfg.name },
     create: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
   });
-
   const storeId = store.id;
 
   await prisma.storeMeta.upsert({
@@ -412,18 +388,16 @@ async function seedStore(
     create: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
   });
 
-  // Profiles (per-store)
-  const storePasswordHash = await hashPassword("changeme");
-  const waiterIds: string[] = [];
-
+  // profiles
+  const pw = await hashPassword("changeme");
   for (let i = 0; i < cfg.profiles.length; i++) {
     const p = cfg.profiles[i];
-    const created = await prisma.profile.upsert({
+    await prisma.profile.upsert({
       where: { storeId_email: { storeId, email: p.email } },
       update: {
         role: p.role,
         displayName: p.displayName,
-        passwordHash: storePasswordHash,
+        passwordHash: pw,
         isVerified: true,
       },
       create: {
@@ -431,15 +405,14 @@ async function seedStore(
         email: p.email,
         role: p.role,
         displayName: p.displayName,
-        passwordHash: storePasswordHash,
+        passwordHash: pw,
         isVerified: true,
       },
     });
-    if (p.role === Role.WAITER) waiterIds.push(created.id);
-    bar("store:profiles", i + 1, cfg.profiles.length);
+    bar("profiles", i + 1, cfg.profiles.length);
   }
 
-  // Tables
+  // tables (T1..T10)
   const tables = await Promise.all(
     Array.from({ length: 10 }).map((_, i) =>
       prisma.table.upsert({
@@ -449,49 +422,55 @@ async function seedStore(
       })
     )
   );
+  bar("tables", 10, 10);
 
-  // WaiterTable mapping
-  let wtCount = 0;
-  const wtTotal = waiterIds.length * tables.length;
-  for (const waiterId of waiterIds) {
-    for (const t of tables) {
-      await prisma.waiterTable.upsert({
-        where: {
-          storeId_waiterId_tableId: { storeId, waiterId, tableId: t.id },
-        },
-        update: {},
-        create: { storeId, waiterId, tableId: t.id },
-      });
-      wtCount++;
-      bar("store:waiterTables", wtCount, Math.max(1, wtTotal));
-    }
-  }
+  // QR tiles from txt (STATIC publicCode)
+  const storeQr = qrAll.filter((x) => x.storeSlug === cfg.slug);
+  if (storeQr.length !== 10)
+    throw new Error(
+      `qr-tiles.txt must have exactly 10 entries for ${cfg.slug}`
+    );
 
-  // QRTiles: schema only has publicCode unique => easiest is wipe per store and re-create
-  await prisma.qRTile.deleteMany({ where: { storeId } });
-  for (let i = 0; i < tables.length; i++) {
-    const t = tables[i];
-    await prisma.qRTile.create({
-      data: {
+  for (let i = 0; i < storeQr.length; i++) {
+    const x = storeQr[i];
+    const table = tables.find((t) => t.label === x.tableLabel);
+    if (!table)
+      throw new Error(
+        `qr-tiles.txt references missing table ${cfg.slug}/${x.tableLabel}`
+      );
+
+    await prisma.qRTile.upsert({
+      where: { publicCode: x.publicCode },
+      update: {
         storeId,
-        tableId: t.id,
-        publicCode: publicCode(),
-        label: `Tile ${t.label}`,
+        tableId: table.id,
+        label: `Tile ${x.tableLabel}`,
+        isActive: true,
+      },
+      create: {
+        storeId,
+        tableId: table.id,
+        publicCode: x.publicCode,
+        label: `Tile ${x.tableLabel}`,
         isActive: true,
       },
     });
-    bar("store:qrTiles", i + 1, tables.length);
-  }
-  const tiles = await prisma.qRTile.findMany({ where: { storeId } });
 
-  // Menu
-  const allItems: { id: string; title: string; priceCents: number }[] = [];
+    bar("qrTiles", i + 1, storeQr.length);
+  }
+
+  // categories + items
+  const items: { id: string; title: string; priceCents: number }[] = [];
   for (let ci = 0; ci < cfg.categories.length; ci++) {
     const cat = cfg.categories[ci];
-
     const category = await prisma.category.upsert({
       where: { storeId_slug: { storeId, slug: cat.slug } },
-      update: { title: cat.title, titleEl: cat.title, titleEn: cat.title },
+      update: {
+        title: cat.title,
+        titleEl: cat.title,
+        titleEn: cat.title,
+        sortOrder: 0,
+      },
       create: {
         storeId,
         slug: cat.slug,
@@ -525,296 +504,73 @@ async function seedStore(
           sortOrder: 0,
         },
       });
-      allItems.push({
+      items.push({
         id: created.id,
         title: created.title,
         priceCents: created.priceCents,
       });
     }
-
-    bar("store:categories", ci + 1, cfg.categories.length);
+    bar("categories", ci + 1, cfg.categories.length);
   }
 
-  // Modifiers graph
-  const extras = await prisma.modifier.upsert({
-    where: { storeId_slug: { storeId, slug: "extras" } },
-    update: {
-      title: "Extras",
-      titleEl: "Extras",
-      titleEn: "Extras",
-      minSelect: 0,
-      maxSelect: 2,
-      isAvailable: true,
-    },
-    create: {
-      storeId,
-      slug: "extras",
-      title: "Extras",
-      titleEl: "Extras",
-      titleEn: "Extras",
-      minSelect: 0,
-      maxSelect: 2,
-      isAvailable: true,
-    },
-  });
-
-  const extraCheese = await prisma.modifierOption.upsert({
-    where: {
-      storeId_modifierId_slug: {
-        storeId,
-        modifierId: extras.id,
-        slug: "extra-cheese",
-      },
-    },
-    update: {
-      title: "Extra cheese",
-      titleEl: "Extra cheese",
-      titleEn: "Extra cheese",
-      priceDeltaCents: 100,
-      sortOrder: 1,
-    },
-    create: {
-      storeId,
-      modifierId: extras.id,
-      slug: "extra-cheese",
-      title: "Extra cheese",
-      titleEl: "Extra cheese",
-      titleEn: "Extra cheese",
-      priceDeltaCents: 100,
-      sortOrder: 1,
-    },
-  });
-
-  const extraSauce = await prisma.modifierOption.upsert({
-    where: {
-      storeId_modifierId_slug: {
-        storeId,
-        modifierId: extras.id,
-        slug: "extra-sauce",
-      },
-    },
-    update: {
-      title: "Extra sauce",
-      titleEl: "Extra sauce",
-      titleEn: "Extra sauce",
-      priceDeltaCents: 50,
-      sortOrder: 2,
-    },
-    create: {
-      storeId,
-      modifierId: extras.id,
-      slug: "extra-sauce",
-      title: "Extra sauce",
-      titleEl: "Extra sauce",
-      titleEn: "Extra sauce",
-      priceDeltaCents: 50,
-      sortOrder: 2,
-    },
-  });
-
-  const attachCount = Math.max(1, Math.floor(allItems.length / 2));
-  const attachItems = [...allItems]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, attachCount);
-  for (let i = 0; i < attachItems.length; i++) {
-    const it = attachItems[i];
-    await prisma.itemModifier.upsert({
-      where: {
-        storeId_itemId_modifierId: {
-          storeId,
-          itemId: it.id,
-          modifierId: extras.id,
-        },
-      },
-      update: { isRequired: false },
-      create: {
-        storeId,
-        itemId: it.id,
-        modifierId: extras.id,
-        isRequired: false,
-      },
-    });
-    bar("store:itemModifiers", i + 1, attachItems.length);
-  }
-
-  // Waiter shift
+  // minimal orders (optional)
   const now = new Date();
-  if (waiterIds.length > 0) {
-    await prisma.waiterShift.create({
-      data: {
-        storeId,
-        waiterId: waiterIds[0],
-        startedAt: new Date(now.getTime() - 1000 * 60 * 60 * 3),
-        status: ShiftStatus.ACTIVE,
-      },
-    });
-  }
-
-  // TableVisits
-  for (let i = 0; i < 2; i++) {
-    const t = randFromArray(tables);
-    const tile = tiles.find((x) => x.tableId === t.id)!;
-    await prisma.tableVisit.create({
-      data: {
-        storeId,
-        tableId: t.id,
-        tileId: tile.id,
-        sessionToken: sessionToken(),
-        status: TableVisitStatus.OPEN,
-        expiresAt: new Date(now.getTime() + 1000 * 60 * 60 * 8),
-      },
-    });
-    bar("store:visits", i + 1, 2);
-  }
-
-  // Orders
-  section(`Orders for ${cfg.slug}`);
-  let cancelledLeft = CANCELLED_TOTAL_PER_STORE;
-  let lastDayPlacedLeft = LAST_DAY_PLACED;
-  let lastDayPreparingLeft = LAST_DAY_PREPARING;
-  let lastDayServedLeft = LAST_DAY_SERVED;
-
-  const approxTotalOrders = DAYS_BACK * 12;
-  let createdOrders = 0;
-
-  for (let d = 0; d < DAYS_BACK; d++) {
+  const approx = 120;
+  for (let i = 0; i < approx; i++) {
     const day = new Date(now);
-    day.setDate(now.getDate() - d);
-    const isLastDay = d === 0;
+    day.setDate(now.getDate() - randInt(0, 30));
+    const placedAt = randomDateOnDay(day);
+    const table = randFromArray(tables);
+    const item = randFromArray(items);
+    const qty = randInt(1, 2);
+    const status = OrderStatus.PAID;
 
-    const ordersToday = isLastDay
-      ? Math.max(20, randInt(15, 30))
-      : randInt(5, 20);
+    const order = await prisma.order.create({
+      data: {
+        storeId,
+        tableId: table.id,
+        status,
+        totalCents: item.priceCents * qty,
+        placedAt,
+        paidAt: new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 30)),
+        paymentStatus: "COMPLETED" as any,
+      },
+    });
 
-    for (let i = 0; i < ordersToday; i++) {
-      const table = randFromArray(tables);
-      const item = randFromArray(allItems);
-      const qty = randInt(1, 3);
+    await prisma.orderItem.create({
+      data: {
+        orderId: order.id,
+        itemId: item.id,
+        titleSnapshot: item.title,
+        unitPriceCents: item.priceCents,
+        quantity: qty,
+      },
+    });
 
-      let status: OrderStatus = OrderStatus.PAID;
-
-      if (isLastDay) {
-        if (lastDayPlacedLeft > 0) {
-          status = OrderStatus.PLACED;
-          lastDayPlacedLeft--;
-        } else if (lastDayPreparingLeft > 0) {
-          status = OrderStatus.PREPARING;
-          lastDayPreparingLeft--;
-        } else if (lastDayServedLeft > 0) {
-          status = OrderStatus.SERVED;
-          lastDayServedLeft--;
-        } else {
-          status = OrderStatus.PAID;
-        }
-      } else if (cancelledLeft > 0) {
-        status = OrderStatus.CANCELLED;
-        cancelledLeft--;
-      } else {
-        status = OrderStatus.PAID;
-      }
-
-      const placedAt = randomDateOnDay(day);
-
-      const preparingAt =
-        status === OrderStatus.PREPARING ||
-        status === OrderStatus.SERVED ||
-        status === OrderStatus.PAID
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 10))
-          : undefined;
-
-      const servedAt =
-        status === OrderStatus.SERVED || status === OrderStatus.PAID
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(10, 45))
-          : undefined;
-
-      const { paidAt, cancelledAt } = derivePaymentTimestamps(status, placedAt);
-      const paymentStatus = derivePaymentStatus(status);
-
-      const baseTotal = item.priceCents * qty;
-
-      const canHaveExtras = attachItems.some((x) => x.id === item.id);
-      const addExtra = canHaveExtras && Math.random() < 0.35;
-      const chosenExtra = addExtra
-        ? randFromArray([extraCheese, extraSauce])
-        : undefined;
-
-      const totalCents =
-        baseTotal + (chosenExtra ? chosenExtra.priceDeltaCents : 0);
-
-      const order = await prisma.order.create({
-        data: {
-          storeId,
-          tableId: table.id,
-          status,
-          totalCents,
-          placedAt,
-          preparingAt: preparingAt ?? undefined,
-          servedAt: servedAt ?? undefined,
-          paidAt: paidAt ?? undefined,
-          cancelledAt: cancelledAt ?? undefined,
-          cancelReason:
-            status === OrderStatus.CANCELLED
-              ? randFromArray(["Customer left", "Out of stock", "Duplicate"])
-              : undefined,
-
-          // <-- FIX for your crash:
-          paymentStatus,
-        },
-      });
-
-      const orderItem = await prisma.orderItem.create({
-        data: {
-          orderId: order.id,
-          itemId: item.id,
-          titleSnapshot: item.title,
-          unitPriceCents: item.priceCents,
-          quantity: qty,
-        },
-      });
-
-      if (chosenExtra) {
-        await prisma.orderItemOption.create({
-          data: {
-            orderItemId: orderItem.id,
-            modifierId: extras.id,
-            modifierOptionId: chosenExtra.id,
-            titleSnapshot: chosenExtra.title,
-            priceDeltaCents: chosenExtra.priceDeltaCents,
-          },
-        });
-      }
-
-      createdOrders++;
-      bar(
-        "orders",
-        Math.min(createdOrders, approxTotalOrders),
-        approxTotalOrders
-      );
-    }
-
-    bar("days", d + 1, DAYS_BACK);
+    bar("orders", i + 1, approx);
   }
 }
 
-/**
- * =========================
- * Main
- * =========================
- */
 async function main() {
   section("Seed start");
 
+  const qrAll = loadQrTilesFile();
+  writeQrPrintList(qrAll);
+
   if (SEED_RESET) await resetAll();
-  else section("SEED_RESET=0 (no wipe)");
 
   await seedGlobalArchitect();
 
   for (let i = 0; i < STORES.length; i++) {
-    await seedStore(STORES[i], i, STORES.length);
+    await seedStore(STORES[i], qrAll);
     bar("stores", i + 1, STORES.length);
   }
 
   section("Seed done");
+  section("Generated");
+  console.log(
+    `- prisma/qr-print-list.txt  (URLs: ${PUBLIC_APP_URL}${QR_PATH_PREFIX}/<publicCode>)`
+  );
 }
 
 main()
