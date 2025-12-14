@@ -1,9 +1,4 @@
 // prisma/seed.ts
-<<<<<<< HEAD
-
-import { PrismaClient, Role, OrderStatus } from "@prisma/client";
-import bcrypt from "bcrypt";
-=======
 import {
   PrismaClient,
   Role,
@@ -14,34 +9,9 @@ import {
 } from "@prisma/client";
 import bcrypt from "bcrypt";
 import crypto from "crypto";
->>>>>>> stage
 
 const prisma = new PrismaClient();
-const DAYS_BACK = 60;
 
-<<<<<<< HEAD
-type StoreConfig = {
-  slug: string;
-  name: string;
-  currencyCode: string;
-  locale: string;
-  profiles: {
-    email: string;
-    role: Role;
-    displayName: string;
-  }[];
-  categories: {
-    slug: string;
-    title: string;
-    items: {
-      slug: string;
-      title: string;
-      priceCents: number;
-    }[];
-  }[];
-};
-
-=======
 // =========================
 // Seed knobs
 // =========================
@@ -74,7 +44,6 @@ type StoreConfig = {
   }[];
 };
 
->>>>>>> stage
 const STORES: StoreConfig[] = [
   {
     slug: "downtown-espresso",
@@ -254,23 +223,6 @@ const STORES: StoreConfig[] = [
   },
 ];
 
-<<<<<<< HEAD
-function randInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function randFromArray<T>(arr: T[]): T {
-  return arr[randInt(0, arr.length - 1)];
-}
-
-function randomDateOnDay(base: Date): Date {
-  const d = new Date(base);
-  d.setHours(0, 0, 0, 0);
-  d.setMinutes(randInt(60, 60 * 23)); // somewhere during the day
-  return d;
-}
-
-=======
 // =========================
 // Helpers
 // =========================
@@ -295,39 +247,10 @@ function sessionToken(): string {
   // 64 chars, matches schema @db.VarChar(64)
   return crypto.randomBytes(32).toString("hex");
 }
->>>>>>> stage
 async function hashPassword(): Promise<string> {
   return bcrypt.hash("changeme", 10);
 }
 
-<<<<<<< HEAD
-async function seedStore(cfg: StoreConfig) {
-  console.log(`\nSeeding store: ${cfg.slug}`);
-
-  // Create store
-  const store = await prisma.store.create({
-    data: {
-      slug: cfg.slug,
-      name: cfg.name,
-      settingsJson: {},
-    },
-  });
-
-  const storeId = store.id;
-
-  // StoreMeta
-  await prisma.storeMeta.create({
-    data: {
-      storeId,
-      currencyCode: cfg.currencyCode,
-      locale: cfg.locale,
-    },
-  });
-
-  // Profiles
-  const passwordHash = await hashPassword();
-  const waiterProfiles: { id: string }[] = [];
-=======
 async function resetAll() {
   // Order matters (FK constraints)
   await prisma.orderItemOption.deleteMany();
@@ -371,7 +294,6 @@ async function seedStore(cfg: StoreConfig) {
   // Profiles
   const passwordHash = await hashPassword();
   const waiterIds: string[] = [];
->>>>>>> stage
 
   for (const p of cfg.profiles) {
     const created = await prisma.profile.create({
@@ -381,30 +303,16 @@ async function seedStore(cfg: StoreConfig) {
         passwordHash,
         role: p.role,
         displayName: p.displayName,
-<<<<<<< HEAD
-      },
-    });
-
-    if (p.role === Role.WAITER) {
-      waiterProfiles.push({ id: created.id });
-    }
-=======
         isVerified: true,
       },
     });
     if (p.role === Role.WAITER) waiterIds.push(created.id);
->>>>>>> stage
   }
 
   // Tables T1..T10
   const tables = await Promise.all(
     Array.from({ length: 10 }).map((_, i) =>
       prisma.table.create({
-<<<<<<< HEAD
-        data: {
-          storeId,
-          label: `T${i + 1}`,
-=======
         data: { storeId, label: `T${i + 1}`, isActive: true },
       })
     )
@@ -428,23 +336,12 @@ async function seedStore(cfg: StoreConfig) {
           tableId: t.id,
           publicCode: publicCode(),
           label: `Tile ${t.label}`,
->>>>>>> stage
           isActive: true,
         },
       })
     )
   );
 
-<<<<<<< HEAD
-  // Link all waiters to all tables in this store
-  for (const waiter of waiterProfiles) {
-    for (const table of tables) {
-      await prisma.waiterTable.create({
-        data: {
-          storeId,
-          waiterId: waiter.id,
-          tableId: table.id,
-=======
   // Some OPEN table visits (so your QR flow has real sessions)
   // 2 per store, expiring in 8 hours
   const now = new Date();
@@ -489,7 +386,6 @@ async function seedStore(cfg: StoreConfig) {
           priceCents: it.priceCents,
           isAvailable: true,
           sortOrder: 0,
->>>>>>> stage
         },
       });
       allItems.push({
@@ -500,61 +396,6 @@ async function seedStore(cfg: StoreConfig) {
     }
   }
 
-<<<<<<< HEAD
-  // Categories + Items
-  const allItems: {
-    id: string;
-    title: string;
-    priceCents: number;
-  }[] = [];
-
-  for (const cat of cfg.categories) {
-    const category = await prisma.category.create({
-      data: {
-        storeId,
-        slug: cat.slug,
-        title: cat.title,
-        sortOrder: 0,
-        titleEl: cat.title,
-        titleEn: cat.title,
-      },
-    });
-
-    for (const it of cat.items) {
-      const created = await prisma.item.create({
-        data: {
-          storeId,
-          categoryId: category.id,
-          slug: it.slug,
-          title: it.title,
-          titleEl: it.title,
-          titleEn: it.title,
-          priceCents: it.priceCents,
-          isAvailable: true,
-          sortOrder: 0,
-        },
-      });
-
-      allItems.push({
-        id: created.id,
-        title: created.title,
-        priceCents: created.priceCents,
-      });
-    }
-  }
-
-  // Orders over last 60 days
-  const now = new Date();
-
-  let cancelledLeft = 10;
-  let placedLeft = 3;
-  let preparingLeft = 3;
-  let servedLeft = 3;
-
-  for (let d = 0; d < DAYS_BACK; d++) {
-    const date = new Date(now);
-    date.setDate(now.getDate() - d);
-=======
   // Modifiers (minimal but complete graph: Modifier -> Options -> ItemModifier -> OrderItemOption)
   // 1) "Extras" (optional)
   const extras = await prisma.modifier.create({
@@ -634,7 +475,6 @@ async function seedStore(cfg: StoreConfig) {
   for (let d = 0; d < DAYS_BACK; d++) {
     const day = new Date(now);
     day.setDate(now.getDate() - d);
->>>>>>> stage
     const isLastDay = d === 0;
 
     const ordersToday = isLastDay
@@ -646,47 +486,6 @@ async function seedStore(cfg: StoreConfig) {
       const item = randFromArray(allItems);
       const qty = randInt(1, 3);
 
-<<<<<<< HEAD
-      let status: OrderStatus = OrderStatus.PAID;
-
-      if (isLastDay) {
-        if (placedLeft > 0) {
-          status = OrderStatus.PLACED;
-          placedLeft--;
-        } else if (preparingLeft > 0) {
-          status = OrderStatus.PREPARING;
-          preparingLeft--;
-        } else if (servedLeft > 0) {
-          status = OrderStatus.SERVED;
-          servedLeft--;
-        } else {
-          status = OrderStatus.PAID;
-        }
-      } else if (cancelledLeft > 0) {
-        status = OrderStatus.CANCELLED;
-        cancelledLeft--;
-      } else {
-        status = OrderStatus.PAID;
-      }
-
-      const placedAt = randomDateOnDay(date);
-      const paidAt =
-        status === OrderStatus.PAID
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(5, 60))
-          : null;
-      const cancelledAt =
-        status === OrderStatus.CANCELLED
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 30))
-          : null;
-      const servedAt =
-        status === OrderStatus.SERVED
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(5, 40))
-          : null;
-      const preparingAt =
-        status === OrderStatus.PREPARING
-          ? new Date(placedAt.getTime() + 1000 * 60 * randInt(1, 10))
-          : null;
-=======
       // Default: paid historical orders
       let status: OrderStatus = OrderStatus.PAID;
       let paymentStatus: PaymentStatus = PaymentStatus.COMPLETED;
@@ -760,25 +559,12 @@ async function seedStore(cfg: StoreConfig) {
 
       const totalCents =
         baseTotal + (chosenExtra ? chosenExtra.priceDeltaCents : 0);
->>>>>>> stage
 
       const order = await prisma.order.create({
         data: {
           storeId,
           tableId: table.id,
           status,
-<<<<<<< HEAD
-          totalCents: item.priceCents * qty,
-          placedAt,
-          paidAt: paidAt ?? undefined,
-          cancelledAt: cancelledAt ?? undefined,
-          servedAt: servedAt ?? undefined,
-          preparingAt: preparingAt ?? undefined,
-        },
-      });
-
-      await prisma.orderItem.create({
-=======
           totalCents,
           placedAt,
 
@@ -803,7 +589,6 @@ async function seedStore(cfg: StoreConfig) {
       });
 
       const orderItem = await prisma.orderItem.create({
->>>>>>> stage
         data: {
           orderId: order.id,
           itemId: item.id,
@@ -812,8 +597,6 @@ async function seedStore(cfg: StoreConfig) {
           quantity: qty,
         },
       });
-<<<<<<< HEAD
-=======
 
       if (chosenExtra) {
         await prisma.orderItemOption.create({
@@ -826,7 +609,6 @@ async function seedStore(cfg: StoreConfig) {
           },
         });
       }
->>>>>>> stage
     }
   }
 
@@ -836,12 +618,6 @@ async function seedStore(cfg: StoreConfig) {
 async function main() {
   console.log("Starting seed...");
 
-<<<<<<< HEAD
-  for (const store of STORES) {
-    await seedStore(store);
-  }
-
-=======
   if (SEED_RESET) {
     console.log("Resetting DB...");
     await resetAll();
@@ -851,7 +627,6 @@ async function main() {
     await seedStore(store);
   }
 
->>>>>>> stage
   console.log("Seed completed.");
 }
 
