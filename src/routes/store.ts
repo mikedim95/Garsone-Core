@@ -17,13 +17,15 @@ export async function storeRoutes(fastify: FastifyInstance) {
       }
 
       const storeIds = stores.map((s) => s.id);
-      const [tables, tiles] = await Promise.all([
-        db.table.findMany({
-          where: { storeId: { in: storeIds }, isActive: true },
-          orderBy: [{ label: "asc" }, { createdAt: "asc" }],
-          select: { id: true, label: true, storeId: true, updatedAt: true },
-        }),
-        db.qRTile.findMany({
+      const tables = await db.table.findMany({
+        where: { storeId: { in: storeIds }, isActive: true },
+        orderBy: [{ label: "asc" }, { createdAt: "asc" }],
+        select: { id: true, label: true, storeId: true, updatedAt: true },
+      });
+
+      let tiles: Array<(typeof tables)[number] & { publicCode?: string | null }> = [];
+      try {
+        tiles = await db.qRTile.findMany({
           where: {
             storeId: { in: storeIds },
             isActive: true,
@@ -33,8 +35,16 @@ export async function storeRoutes(fastify: FastifyInstance) {
             table: { select: { id: true, label: true } },
           },
           orderBy: [{ updatedAt: "desc" }],
-        }),
-      ]);
+        }) as any;
+      } catch (error: any) {
+        // If the QR tiles table is missing on an older database, don't fail the landing page.
+        if (error?.code === "P2021" || error?.code === "P2022") {
+          fastify.log.warn({ err: error }, "QR tile table missing; skipping tiles for landing");
+          tiles = [];
+        } else {
+          throw error;
+        }
+      }
 
       const firstTableByStore = new Map<string, { id: string; label: string }>();
       for (const table of tables) {
@@ -53,25 +63,25 @@ export async function storeRoutes(fastify: FastifyInstance) {
       const payload = stores
         .filter((store) => firstTableByStore.has(store.id))
         .map((store) => {
-        const tile = tileByStore.get(store.id);
-        const table =
-          (tile?.tableId && tables.find((t) => t.id === tile.tableId)) ||
-          firstTableByStore.get(store.id) ||
-          null;
-        return {
-          id: store.id,
-          slug: store.slug,
-          name: store.name,
-          tableId: table?.id ?? null,
-          tableLabel: table?.label ?? null,
-          publicCode: tile?.publicCode ?? null,
-        };
-      });
+          const tile = tileByStore.get(store.id);
+          const table =
+            (tile?.tableId && tables.find((t) => t.id === tile.tableId)) ||
+            firstTableByStore.get(store.id) ||
+            null;
+          return {
+            id: store.id,
+            slug: store.slug,
+            name: store.name,
+            tableId: table?.id ?? null,
+            tableLabel: table?.label ?? null,
+            publicCode: tile?.publicCode ?? null,
+          };
+        });
 
       const lastModified = Math.max(
         ...stores.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)),
         ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
-        ...tiles.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        ...(tiles.length ? tiles.map((t: any) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)) : [0]),
         Date.now()
       );
       const etag = buildEtag({ stores: payload.length, updatedAt: lastModified });
