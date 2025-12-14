@@ -2,10 +2,12 @@ import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
 import { verifyToken } from "../lib/jwt.js";
-<<<<<<< HEAD
-=======
-import { applyCacheHeaders, buildEtag, isNotModified } from "../lib/httpCache.js";
->>>>>>> stage
+
+import {
+  applyCacheHeaders,
+  buildEtag,
+  isNotModified,
+} from "../lib/httpCache.js";
 
 export async function storeRoutes(fastify: FastifyInstance) {
   fastify.get("/landing/stores", async (_request, reply) => {
@@ -35,7 +37,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
       };
       let tiles: TileInfo[] = [];
       try {
-        tiles = await db.qRTile.findMany({
+        tiles = (await db.qRTile.findMany({
           where: {
             storeId: { in: storeIds },
             isActive: true,
@@ -45,21 +47,30 @@ export async function storeRoutes(fastify: FastifyInstance) {
             table: { select: { id: true, label: true } },
           },
           orderBy: [{ updatedAt: "desc" }],
-        }) as TileInfo[];
+        })) as TileInfo[];
       } catch (error: any) {
         // If the QR tiles table is missing on an older database, don't fail the landing page.
         if (error?.code === "P2021" || error?.code === "P2022") {
-          fastify.log.warn({ err: error }, "QR tile table missing; skipping tiles for landing");
+          fastify.log.warn(
+            { err: error },
+            "QR tile table missing; skipping tiles for landing"
+          );
           tiles = [];
         } else {
           throw error;
         }
       }
 
-      const firstTableByStore = new Map<string, { id: string; label: string }>();
+      const firstTableByStore = new Map<
+        string,
+        { id: string; label: string }
+      >();
       for (const table of tables) {
         if (!firstTableByStore.has(table.storeId)) {
-          firstTableByStore.set(table.storeId, { id: table.id, label: table.label });
+          firstTableByStore.set(table.storeId, {
+            id: table.id,
+            label: table.label,
+          });
         }
       }
 
@@ -89,12 +100,23 @@ export async function storeRoutes(fastify: FastifyInstance) {
         });
 
       const lastModified = Math.max(
-        ...stores.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)),
-        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
-        ...(tiles.length ? tiles.map((t: any) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)) : [0]),
+        ...stores.map((s) =>
+          s.updatedAt ? new Date(s.updatedAt).getTime() : 0
+        ),
+        ...tables.map((t) =>
+          t.updatedAt ? new Date(t.updatedAt).getTime() : 0
+        ),
+        ...(tiles.length
+          ? tiles.map((t: any) =>
+              t.updatedAt ? new Date(t.updatedAt).getTime() : 0
+            )
+          : [0]),
         Date.now()
       );
-      const etag = buildEtag({ stores: payload.length, updatedAt: lastModified });
+      const etag = buildEtag({
+        stores: payload.length,
+        updatedAt: lastModified,
+      });
       if (isNotModified(_request, etag, lastModified)) {
         applyCacheHeaders(reply, etag, lastModified);
         return reply.status(304).send();
@@ -173,13 +195,16 @@ export async function storeRoutes(fastify: FastifyInstance) {
           where: { storeId: store.id, waiterId: userId },
           select: { tableId: true, waiterId: true },
         });
-        waiterAssignmentsByTable = assignments.reduce<Map<string, string[]>>((acc, a) => {
-          if (!a.tableId) return acc;
-          const list = acc.get(a.tableId) ?? [];
-          list.push(a.waiterId);
-          acc.set(a.tableId, list);
-          return acc;
-        }, new Map());
+        waiterAssignmentsByTable = assignments.reduce<Map<string, string[]>>(
+          (acc, a) => {
+            if (!a.tableId) return acc;
+            const list = acc.get(a.tableId) ?? [];
+            list.push(a.waiterId);
+            acc.set(a.tableId, list);
+            return acc;
+          },
+          new Map()
+        );
       }
 
       const tables = await db.table.findMany({
@@ -189,10 +214,16 @@ export async function storeRoutes(fastify: FastifyInstance) {
       });
 
       const lastModified = Math.max(
-        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        ...tables.map((t) =>
+          t.updatedAt ? new Date(t.updatedAt).getTime() : 0
+        ),
         Date.now()
       );
-      const etag = buildEtag({ store: store.slug, tables: tables.length, updatedAt: lastModified });
+      const etag = buildEtag({
+        store: store.slug,
+        tables: tables.length,
+        updatedAt: lastModified,
+      });
       if (isNotModified(request, etag, lastModified)) {
         applyCacheHeaders(reply, etag, lastModified);
         return reply.status(304).send();
@@ -207,7 +238,9 @@ export async function storeRoutes(fastify: FastifyInstance) {
           // Include waiter assignment only for the authenticated waiter (scopes waiter dashboard)
           waiters:
             userRole === "waiter"
-              ? (waiterAssignmentsByTable.get(table.id) ?? []).map((wid) => ({ id: wid }))
+              ? (waiterAssignmentsByTable.get(table.id) ?? []).map((wid) => ({
+                  id: wid,
+                }))
               : [],
         })),
       });
