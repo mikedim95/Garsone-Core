@@ -3,7 +3,6 @@ import crypto from "crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { createTableVisitSession } from "../lib/tableVisits.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
@@ -86,12 +85,11 @@ function renderPublicMessage(title: string, message: string) {
 function buildPublicRedirectUrl(
   storeSlug: string,
   tableId: string,
-  sessionToken: string,
   requestHost?: string,
   requestProtocol?: string
 ) {
   const slug = (storeSlug || "").trim() || "www";
-  const params = new URLSearchParams({ visit: sessionToken, storeSlug: slug });
+  const params = new URLSearchParams({ storeSlug: slug });
 
   // If explicit base is provided, prefer it (supports {storeSlug})
   if (PUBLIC_APP_BASE_URL.length > 0) {
@@ -157,16 +155,9 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           );
       }
 
-      const visit = await createTableVisitSession({
-        tileId: tile.id,
-        tableId: tile.tableId,
-        storeId: tile.storeId,
-      });
-
       const target = buildPublicRedirectUrl(
         tile.store?.slug || "",
         tile.tableId,
-        visit.sessionToken,
         request.headers.host,
         (request as any).protocol
       );
