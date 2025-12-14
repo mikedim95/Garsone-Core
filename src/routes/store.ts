@@ -2,12 +2,16 @@ import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
 import { verifyToken } from "../lib/jwt.js";
+<<<<<<< HEAD
+=======
+import { applyCacheHeaders, buildEtag, isNotModified } from "../lib/httpCache.js";
+>>>>>>> stage
 
 export async function storeRoutes(fastify: FastifyInstance) {
   fastify.get("/landing/stores", async (_request, reply) => {
     try {
       const stores = await db.store.findMany({
-        select: { id: true, slug: true, name: true },
+        select: { id: true, slug: true, name: true, updatedAt: true },
         orderBy: { name: "asc" },
       });
 
@@ -16,13 +20,22 @@ export async function storeRoutes(fastify: FastifyInstance) {
       }
 
       const storeIds = stores.map((s) => s.id);
-      const [tables, tiles] = await Promise.all([
-        db.table.findMany({
-          where: { storeId: { in: storeIds }, isActive: true },
-          orderBy: [{ label: "asc" }, { createdAt: "asc" }],
-          select: { id: true, label: true, storeId: true },
-        }),
-        db.qRTile.findMany({
+      const tables = await db.table.findMany({
+        where: { storeId: { in: storeIds }, isActive: true },
+        orderBy: [{ label: "asc" }, { createdAt: "asc" }],
+        select: { id: true, label: true, storeId: true, updatedAt: true },
+      });
+
+      type TileInfo = {
+        storeId: string;
+        tableId: string | null;
+        publicCode: string | null;
+        updatedAt: Date | null;
+        table?: { id: string; label: string } | null;
+      };
+      let tiles: TileInfo[] = [];
+      try {
+        tiles = await db.qRTile.findMany({
           where: {
             storeId: { in: storeIds },
             isActive: true,
@@ -32,8 +45,16 @@ export async function storeRoutes(fastify: FastifyInstance) {
             table: { select: { id: true, label: true } },
           },
           orderBy: [{ updatedAt: "desc" }],
-        }),
-      ]);
+        }) as TileInfo[];
+      } catch (error: any) {
+        // If the QR tiles table is missing on an older database, don't fail the landing page.
+        if (error?.code === "P2021" || error?.code === "P2022") {
+          fastify.log.warn({ err: error }, "QR tile table missing; skipping tiles for landing");
+          tiles = [];
+        } else {
+          throw error;
+        }
+      }
 
       const firstTableByStore = new Map<string, { id: string; label: string }>();
       for (const table of tables) {
@@ -42,7 +63,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
         }
       }
 
-      const tileByStore = new Map<string, (typeof tiles)[number]>();
+      const tileByStore = new Map<string, TileInfo>();
       for (const tile of tiles) {
         if (tile.tableId && !tileByStore.has(tile.storeId)) {
           tileByStore.set(tile.storeId, tile);
@@ -52,21 +73,33 @@ export async function storeRoutes(fastify: FastifyInstance) {
       const payload = stores
         .filter((store) => firstTableByStore.has(store.id))
         .map((store) => {
-        const tile = tileByStore.get(store.id);
-        const table =
-          (tile?.tableId && tables.find((t) => t.id === tile.tableId)) ||
-          firstTableByStore.get(store.id) ||
-          null;
-        return {
-          id: store.id,
-          slug: store.slug,
-          name: store.name,
-          tableId: table?.id ?? null,
-          tableLabel: table?.label ?? null,
-          publicCode: tile?.publicCode ?? null,
-        };
-      });
+          const tile = tileByStore.get(store.id);
+          const table =
+            (tile?.tableId && tables.find((t) => t.id === tile.tableId)) ||
+            firstTableByStore.get(store.id) ||
+            null;
+          return {
+            id: store.id,
+            slug: store.slug,
+            name: store.name,
+            tableId: table?.id ?? null,
+            tableLabel: table?.label ?? null,
+            publicCode: tile?.publicCode ?? null,
+          };
+        });
 
+      const lastModified = Math.max(
+        ...stores.map((s) => (s.updatedAt ? new Date(s.updatedAt).getTime() : 0)),
+        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        ...(tiles.length ? tiles.map((t: any) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)) : [0]),
+        Date.now()
+      );
+      const etag = buildEtag({ stores: payload.length, updatedAt: lastModified });
+      if (isNotModified(_request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({ stores: payload });
     } catch (error) {
       console.error("Landing stores fetch error:", error);
@@ -82,6 +115,18 @@ export async function storeRoutes(fastify: FastifyInstance) {
         where: { storeId: store.id },
       });
 
+      const lastModified = Math.max(
+        store.updatedAt ? new Date(store.updatedAt).getTime() : 0,
+        meta?.updatedAt ? new Date(meta.updatedAt).getTime() : 0,
+        Date.now()
+      );
+      const etag = buildEtag({ store: store.slug, updatedAt: lastModified });
+      if (isNotModified(request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({
         store: {
           id: store.id,
@@ -140,9 +185,20 @@ export async function storeRoutes(fastify: FastifyInstance) {
       const tables = await db.table.findMany({
         where: { storeId: store.id, isActive: true },
         orderBy: { label: "asc" },
-        select: { id: true, label: true, isActive: true },
+        select: { id: true, label: true, isActive: true, updatedAt: true },
       });
 
+      const lastModified = Math.max(
+        ...tables.map((t) => (t.updatedAt ? new Date(t.updatedAt).getTime() : 0)),
+        Date.now()
+      );
+      const etag = buildEtag({ store: store.slug, tables: tables.length, updatedAt: lastModified });
+      if (isNotModified(request, etag, lastModified)) {
+        applyCacheHeaders(reply, etag, lastModified);
+        return reply.status(304).send();
+      }
+
+      applyCacheHeaders(reply, etag, lastModified);
       return reply.send({
         tables: tables.map((table) => ({
           id: table.id,

@@ -5,11 +5,16 @@ import { db } from "../db/index.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
-import { ensureStore, STORE_SLUG, getRequestedStoreSlug } from "../lib/store.js";
+import {
+  ensureStore,
+  STORE_SLUG,
+  getRequestedStoreSlug,
+} from "../lib/store.js";
 import {
   validateTableVisitToken,
   REQUIRE_TABLE_VISIT,
 } from "../lib/tableVisits.js";
+import { createVivaPaymentOrder } from "../lib/viva.js";
 
 const modifierSelectionSchema = z.record(z.string());
 
@@ -154,6 +159,9 @@ function serializeOrder(order: OrderWithRelations) {
     paidAt: order.paidAt,
     cancelledAt: order.cancelledAt,
     cancelReason: order.cancelReason,
+    paymentStatus: (order as any).paymentStatus ?? "PENDING",
+    paymentProvider: (order as any).paymentProvider ?? null,
+    paymentId: (order as any).paymentId ?? null,
     items: order.orderItems.map((orderItem) => ({
       id: orderItem.id,
       itemId: orderItem.itemId,
@@ -236,7 +244,9 @@ function parseModifiers(value?: unknown) {
 }
 
 const resolveStoreSlug = (request: any) =>
-  getRequestedStoreSlug(request) || (request as any)?.user?.storeSlug || STORE_SLUG;
+  getRequestedStoreSlug(request) ||
+  (request as any)?.user?.storeSlug ||
+  STORE_SLUG;
 
 export async function orderRoutes(fastify: FastifyInstance) {
   // Create order (IP whitelisted)
@@ -1197,15 +1207,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
     "/call-waiter",
     {
       preHandler: [ipWhitelistMiddleware],
-      },
-      async (request, reply) => {
-        try {
-          const body = callWaiterSchema.parse(request.body);
-          const store = await ensureStore(resolveStoreSlug(request));
+    },
+    async (request, reply) => {
+      try {
+        const body = callWaiterSchema.parse(request.body);
+        const store = await ensureStore(resolveStoreSlug(request));
 
-          const table = await db.table.findFirst({
-            where: { id: body.tableId, storeId: store.id },
-          });
+        const table = await db.table.findFirst({
+          where: { id: body.tableId, storeId: store.id },
+        });
 
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
@@ -1232,6 +1242,105 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
         console.error("Call waiter error:", error);
         return reply.status(500).send({ error: "Failed to call waiter" });
+      }
+    }
+  );
+
+  // Generate demo Viva payment URL before placing order
+  fastify.post(
+    "/payment/viva/checkout-url",
+    {
+      preHandler: [ipWhitelistMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        // Log the exact incoming payload for debugging Viva checkout URL failures
+        try {
+          console.log(
+            "[payment/checkout-url] incoming body:",
+            JSON.stringify(request.body)
+          );
+        } catch (e) {
+          console.log(
+            "[payment/checkout-url] incoming body (raw):",
+            request.body
+          );
+        }
+        const body = z
+          .object({
+            tableId: z.string().uuid(),
+            amount: z.number().positive(),
+            description: z.string().optional(),
+          })
+          .parse(request.body);
+
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+
+        const table = await db.table.findFirst({
+          where: { id: body.tableId, storeId: store.id },
+        });
+
+        if (!table) {
+          return reply.status(404).send({ error: "Table not found" });
+        }
+
+        // Generate unique session ID for this payment attempt
+        const sessionId = `${store.id}_${body.tableId}_${Date.now()}`;
+
+        // Create payment order via Viva Smart Checkout API
+        console.log("[payment/checkout-url] creating Viva payment order", {
+          amount: body.amount,
+          orderId: sessionId,
+          tableId: body.tableId,
+          description: body.description || "Restaurant Order",
+        });
+
+        // Build return URL for after payment completion
+        // Prefer explicit FRONTEND_BASE_URL env var. Otherwise derive from headers/hostname
+        const frontendBase =
+          process.env.FRONTEND_BASE_URL ||
+          (() => {
+            const h = ((request.headers as any)["x-forwarded-host"] ||
+              (request.headers as any)["host"] ||
+              request.hostname) as string;
+            const hostOnly = String(h).split(":")[0];
+            const port = process.env.FRONTEND_PORT || "8080";
+            return `${request.protocol}://${hostOnly}${port ? `:${port}` : ""}`;
+          })();
+
+        const returnUrl = `${frontendBase}/payment-complete?sessionId=${sessionId}&tableId=${body.tableId}`;
+        console.log("[payment/checkout-url] return URL for Viva:", returnUrl);
+
+        const paymentSession = await createVivaPaymentOrder({
+          amount: body.amount,
+          orderId: sessionId,
+          tableId: body.tableId,
+          description: body.description || "Restaurant Order",
+          returnUrl: returnUrl,
+        });
+
+        console.log(
+          "[payment/checkout-url] Viva returned session:",
+          paymentSession
+        );
+
+        return reply.send({
+          checkoutUrl: paymentSession.checkoutUrl,
+          sessionId: sessionId,
+          amount: paymentSession.amount,
+          tableId: body.tableId,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Payment URL generation error:", error);
+        return reply
+          .status(500)
+          .send({ error: "Failed to generate payment URL" });
       }
     }
   );
