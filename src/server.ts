@@ -13,6 +13,7 @@ import { qrTileRoutes } from "./routes/qrTiles.js";
 import { publicMenuBootstrapRoutes } from "./routes/publicMenuBootstrap.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
+import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
 
 // Load local .env only for non-production environments.
 // In online deployments, rely solely on platform-provided env vars.
@@ -43,6 +44,7 @@ fastify.get("/health", async (request, reply) => {
 
 setupRealtimeGateway(fastify);
 getMqttClient();
+await ensureOrderPaymentColumns();
 
 // Register routes
 await fastify.register(authRoutes);
