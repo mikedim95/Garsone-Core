@@ -314,6 +314,7 @@ async function resetAll() {
     { label: "auditLogs", fn: () => prisma.auditLog.deleteMany() },
     { label: "profiles", fn: () => prisma.profile.deleteMany() },
 
+    { label: "kitchenTicketSeqs", fn: () => prisma.kitchenTicketSeq.deleteMany() },
     { label: "kitchenCounters", fn: () => prisma.kitchenCounter.deleteMany() },
     { label: "storeMeta", fn: () => prisma.storeMeta.deleteMany() },
     { label: "stores", fn: () => prisma.store.deleteMany() },

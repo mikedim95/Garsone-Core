@@ -802,16 +802,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
                   },
                 });
               }
-              const counter = await (tx as any).kitchenCounter.upsert({
+              const counter = await tx.kitchenTicketSeq.upsert({
                 where: { storeId_day: { storeId: store.id, day } },
-                create: {
-                  storeId: store.id,
-                  day,
-                  // keep slug/title populated to satisfy schema and avoid unique conflicts
-                  slug: `day-${day}`,
-                  title: `Daily counter ${day}`,
-                  seq: 1,
-                },
+                create: { storeId: store.id, day, seq: 1 },
                 update: { seq: { increment: 1 } },
                 select: { seq: true },
               });
