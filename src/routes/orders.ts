@@ -419,7 +419,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             modifiers: orderItem.orderItemOptions,
           })),
         };
-        const topicSlug = store.slug || STORE_SLUG;
+        const topicSlug = store.slug;
         publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
