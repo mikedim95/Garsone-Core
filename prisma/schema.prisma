@@ -316,12 +316,16 @@ model KitchenCounter {
   storeId   String   @db.Uuid
   slug      String   @db.VarChar(100)
   title     String   @db.VarChar(255)
+  // Daily sequence for kitchen tickets (YYYY-MM-DD)
+  day       String   @db.VarChar(10)
+  seq       Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamp(6)
   updatedAt DateTime @updatedAt @db.Timestamp(6)
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, slug])
+  @@unique([storeId, day])
   @@index([storeId])
   @@map("kitchen_counters")
 }
