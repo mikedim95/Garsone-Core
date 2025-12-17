@@ -1,0 +1,17 @@
+# Dev login links (Downtown Espresso)
+# Works when server is non-production or ENABLE_DEV_LOGIN=1
+# Hitting these issues a JWT and redirects to the Ops UI with ?token=... .
+
+Manager (manager@downtown-espresso.local)
+https://www.garsone.gr/auth/dev-login/downtown-espresso/manager
+
+Waiter 1 (waiter1@downtown-espresso.local)
+https://www.garsone.gr/auth/dev-login/downtown-espresso/waiter1
+
+Cook 1 (cook1@downtown-espresso.local)
+https://www.garsone.gr/auth/dev-login/downtown-espresso/cook1
+
+# Optional: get a raw token without redirect
+# append ?format=json, e.g.:
+# https://www.garsone.gr/auth/dev-login/downtown-espresso/manager?format=json
+
