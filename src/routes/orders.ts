@@ -1011,6 +1011,61 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // Public table orders (PLACED by default)
+  fastify.get(
+    "/public/table/:id/orders",
+    {
+      preHandler: [ipWhitelistMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            id: z.string().uuid(),
+          })
+          .parse(request.params ?? {});
+        const query = z
+          .object({
+            status: z.nativeEnum(OrderStatus).optional(),
+            take: z.coerce.number().int().positive().max(100).optional(),
+          })
+          .parse(request.query ?? {});
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+        const table = await db.table.findFirst({
+          where: { id: params.id, storeId: store.id },
+        });
+        if (!table) {
+          return reply.status(404).send({ error: "Table not found" });
+        }
+        const orders = await db.order.findMany({
+          where: {
+            storeId: store.id,
+            tableId: params.id,
+            ...(query.status ? { status: query.status } : {}),
+          },
+          orderBy: { placedAt: "desc" },
+          take: query.take ?? 20,
+          include: {
+            table: { select: { id: true, label: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
+          },
+        });
+        return reply.send({ orders: orders.map(serializeOrder) });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Public table orders error:", error);
+        return reply
+          .status(500)
+          .send({ error: "Failed to fetch table orders" });
+      }
+    }
+  );
+
   // Edit order (public device while still PLACED)
   fastify.patch(
     "/orders/:id",

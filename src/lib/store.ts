@@ -16,10 +16,11 @@ const STORE_CACHE_TTL_MS = 60_000; // 60s
 
 export function getRequestedStoreSlug(request?: any): string | undefined {
   const raw =
+    // Prefer authenticated user context to avoid stale client headers picking the wrong store
+    (request as any)?.user?.storeSlug ||
+    (request as any)?.storeSlug ||
     (request?.headers as any)?.['x-store-slug'] ||
     (request?.headers as any)?.['X-Store-Slug'] ||
-    (request as any)?.storeSlug ||
-    (request as any)?.user?.storeSlug ||
     undefined;
   if (typeof raw !== 'string') return undefined;
   const slug = raw.trim();
