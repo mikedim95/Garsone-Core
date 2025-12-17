@@ -740,6 +740,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           status: body.status,
           updatedAt: now,
         };
+        const broadcastToGuests = (suffix: string, payload: any) =>
+          publishMessage(`${store.slug}/${suffix}`, payload, {
+            anonymousOnly: true,
+            skipMqtt: true,
+          });
         const statusTimestampField = STATUS_TIMESTAMP_FIELDS[body.status];
         if (statusTimestampField) {
           updateData[statusTimestampField] = now;
@@ -849,10 +854,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             waiterIdsForOrder,
             { skipMqtt: true }
           );
-          publishMessage(`${topicBase}/orders/preparing`, payload, {
-            anonymousOnly: true,
-            skipMqtt: true,
-          });
+          broadcastToGuests("orders/preparing", payload);
         }
 
         if (body.status === OrderStatus.READY) {
@@ -879,6 +881,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             payload,
             waiterIdsForOrder
           );
+          broadcastToGuests("orders/ready", payload);
         }
 
         if (body.status === OrderStatus.CANCELLED) {
@@ -906,6 +909,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             waiterIdsForOrder,
             { skipMqtt: true }
           );
+          broadcastToGuests("orders/canceled", payload);
+          broadcastToGuests("orders/cancelled", payload);
         }
 
         if (body.status === OrderStatus.SERVED) {
@@ -933,6 +938,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             waiterIdsForOrder,
             { skipMqtt: true }
           );
+          broadcastToGuests("orders/served", payload);
         }
 
         if (body.status === OrderStatus.PAID) {
@@ -960,6 +966,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             waiterIdsForOrder,
             { skipMqtt: true }
           );
+          broadcastToGuests("orders/paid", payload);
         }
 
         return reply.send({ order: serializeOrder(updatedOrder) });
