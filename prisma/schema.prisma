@@ -16,21 +16,22 @@ model Store {
   createdAt    DateTime @default(now()) @db.Timestamp(6)
   updatedAt    DateTime @updatedAt @db.Timestamp(6)
 
-  auditLogs       AuditLog[]
-  categories      Category[]
-  itemModifiers   ItemModifier[]
-  items           Item[]
-  kitchenCounters KitchenCounter[]
-  modifierOptions ModifierOption[]
-  modifiers       Modifier[]
-  orders          Order[]
-  profiles        Profile[]
-  qrTiles         QRTile[]
-  storeMeta       StoreMeta?
-  tableVisits     TableVisit[]
-  tables          Table[]
-  waiterShifts    WaiterShift[]
-  waiterTables    WaiterTable[]
+  auditLogs         AuditLog[]
+  categories        Category[]
+  itemModifiers     ItemModifier[]
+  items             Item[]
+  kitchenCounters   KitchenCounter[]
+  kitchenTicketSeqs KitchenTicketSeq[]
+  modifierOptions   ModifierOption[]
+  modifiers         Modifier[]
+  orders            Order[]
+  profiles          Profile[]
+  qrTiles           QRTile[]
+  storeMeta         StoreMeta?
+  tableVisits       TableVisit[]
+  tables            Table[]
+  waiterShifts      WaiterShift[]
+  waiterTables      WaiterTable[]
 
   @@index([createdAt(sort: Desc)])
   @@map("stores")
@@ -324,6 +325,24 @@ model KitchenCounter {
   @@unique([storeId, slug])
   @@index([storeId])
   @@map("kitchen_counters")
+}
+
+model KitchenTicketSeq {
+  id      String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId String @db.Uuid
+
+  // YYYY-MM-DD (UTC), keeps it simple and avoids timezone bugs
+  day String @db.VarChar(10)
+  seq Int    @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, day])
+  @@index([storeId])
+  @@map("kitchen_ticket_seqs")
 }
 
 model WaiterShift {

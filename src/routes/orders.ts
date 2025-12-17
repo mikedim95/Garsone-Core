@@ -419,7 +419,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             modifiers: orderItem.orderItemOptions,
           })),
         };
-        const topicSlug = store.slug || STORE_SLUG;
+        const topicSlug = store.slug;
         publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
@@ -802,7 +802,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
                   },
                 });
               }
-              const counter = await (tx as any).kitchenCounter.upsert({
+              const counter = await tx.kitchenTicketSeq.upsert({
                 where: { storeId_day: { storeId: store.id, day } },
                 create: { storeId: store.id, day, seq: 1 },
                 update: { seq: { increment: 1 } },
