@@ -9,7 +9,7 @@
  * - Seeds central architect (architect@demo.local / changeme) with NON-NULL storeId:
  *     assigned to a RANDOM existing store id
  * - Progress bars
- * - No migrations
+ * - No migrationsqrqr
  * - Avoids nested relation writes for Order -> OrderItem (schema-name agnostic)
  */
 
