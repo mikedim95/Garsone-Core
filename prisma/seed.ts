@@ -480,6 +480,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
             titleEn: it.title,
             priceCents: it.priceCents,
             isAvailable: true,
+            imageUrl: it.imageUrl ?? null,
           },
           create: {
             storeId,
@@ -491,8 +492,10 @@ async function seedStoresAndData(qrAll: QrLine[]) {
             priceCents: it.priceCents,
             isAvailable: true,
             sortOrder: ii,
+            imageUrl: it.imageUrl ?? null,
           },
         });
+
         items.push({
           id: created.id,
           title: created.title,
