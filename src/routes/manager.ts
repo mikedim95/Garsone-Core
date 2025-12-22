@@ -28,17 +28,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({ error: "fileName and base64 are required" });
         }
 
-        const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ""), "base64");
-        const storeSlug = slugSegment(store.slug || "store") || "store";
-
-        // R2 config (S3-compatible)
-        const R2_ENDPOINT = process.env.R2_S3_ENDPOINT || ""; // e.g. https://<accountid>.r2.cloudflarestorage.com
-        const R2_BUCKET = process.env.R2_BUCKET || "";
-        const R2_ACCESS = process.env.R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY || "";
-        const R2_SECRET = process.env.R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_KEY || "";
-        const R2_PUBLIC = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
-        const R2_REGION = process.env.R2_REGION || "auto";
-
         const sanitizeSegment = (s: string) =>
           String(s || "")
             .replace(/[\r\n\t]+/g, " ")
@@ -53,6 +42,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
             .replace(/\s+/g, "-")
             .replace(/-+/g, "-")
             .replace(/^-+|-+$/g, "");
+
+        const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ""), "base64");
+        const storeSlug = slugSegment(store.slug || "store") || "store";
+
+        // R2 config (S3-compatible)
+        const R2_ENDPOINT = process.env.R2_S3_ENDPOINT || ""; // e.g. https://<accountid>.r2.cloudflarestorage.com
+        const R2_BUCKET = process.env.R2_BUCKET || "";
+        const R2_ACCESS = process.env.R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY || "";
+        const R2_SECRET = process.env.R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_KEY || "";
+        const R2_PUBLIC = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
+        const R2_REGION = process.env.R2_REGION || "auto";
 
         const extFrom = (name: string, mt: string) => {
           const dot = name.lastIndexOf(".");
