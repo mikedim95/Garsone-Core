@@ -6,11 +6,12 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { ensureStore } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { invalidateMenuCache } from "./menu.js";
+import { createHmac, createHash } from "node:crypto";
 
 export async function managerRoutes(fastify: FastifyInstance) {
   const managerOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
-  // Image upload via Supabase (service key). Body: { fileName, mimeType, base64, itemId? }
+  // Image upload to R2 (S3 API) if configured, otherwise fallback to Supabase. Body: { fileName, mimeType, base64, itemId? }
   fastify.post(
     "/manager/uploads/image",
     { preHandler: managerOnly },
@@ -24,38 +25,157 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const itemId = String(body?.itemId || "").trim();
 
         if (!fileName || !base64) {
-          return reply
-            .status(400)
-            .send({ error: "fileName and base64 are required" });
+          return reply.status(400).send({ error: "fileName and base64 are required" });
         }
 
+        const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ""), "base64");
+        const storeSlug = slugSegment(store.slug || "store") || "store";
+
+        // R2 config (S3-compatible)
+        const R2_ENDPOINT = process.env.R2_S3_ENDPOINT || ""; // e.g. https://<accountid>.r2.cloudflarestorage.com
+        const R2_BUCKET = process.env.R2_BUCKET || "";
+        const R2_ACCESS = process.env.R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY || "";
+        const R2_SECRET = process.env.R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_KEY || "";
+        const R2_PUBLIC = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
+        const R2_REGION = process.env.R2_REGION || "auto";
+
+        const sanitizeSegment = (s: string) =>
+          String(s || "")
+            .replace(/[\r\n\t]+/g, " ")
+            .replace(/[\\/]+/g, "-")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+            .slice(0, 120);
+
+        const slugSegment = (s: string) =>
+          sanitizeSegment(s)
+            .toLowerCase()
+            .replace(/\s+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "");
+
+        const extFrom = (name: string, mt: string) => {
+          const dot = name.lastIndexOf(".");
+          if (dot > -1 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase();
+          if (mt === "image/jpeg") return "jpg";
+          if (mt === "image/png") return "png";
+          if (mt === "image/webp") return "webp";
+          if (mt === "image/gif") return "gif";
+          return "bin";
+        };
+
+        const buildKey = async () => {
+          if (itemId) {
+            const item = await db.item.findFirst({
+              where: { id: itemId, storeId: store.id },
+              include: { category: true },
+            });
+            if (item) {
+              const categoryName = slugSegment(
+                (item.category as any)?.titleEn || (item.category as any)?.titleEl || (item.category as any)?.title || "Uncategorized"
+              );
+              const itemTitle = slugSegment(item.titleEn || item.title || "Item");
+              const ext = extFrom(fileName, mimeType);
+              const objectName = `${itemTitle}.${ext}`;
+              // Desired public URL example when bucket == store slug:
+              //   https://pub-xxx.r2.dev/<storeSlug>/<Category>/<Item>.jpg
+              // If bucket equals store slug, omit the store slug from the key to avoid duplication.
+              if (R2_BUCKET && slugSegment(R2_BUCKET) === storeSlug) {
+                return `${categoryName}/${objectName}`;
+              }
+              // Otherwise include store slug in the key under a shared bucket.
+              return `${storeSlug}/${categoryName}/${objectName}`;
+            }
+          }
+          const safeName = `${Date.now()}-${slugSegment(fileName.replace(/\.[^.]+$/, "")) || "upload"}.${extFrom(fileName, mimeType)}`;
+          return `${storeSlug}/${slugSegment("temp") || "temp"}/${safeName}`;
+        };
+
+        const tryR2 = async () => {
+          if (!R2_ENDPOINT || !R2_BUCKET || !R2_ACCESS || !R2_SECRET || !R2_PUBLIC) return null as null | { publicUrl: string; path: string };
+
+          const key = await buildKey();
+          const endpoint = R2_ENDPOINT.replace(/\/$/, "");
+          const url = `${endpoint}/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+
+          const now = new Date();
+          // AWS SigV4 timestamps: 20250101T120000Z
+          const iso = now.toISOString(); // e.g. 2025-12-22T12:34:56.789Z
+          const amzDate = iso.replace(/[:-]/g, "").replace(/\.\d{3}Z$/, "Z"); // 20251222T123456Z
+          const dateStamp = amzDate.slice(0, 8);
+          const host = new URL(endpoint).host;
+          const payloadHash = createHash("sha256").update(buffer).digest("hex");
+
+          const canonicalUri = `/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+          const canonicalQueryString = "";
+          const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+          const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+          const canonicalRequest = ["PUT", canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join("\n");
+
+          const algorithm = "AWS4-HMAC-SHA256";
+          const credentialScope = `${dateStamp}/${R2_REGION}/s3/aws4_request`;
+          const stringToSign = [
+            algorithm,
+            amzDate,
+            credentialScope,
+            createHash("sha256").update(canonicalRequest).digest("hex"),
+          ].join("\n");
+
+          const kDate = createHmac("sha256", Buffer.from("AWS4" + R2_SECRET)).update(dateStamp).digest();
+          const kRegion = createHmac("sha256", kDate).update(R2_REGION).digest();
+          const kService = createHmac("sha256", kRegion).update("s3").digest();
+          const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
+          const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+
+          const authorization = `${algorithm} Credential=${R2_ACCESS}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+          const res = await fetch(url, {
+            method: "PUT",
+            headers: {
+              host,
+              "x-amz-content-sha256": payloadHash,
+              "x-amz-date": amzDate,
+              Authorization: authorization,
+              "Content-Type": mimeType,
+            } as any,
+            body: buffer,
+          } as any);
+
+          if (!res.ok) {
+            const txt = await res.text();
+            fastify.log.error({ status: res.status, txt }, "R2 upload failed");
+            return null;
+          }
+
+          // If R2_PUBLIC points to https://pub-xxxx.r2.dev (no bucket), append /<bucket>/<key>.
+          // If it already includes the bucket path, we won't duplicate it.
+          const base = R2_PUBLIC.replace(/\/$/, "");
+          const needsBucket = !base.endsWith(`/${R2_BUCKET}`) && !base.includes(`/${R2_BUCKET}/`);
+          const publicUrl = `${base}${needsBucket ? `/${encodeURIComponent(R2_BUCKET)}` : ""}/${key
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`;
+          return { publicUrl, path: key };
+        };
+
+        const r2Result = await tryR2();
+        if (r2Result) {
+          return reply.send(r2Result);
+        }
+
+        // Fallback: Supabase storage
         const SUPA_URL = process.env.SUPABASE_URL;
-        const SUPA_KEY =
-          process.env.SUPABASE_SERVICE_ROLE_KEY ||
-          process.env.SUPABASE_SERVICE_KEY;
+        const SUPA_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
         const BUCKET = process.env.SUPABASE_BUCKET || "assets";
         if (!SUPA_URL || !SUPA_KEY) {
-          return reply
-            .status(500)
-            .send({ error: "Supabase service not configured on server" });
+          return reply.status(500).send({ error: "Upload failed: storage not configured" });
         }
 
-        const safeName = `${Date.now()}-${fileName.replace(
-          /[^a-zA-Z0-9_\.\-]/g,
-          "-"
-        )}`;
-        const path = `${store.slug}/${itemId || "temp"}/${safeName}`;
-        const url = `${SUPA_URL.replace(
-          /\/$/,
-          ""
-        )}/storage/v1/object/${BUCKET}/${path}`;
+        const safeName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9_\.\-]/g, "-")}`;
+        const supaPath = `${storeSlug}/${itemId || "temp"}/${safeName}`;
+        const supaUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/${BUCKET}/${supaPath}`;
 
-        const buffer = Buffer.from(
-          base64.replace(/^data:[^,]*,/, ""),
-          "base64"
-        );
-
-        const res = await fetch(url, {
+        const supaRes = await fetch(supaUrl, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${SUPA_KEY}`,
@@ -65,22 +185,14 @@ export async function managerRoutes(fastify: FastifyInstance) {
           body: buffer,
         } as any);
 
-        if (!res.ok) {
-          const txt = await res.text();
-          fastify.log.error(
-            { status: res.status, txt },
-            "Supabase upload failed"
-          );
-          return reply
-            .status(400)
-            .send({ error: "Upload failed", detail: txt });
+        if (!supaRes.ok) {
+          const txt = await supaRes.text();
+          fastify.log.error({ status: supaRes.status, txt }, "Supabase upload failed");
+          return reply.status(400).send({ error: "Upload failed", detail: txt });
         }
 
-        const publicUrl = `${SUPA_URL.replace(
-          /\/$/,
-          ""
-        )}/storage/v1/object/public/${BUCKET}/${path}`;
-        return reply.send({ publicUrl, path });
+        const publicUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/public/${BUCKET}/${supaPath}`;
+        return reply.send({ publicUrl, path: supaPath });
       } catch (e: any) {
         fastify.log.error(e, "Manager image upload error");
         return reply.status(500).send({ error: "Upload failed" });

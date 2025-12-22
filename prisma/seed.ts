@@ -127,65 +127,16 @@ type StoreConfig = {
   categories: {
     slug: string;
     title: string;
-    items: { slug: string; title: string; priceCents: number }[];
+    items: {
+      slug: string;
+      title: string;
+      priceCents: number;
+      imageUrl: string;
+    }[];
   }[];
 };
 
 const STORES: StoreConfig[] = [
-  {
-    slug: "downtown-espresso",
-    name: "Downtown Espresso Bar",
-    currencyCode: "EUR",
-    locale: "en",
-    profiles: [
-      {
-        email: "manager@downtown-espresso.local",
-        role: Role.MANAGER,
-        displayName: "Downtown Manager",
-      },
-      {
-        email: "waiter1@downtown-espresso.local",
-        role: Role.WAITER,
-        displayName: "Alex Waiter",
-      },
-      {
-        email: "cook1@downtown-espresso.local",
-        role: Role.COOK,
-        displayName: "Kitchen 1",
-      },
-    ],
-    categories: [
-      {
-        slug: "coffee",
-        title: "Coffee",
-        items: [
-          { slug: "espresso", title: "Espresso", priceCents: 220 },
-          {
-            slug: "double-espresso",
-            title: "Double Espresso",
-            priceCents: 280,
-          },
-          { slug: "cappuccino", title: "Cappuccino", priceCents: 340 },
-        ],
-      },
-      {
-        slug: "snacks",
-        title: "Snacks",
-        items: [
-          { slug: "croissant", title: "Croissant", priceCents: 250 },
-          { slug: "toast", title: "Toast", priceCents: 350 },
-        ],
-      },
-      {
-        slug: "soft-drinks",
-        title: "Soft Drinks",
-        items: [
-          { slug: "cola", title: "Cola", priceCents: 200 },
-          { slug: "water", title: "Water", priceCents: 100 },
-        ],
-      },
-    ],
-  },
   {
     slug: "harbor-breeze-lounge",
     name: "Harbor Breeze Lounge",
@@ -213,24 +164,60 @@ const STORES: StoreConfig[] = [
         slug: "cocktails",
         title: "Cocktails",
         items: [
-          { slug: "mojito", title: "Mojito", priceCents: 850 },
-          { slug: "spritz", title: "Spritz", priceCents: 900 },
+          {
+            slug: "mojito",
+            title: "Mojito",
+            priceCents: 850,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/cocktails/mohito.jpg",
+          },
+          {
+            slug: "spritz",
+            title: "Spritz",
+            priceCents: 900,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/cocktails/spritz.jpg",
+          },
         ],
       },
       {
         slug: "spirits",
         title: "Spirits",
         items: [
-          { slug: "gin-tonic", title: "Gin & Tonic", priceCents: 800 },
-          { slug: "whisky", title: "Whisky", priceCents: 900 },
+          {
+            slug: "gin-tonic",
+            title: "Gin & Tonic",
+            priceCents: 800,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/spirits/gin-tonic.jpg",
+          },
+          {
+            slug: "whisky",
+            title: "Whisky",
+            priceCents: 900,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/spirits/whisky.jpg",
+          },
         ],
       },
       {
         slug: "bar-snacks",
         title: "Bar Snacks",
         items: [
-          { slug: "nachos", title: "Nachos", priceCents: 650 },
-          { slug: "nuts", title: "Mixed Nuts", priceCents: 350 },
+          {
+            slug: "nachos",
+            title: "Nachos",
+            priceCents: 650,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/bar-snacks/nachos.jpeg",
+          },
+          {
+            slug: "nuts",
+            title: "Mixed Nuts",
+            priceCents: 350,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/harbor-breeze-lounge/bar-snacks/nuts.jpg",
+          },
         ],
       },
     ],
@@ -262,24 +249,60 @@ const STORES: StoreConfig[] = [
         slug: "souvlaki",
         title: "Souvlaki",
         items: [
-          { slug: "pita-pork", title: "Pita Pork", priceCents: 350 },
-          { slug: "pita-chicken", title: "Pita Chicken", priceCents: 380 },
+          {
+            slug: "pita-pork",
+            title: "Pita Pork",
+            priceCents: 350,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-pork.jpg",
+          },
+          {
+            slug: "pita-chicken",
+            title: "Pita Chicken",
+            priceCents: 380,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-chicken.jpg",
+          },
         ],
       },
       {
         slug: "plates",
         title: "Plates",
         items: [
-          { slug: "gyro-plate", title: "Gyro Plate", priceCents: 900 },
-          { slug: "mixed-grill", title: "Mixed Grill", priceCents: 1400 },
+          {
+            slug: "gyro-plate",
+            title: "Gyro Plate",
+            priceCents: 900,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/gyro-plate.jpg",
+          },
+          {
+            slug: "mixed-grill",
+            title: "Mixed Grill",
+            priceCents: 1400,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/mixed-grill.jpg",
+          },
         ],
       },
       {
         slug: "drinks",
         title: "Drinks",
         items: [
-          { slug: "cola", title: "Cola", priceCents: 200 },
-          { slug: "beer", title: "Beer", priceCents: 450 },
+          {
+            slug: "cola",
+            title: "Cola",
+            priceCents: 200,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/cola.jpg",
+          },
+          {
+            slug: "beer",
+            title: "Beer",
+            priceCents: 450,
+            imageUrl:
+              "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/beer.jpg",
+          },
         ],
       },
     ],
@@ -314,7 +337,10 @@ async function resetAll() {
     { label: "auditLogs", fn: () => prisma.auditLog.deleteMany() },
     { label: "profiles", fn: () => prisma.profile.deleteMany() },
 
-    { label: "kitchenTicketSeqs", fn: () => prisma.kitchenTicketSeq.deleteMany() },
+    {
+      label: "kitchenTicketSeqs",
+      fn: () => prisma.kitchenTicketSeq.deleteMany(),
+    },
     { label: "kitchenCounters", fn: () => prisma.kitchenCounter.deleteMany() },
     { label: "storeMeta", fn: () => prisma.storeMeta.deleteMany() },
     { label: "stores", fn: () => prisma.store.deleteMany() },

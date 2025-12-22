@@ -1,14 +1,4 @@
 # url,storeSlug,tableLabel,publicCode
-https://www.garsone.gr/publiccode/100001,downtown-espresso,T1,100001
-https://www.garsone.gr/publiccode/100002,downtown-espresso,T2,100002
-https://www.garsone.gr/publiccode/100003,downtown-espresso,T3,100003
-https://www.garsone.gr/publiccode/100004,downtown-espresso,T4,100004
-https://www.garsone.gr/publiccode/100005,downtown-espresso,T5,100005
-https://www.garsone.gr/publiccode/100006,downtown-espresso,T6,100006
-https://www.garsone.gr/publiccode/100007,downtown-espresso,T7,100007
-https://www.garsone.gr/publiccode/100008,downtown-espresso,T8,100008
-https://www.garsone.gr/publiccode/100009,downtown-espresso,T9,100009
-https://www.garsone.gr/publiccode/100010,downtown-espresso,T10,100010
 https://www.garsone.gr/publiccode/200001,harbor-breeze-lounge,T1,200001
 https://www.garsone.gr/publiccode/200002,harbor-breeze-lounge,T2,200002
 https://www.garsone.gr/publiccode/200003,harbor-breeze-lounge,T3,200003

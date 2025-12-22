@@ -1,15 +1,4 @@
 # storeSlug,tableLabel,publicCode
-downtown-espresso,T1,100001
-downtown-espresso,T2,100002
-downtown-espresso,T3,100003
-downtown-espresso,T4,100004
-downtown-espresso,T5,100005
-downtown-espresso,T6,100006
-downtown-espresso,T7,100007
-downtown-espresso,T8,100008
-downtown-espresso,T9,100009
-downtown-espresso,T10,100010
-
 harbor-breeze-lounge,T1,200001
 harbor-breeze-lounge,T2,200002
 harbor-breeze-lounge,T3,200003
