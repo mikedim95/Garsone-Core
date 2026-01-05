@@ -50,6 +50,20 @@ type OrderWithRelations = Prisma.OrderGetPayload<{
     orderItems: {
       include: {
         orderItemOptions: true;
+        item: {
+          select: {
+            id: true;
+            title: true;
+            categoryId: true;
+            category: {
+              select: {
+                title: true;
+                slug: true;
+                printerTopic: true;
+              };
+            };
+          };
+        };
       };
     };
   };
@@ -118,11 +132,26 @@ const ORDER_ITEM_INCLUDE = {
           select: {
             title: true,
             slug: true,
+            printerTopic: true,
           },
         },
       },
     },
   },
+};
+
+const normalizePrinterTopic = (
+  primary?: string | null,
+  fallback?: string | null
+) => {
+  const raw = (primary || fallback || "").trim().toLowerCase();
+  if (!raw) return "default";
+  const sanitized = raw
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 255);
+  return sanitized || "default";
 };
 
 const pickHeaderToken = (value: string | string[] | undefined) =>
@@ -167,6 +196,10 @@ function serializeOrder(order: OrderWithRelations) {
       itemId: orderItem.itemId,
       categoryId: (orderItem as any)?.item?.categoryId ?? null,
       categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
+      printerTopic: normalizePrinterTopic(
+        (orderItem as any)?.item?.category?.printerTopic,
+        (orderItem as any)?.item?.category?.slug
+      ),
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
@@ -219,6 +252,57 @@ function notifyWaiters(
     publishMessage(topic, payload, { ...baseOptions, userIds: waiterIds });
   } else {
     publishMessage(topic, payload, { ...baseOptions, roles: ["waiter"] });
+  }
+}
+
+function publishPrinterTopicsForOrder(
+  storeSlug: string,
+  order: OrderWithRelations,
+  status: OrderStatus,
+  options?: PublishOptions
+) {
+  const grouped = new Map<string, typeof order.orderItems>();
+  for (const oi of order.orderItems) {
+    const cat = (oi as any)?.item?.category;
+    const key = normalizePrinterTopic(cat?.printerTopic, cat?.slug);
+    const list = grouped.get(key) || [];
+    list.push(oi);
+    grouped.set(key, list);
+  }
+
+  if (grouped.size === 0) return;
+
+  const basePayload = {
+    orderId: order.id,
+    tableId: order.tableId,
+    tableLabel: order.table?.label ?? "",
+    ticketNumber: (order as any).ticketNumber ?? undefined,
+    status,
+    createdAt: order.createdAt,
+    ts: new Date().toISOString(),
+    note: order.note,
+    order: serializeOrder(order),
+  };
+
+  const statusSegment = String(status || OrderStatus.PLACED).toLowerCase();
+  for (const [printerKey, items] of grouped.entries()) {
+    const payload = {
+      ...basePayload,
+      printerTopic: printerKey,
+      items: items.map((oi) => ({
+        title: oi.titleSnapshot,
+        quantity: oi.quantity,
+        unitPriceCents: oi.unitPriceCents,
+        modifiers: oi.orderItemOptions,
+        categoryId: (oi as any)?.item?.categoryId ?? undefined,
+        categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+      })),
+    };
+    publishMessage(
+      `${storeSlug}/orders/${statusSegment}/${printerKey}`,
+      payload,
+      options
+    );
   }
 }
 
@@ -417,6 +501,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
             quantity: orderItem.quantity,
             unitPriceCents: orderItem.unitPriceCents,
             modifiers: orderItem.orderItemOptions,
+            categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
+            categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
+            printerTopic: normalizePrinterTopic(
+              (orderItem as any)?.item?.category?.printerTopic,
+              (orderItem as any)?.item?.category?.slug
+            ),
           })),
         };
         const topicSlug = store.slug;
@@ -664,11 +754,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           where: { id, storeId: store.id },
           include: {
             table: { select: { id: true, label: true } },
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
 
@@ -775,11 +861,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           data: updateData,
           include: {
             table: true,
-            orderItems: {
-              include: {
-                orderItemOptions: true,
-              },
-            },
+            orderItems: ORDER_ITEM_INCLUDE,
           },
         });
 
@@ -803,7 +885,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
                   where: { id },
                   include: {
                     table: true,
-                    orderItems: { include: { orderItemOptions: true } },
+                    orderItems: ORDER_ITEM_INCLUDE,
                   },
                 });
               }
@@ -818,7 +900,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
                 data: { ticketNumber: counter.seq },
                 include: {
                   table: true,
-                  orderItems: { include: { orderItemOptions: true } },
+                  orderItems: ORDER_ITEM_INCLUDE,
                 },
               });
             });
@@ -840,6 +922,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               quantity: oi.quantity,
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.category?.printerTopic,
+                (oi as any)?.item?.category?.slug
+              ),
             })),
             order: orderSnapshot,
           };
@@ -848,6 +936,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
             roles: ["cook"],
             ...(skipStatusMqtt ? { skipMqtt: true } : {}),
           });
+          publishPrinterTopicsForOrder(
+            topicBase,
+            updatedOrder as OrderWithRelations,
+            OrderStatus.PREPARING,
+            { roles: ["cook"], ...(skipStatusMqtt ? { skipMqtt: true } : {}) }
+          );
           notifyWaiters(
             `${topicBase}/orders/preparing`,
             payload,
@@ -870,6 +964,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               quantity: oi.quantity,
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.category?.printerTopic,
+                (oi as any)?.item?.category?.slug
+              ),
             })),
           };
           const topicBase = store.slug;
@@ -897,6 +997,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               quantity: oi.quantity,
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.category?.printerTopic,
+                (oi as any)?.item?.category?.slug
+              ),
             })),
           };
           const topicBase = store.slug;
@@ -926,6 +1032,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
               quantity: oi.quantity,
               unitPriceCents: oi.unitPriceCents,
               modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.category?.printerTopic,
+                (oi as any)?.item?.category?.slug
+              ),
             })),
           };
           const topicBase = store.slug;
@@ -1082,7 +1194,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
           include: {
-            orderItems: { include: { orderItemOptions: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
             table: true,
           },
         });
@@ -1184,6 +1296,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
             quantity: oi.quantity,
             unitPriceCents: oi.unitPriceCents,
             modifiers: oi.orderItemOptions,
+            categoryId: (oi as any)?.item?.categoryId ?? undefined,
+            categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+            printerTopic: normalizePrinterTopic(
+              (oi as any)?.item?.category?.printerTopic,
+              (oi as any)?.item?.category?.slug
+            ),
           })),
         };
         const topicBase = store.slug;
@@ -1245,12 +1363,24 @@ export async function orderRoutes(fastify: FastifyInstance) {
             quantity: oi.quantity,
             unitPriceCents: oi.unitPriceCents,
             modifiers: oi.orderItemOptions,
+            categoryId: (oi as any)?.item?.categoryId ?? undefined,
+            categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+            printerTopic: normalizePrinterTopic(
+              (oi as any)?.item?.category?.printerTopic,
+              (oi as any)?.item?.category?.slug
+            ),
           })),
           order: serializeOrder(order as any),
         };
         publishMessage(`${store.slug}/orders/preparing`, preparedPayload, {
           roles: ["cook"],
         });
+        publishPrinterTopicsForOrder(
+          store.slug,
+          order as OrderWithRelations,
+          OrderStatus.PREPARING,
+          { roles: ["cook"] }
+        );
         return reply.send({ success: true });
       } catch (error) {
         if (error instanceof z.ZodError) {

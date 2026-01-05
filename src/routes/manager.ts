@@ -1050,6 +1050,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   );
 
+  const normalizePrinterTopic = (value?: string | null) => {
+    const raw = (value || "").trim().toLowerCase();
+    if (!raw) return null;
+    const sanitized = raw
+      .replace(/[^a-z0-9:_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 255);
+    return sanitized || null;
+  };
+
   // Categories CRUD
   fastify.get(
     "/manager/categories",
@@ -1068,6 +1079,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
     sortOrder: z.number().int().optional(),
+    printerTopic: z.string().trim().min(1).max(255).optional(),
   });
   fastify.post(
     "/manager/categories",
@@ -1081,6 +1093,11 @@ export async function managerRoutes(fastify: FastifyInstance) {
           "-" +
           Math.random().toString(16).slice(2, 6)
         ).slice(0, 100);
+        const printerTopic =
+          normalizePrinterTopic(body.printerTopic) ??
+          normalizePrinterTopic(body.titleEn) ??
+          normalizePrinterTopic(slug) ??
+          slug;
         const cat = await db.category.create({
           data: {
             storeId: store.id,
@@ -1089,6 +1106,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             titleEl: body.titleEl,
             slug,
             sortOrder: body.sortOrder ?? 0,
+            printerTopic,
           },
         });
         return reply.status(201).send({ category: cat });
@@ -1107,6 +1125,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
     sortOrder: z.number().int().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.patch(
     "/manager/categories/:id",
@@ -1115,12 +1134,20 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = categoryUpdate.parse(request.body);
+        const normalizedPrinterTopic =
+          body.printerTopic === undefined
+            ? undefined
+            : normalizePrinterTopic(body.printerTopic);
         const data: any = { ...body };
         if (body.titleEn) {
           data.title = body.titleEn;
         } else if (body.title) {
           data.title = body.title;
           data.titleEn = body.title;
+          data.titleEl = body.title;
+        }
+        if (normalizedPrinterTopic !== undefined) {
+          data.printerTopic = normalizedPrinterTopic;
         }
         const updated = await db.category.update({ where: { id }, data });
         return reply.send({ category: updated });

@@ -13,6 +13,7 @@ type MenuPayload = {
     titleEn?: string | null;
     titleEl?: string | null;
     sortOrder?: number | null;
+    printerTopic?: string | null;
   }>;
   items: Array<{
     id: string;
@@ -109,6 +110,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
         title: true,
         titleEn: true,
         titleEl: true,
+        printerTopic: true,
         sortOrder: true,
         updatedAt: true,
       },
@@ -244,6 +246,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       titleEn: category.titleEn || category.title,
       titleEl: category.titleEl || category.title,
       sortOrder: category.sortOrder ?? undefined,
+      printerTopic: category.printerTopic ?? null,
     })),
     items: itemsResponse,
     modifiers: Array.from(modifierMap.values()),

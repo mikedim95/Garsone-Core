@@ -127,6 +127,7 @@ type StoreConfig = {
   categories: {
     slug: string;
     title: string;
+    printerTopic?: string;
     items: {
       slug: string;
       title: string;
@@ -451,12 +452,16 @@ async function seedStoresAndData(qrAll: QrLine[]) {
 
     for (let ci = 0; ci < cfg.categories.length; ci++) {
       const cat = cfg.categories[ci];
+      const printerTopic = (
+        cat.printerTopic || (ci % 2 === 0 ? "printer_1" : "printer_2")
+      ).slice(0, 255);
       const category = await prisma.category.upsert({
         where: { storeId_slug: { storeId, slug: cat.slug } },
         update: {
           title: cat.title,
           titleEl: cat.title,
           titleEn: cat.title,
+          printerTopic,
           sortOrder: ci,
         },
         create: {
@@ -465,6 +470,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
           title: cat.title,
           titleEl: cat.title,
           titleEn: cat.title,
+          printerTopic,
           sortOrder: ci,
         },
       });

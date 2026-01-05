@@ -73,6 +73,7 @@ const DEMO_MENU: {
   title: string;
   titleEl: string;
   titleEn: string;
+  printerTopic?: string;
   items: {
     slug: string;
     title: string;
@@ -369,6 +370,7 @@ async function onboardStore() {
         sortOrder: sortOrder++,
         titleEl: cat.titleEl,
         titleEn: cat.titleEn,
+        printerTopic: (cat.printerTopic || cat.slug).slice(0, 255),
       },
     });
 
