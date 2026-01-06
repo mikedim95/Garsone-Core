@@ -58,7 +58,12 @@ export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
       );
 
       const payload: BootstrapPayload = {
-        store: { id: store.id, slug: store.slug, name: store.name },
+        store: {
+          id: store.id,
+          slug: store.slug,
+          name: store.name,
+          orderingMode: (store as any).orderingMode,
+        },
         table: table ? { id: table.id, label: table.label } : null,
         menu: menuResult.payload,
       };

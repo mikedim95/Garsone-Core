@@ -2,6 +2,15 @@ import { db } from '../db/index.js';
 
 export const STORE_SLUG = (process.env.STORE_SLUG || 'default-store').trim();
 
+export type OrderingMode = 'qr' | 'waiter' | 'hybrid';
+const DEFAULT_ORDERING_MODE: OrderingMode = 'qr';
+
+const normalizeOrderingMode = (value?: unknown): OrderingMode => {
+  if (value === 'waiter') return 'waiter';
+  if (value === 'hybrid') return 'hybrid';
+  return DEFAULT_ORDERING_MODE;
+};
+
 type CachedStore = {
   id: string;
   slug: string;
@@ -9,10 +18,15 @@ type CachedStore = {
   settingsJson?: any;
   createdAt?: Date;
   updatedAt?: Date;
+  orderingMode?: OrderingMode;
   ts: number;
 };
 const storeCache = new Map<string, CachedStore>();
 const STORE_CACHE_TTL_MS = 60_000; // 60s
+export const invalidateStoreCache = (slug: string) => {
+  if (!slug) return;
+  storeCache.delete(slug);
+};
 
 export function getRequestedStoreSlug(request?: any): string | undefined {
   const raw =
@@ -55,7 +69,7 @@ export async function ensureStore(slugOrRequest?: string | any) {
       data: {
         slug,
         name: 'Garsone Offline Demo',
-        settingsJson: {},
+        settingsJson: { orderingMode: DEFAULT_ORDERING_MODE },
       },
       select: { id: true, slug: true, name: true, settingsJson: true, updatedAt: true, createdAt: true },
     });
@@ -74,6 +88,11 @@ export async function ensureStore(slugOrRequest?: string | any) {
     store = created;
   }
 
-  storeCache.set(slug, { ...store, ts: now });
-  return store;
+  const orderingMode = normalizeOrderingMode((store.settingsJson || {}).orderingMode);
+
+  storeCache.set(slug, { ...store, orderingMode, ts: now });
+  return { ...store, orderingMode };
 }
+
+export const getOrderingMode = (store?: { settingsJson?: any; orderingMode?: OrderingMode }) =>
+  normalizeOrderingMode(store?.orderingMode || store?.settingsJson?.orderingMode);

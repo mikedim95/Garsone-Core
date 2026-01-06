@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
-import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
+import { ensureStore, getOrderingMode, getRequestedStoreSlug } from "../lib/store.js";
 import { verifyToken } from "../lib/jwt.js";
 
 import {
@@ -154,6 +154,7 @@ export async function storeRoutes(fastify: FastifyInstance) {
           id: store.id,
           slug: store.slug,
           name: store.name,
+          orderingMode: getOrderingMode(store),
           settings: store.settingsJson,
         },
         meta: meta

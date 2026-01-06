@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
@@ -240,10 +241,63 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     { preHandler: adminOnly },
     async (_request, reply) => {
       const stores = await db.store.findMany({
-        select: { id: true, slug: true, name: true },
+        select: { id: true, slug: true, name: true, settingsJson: true },
         orderBy: { name: "asc" },
       });
-      return reply.send({ stores });
+      return reply.send({
+        stores: stores.map((s) => ({
+          id: s.id,
+          slug: s.slug,
+          name: s.name,
+          orderingMode: getOrderingMode(s as any),
+        })),
+      });
+    }
+  );
+
+  fastify.patch(
+    "/admin/stores/:storeId/ordering-mode",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      const { storeId } = request.params as { storeId: string };
+      const body = z
+        .object({
+          orderingMode: z.enum(["qr", "waiter", "hybrid"]),
+        })
+        .parse(request.body ?? {});
+
+      const store = await db.store.findUnique({
+        where: { id: storeId },
+        select: { id: true, settingsJson: true },
+      });
+      if (!store) {
+        return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+      }
+
+      const nextSettings = {
+        ...(store.settingsJson && typeof store.settingsJson === "object"
+          ? store.settingsJson
+          : {}),
+        orderingMode: body.orderingMode,
+      };
+
+      const updated = await db.store.update({
+        where: { id: storeId },
+        data: { settingsJson: nextSettings },
+        select: { id: true, slug: true, name: true, settingsJson: true },
+      });
+
+      invalidateStoreCache(updated.slug);
+
+      return reply.send({
+        store: {
+          id: updated.id,
+          slug: updated.slug,
+          name: updated.name,
+          orderingMode: getOrderingMode(updated as any),
+          settings: updated.settingsJson,
+        },
+      });
     }
   );
 
