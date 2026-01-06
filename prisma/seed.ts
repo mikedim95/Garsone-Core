@@ -123,6 +123,7 @@ type StoreConfig = {
   name: string;
   currencyCode: string;
   locale: string;
+  orderingMode: "qr" | "waiter" | "hybrid";
   profiles: { email: string; role: Role; displayName: string }[];
   categories: {
     slug: string;
@@ -143,6 +144,7 @@ const STORES: StoreConfig[] = [
     name: "Harbor Breeze Lounge",
     currencyCode: "EUR",
     locale: "en",
+    orderingMode: "qr",
     profiles: [
       {
         email: "manager@harbor-breeze.local",
@@ -228,6 +230,7 @@ const STORES: StoreConfig[] = [
     name: "Acropolis Street Food",
     currencyCode: "EUR",
     locale: "el",
+    orderingMode: "hybrid",
     profiles: [
       {
         email: "manager@acropolis-street.local",
@@ -364,8 +367,8 @@ async function seedStoresAndData(qrAll: QrLine[]) {
 
     const store = await prisma.store.upsert({
       where: { slug: cfg.slug },
-      update: { name: cfg.name },
-      create: { slug: cfg.slug, name: cfg.name, settingsJson: {} },
+      update: { name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode } },
+      create: { slug: cfg.slug, name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode } },
     });
     const storeId = store.id;
     storeIds.push(storeId);
