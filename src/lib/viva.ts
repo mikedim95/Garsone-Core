@@ -151,19 +151,25 @@ export async function createVivaPaymentOrder(
   request: VivaPaymentRequest
 ): Promise<VivaPaymentSession> {
   try {
+    if (request.amount <= 0) {
+      throw new Error("Payment amount must be greater than zero");
+    }
+
+    // Viva requires smallest currency unit (e.g., cents for EUR)
     const amountCents = Math.round(request.amount * 100);
+    const currencyCode = Number(process.env.VIVA_CURRENCY_CODE || 978); // 978 = EUR
 
     // Create payment order via Viva API
     // POST /checkout/v2/orders
     const orderPayload: Record<string, unknown> = {
       amount: amountCents,
+      currencyCode,
       customerTrns: request.description,
       merchantTrns: `Order ${request.orderId}`,
       sourceCode: VIVA_SOURCE_CODE,
       paymentTimeout: 300, // 5 minutes
       preauth: false,
       allowRecurring: false,
-      disableExactAmount: true,
       disableCash: true,
       customer: {
         email: request.customerEmail || "customer@example.com",

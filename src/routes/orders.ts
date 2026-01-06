@@ -1462,9 +1462,16 @@ export async function orderRoutes(fastify: FastifyInstance) {
           .object({
             tableId: z.string().uuid(),
             amount: z.number().positive(),
+            amountCents: z.number().int().positive().optional(),
             description: z.string().optional(),
           })
           .parse(request.body);
+
+        const normalizedAmountCents =
+          typeof body.amountCents === "number"
+            ? body.amountCents
+            : Math.round(body.amount * 100);
+        const normalizedAmount = normalizedAmountCents / 100;
 
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
@@ -1482,7 +1489,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         // Create payment order via Viva Smart Checkout API
         console.log("[payment/checkout-url] creating Viva payment order", {
-          amount: body.amount,
+          amount: normalizedAmount,
+          amountCents: normalizedAmountCents,
           orderId: sessionId,
           tableId: body.tableId,
           description: body.description || "Restaurant Order",
@@ -1505,7 +1513,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         console.log("[payment/checkout-url] return URL for Viva:", returnUrl);
 
         const paymentSession = await createVivaPaymentOrder({
-          amount: body.amount,
+          amount: normalizedAmount,
           orderId: sessionId,
           tableId: body.tableId,
           description: body.description || "Restaurant Order",
