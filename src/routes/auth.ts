@@ -3,7 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { signToken } from "../lib/jwt.js";
-import { ensureStore, getRequestedStoreSlug } from "../lib/store.js";
+import { ensureStore, getRequestedStoreSlug, getOrderingMode } from "../lib/store.js";
 
 const signinSchema = z.object({
   email: z.string().email(),
@@ -17,7 +17,7 @@ export async function authRoutes(fastify: FastifyInstance) {
       const email = body.email.toLowerCase();
 
       const requestedSlug = getRequestedStoreSlug(request);
-      let store = requestedSlug ? await ensureStore(requestedSlug) : null;
+      let store: Awaited<ReturnType<typeof ensureStore>> | null = requestedSlug ? await ensureStore(requestedSlug) : null;
 
       // Try store-scoped lookup first if slug was provided, otherwise fall back to global unique email lookup.
       let user = store
@@ -31,9 +31,16 @@ export async function authRoutes(fastify: FastifyInstance) {
         if (user && user.storeId) {
           // ensure we have the store that owns this profile
           if (!store || store.id !== user.storeId) {
-            store = await db.store.findUnique({
+            const found = await db.store.findUnique({
               where: { id: user.storeId },
             });
+            if (found) {
+              // Align shape with ensureStore by attaching orderingMode
+              store = {
+                ...found,
+                orderingMode: getOrderingMode(found as any),
+              } as any;
+            }
           }
         }
       }

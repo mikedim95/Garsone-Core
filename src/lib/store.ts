@@ -18,7 +18,7 @@ type CachedStore = {
   settingsJson?: any;
   createdAt?: Date;
   updatedAt?: Date;
-  orderingMode?: OrderingMode;
+  orderingMode: OrderingMode;
   ts: number;
 };
 const storeCache = new Map<string, CachedStore>();
@@ -88,11 +88,11 @@ export async function ensureStore(slugOrRequest?: string | any) {
     store = created;
   }
 
-  const orderingMode = normalizeOrderingMode((store.settingsJson || {}).orderingMode);
+  const orderingMode = normalizeOrderingMode((store.settingsJson as any)?.orderingMode);
 
   storeCache.set(slug, { ...store, orderingMode, ts: now });
   return { ...store, orderingMode };
 }
 
 export const getOrderingMode = (store?: { settingsJson?: any; orderingMode?: OrderingMode }) =>
-  normalizeOrderingMode(store?.orderingMode || store?.settingsJson?.orderingMode);
+  normalizeOrderingMode((store as any)?.orderingMode || (store as any)?.settingsJson?.orderingMode);

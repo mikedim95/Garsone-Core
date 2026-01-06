@@ -1,12 +1,12 @@
 import { FastifyInstance } from "fastify";
-import { ensureStore } from "../lib/store.js";
+import { ensureStore, OrderingMode } from "../lib/store.js";
 import { db } from "../db/index.js";
 import { getMenuPayload } from "../lib/menuService.js";
 import { applyCacheHeaders, buildEtag, isNotModified } from "../lib/httpCache.js";
 import { createLruCache } from "../lib/lru.js";
 
 type BootstrapPayload = {
-  store: { id: string; slug: string; name: string };
+  store: { id: string; slug: string; name: string; orderingMode: OrderingMode };
   table: { id: string; label: string } | null;
   menu: Awaited<ReturnType<typeof getMenuPayload>>["payload"];
 };
