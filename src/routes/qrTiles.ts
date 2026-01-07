@@ -250,6 +250,11 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           slug: s.slug,
           name: s.name,
           orderingMode: getOrderingMode(s as any),
+          printers:
+            Array.isArray((s as any)?.settingsJson?.printers) &&
+            ((s as any).settingsJson.printers as any[]).every((p) => typeof p === "string")
+              ? ((s as any).settingsJson.printers as string[])
+              : [],
         })),
       });
     }
@@ -279,6 +284,60 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           ? store.settingsJson
           : {}),
         orderingMode: body.orderingMode,
+      };
+
+      const updated = await db.store.update({
+        where: { id: storeId },
+        data: { settingsJson: nextSettings },
+        select: { id: true, slug: true, name: true, settingsJson: true },
+      });
+
+      invalidateStoreCache(updated.slug);
+
+      return reply.send({
+        store: {
+          id: updated.id,
+          slug: updated.slug,
+          name: updated.name,
+          orderingMode: getOrderingMode(updated as any),
+          settings: updated.settingsJson,
+        },
+      });
+    }
+  );
+
+  fastify.patch(
+    "/admin/stores/:storeId/printers",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      const { storeId } = request.params as { storeId: string };
+      const body = z
+        .object({
+          printers: z
+            .array(z.string().trim().max(255))
+            .transform((arr) =>
+              Array.from(
+                new Set(
+                  arr
+                    .map((p) => p.trim())
+                    .filter((p) => p.length > 0)
+                )
+              )
+            ),
+        })
+        .parse(request.body ?? {});
+
+      const store = await db.store.findUnique({
+        where: { id: storeId },
+        select: { id: true, slug: true, name: true, settingsJson: true },
+      });
+      if (!store) {
+        return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+      }
+
+      const nextSettings = {
+        ...(store.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson : {}),
+        printers: body.printers,
       };
 
       const updated = await db.store.update({

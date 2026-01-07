@@ -124,7 +124,17 @@ type StoreConfig = {
   currencyCode: string;
   locale: string;
   orderingMode: "qr" | "waiter" | "hybrid";
+  printers?: string[];
   profiles: { email: string; role: Role; displayName: string }[];
+  modifiers?: {
+    slug: string;
+    title: string;
+    minSelect?: number;
+    maxSelect?: number | null;
+    required?: boolean;
+    itemSlugs: string[];
+    options: { slug: string; title: string; priceDeltaCents?: number }[];
+  }[];
   categories: {
     slug: string;
     title: string;
@@ -145,6 +155,47 @@ const STORES: StoreConfig[] = [
     currencyCode: "EUR",
     locale: "en",
     orderingMode: "qr",
+    printers: ["printer_1", "printer_2"],
+    modifiers: [
+      {
+        slug: "ice-level",
+        title: "Ice level",
+        minSelect: 1,
+        maxSelect: 1,
+        required: true,
+        itemSlugs: ["mojito", "spritz", "gin-tonic", "whisky"],
+        options: [
+          { slug: "normal-ice", title: "Normal ice" },
+          { slug: "light-ice", title: "Light ice" },
+          { slug: "no-ice", title: "No ice" },
+        ],
+      },
+      {
+        slug: "garnish",
+        title: "Garnish",
+        minSelect: 0,
+        maxSelect: 2,
+        required: false,
+        itemSlugs: ["mojito", "spritz", "gin-tonic", "whisky"],
+        options: [
+          { slug: "lime", title: "Lime wedge", priceDeltaCents: 0 },
+          { slug: "mint", title: "Mint leaves", priceDeltaCents: 0 },
+          { slug: "orange", title: "Orange peel", priceDeltaCents: 0 },
+        ],
+      },
+      {
+        slug: "snack-addons",
+        title: "Snacks add-ons",
+        minSelect: 0,
+        maxSelect: 2,
+        required: false,
+        itemSlugs: ["nachos", "nuts"],
+        options: [
+          { slug: "extra-cheese", title: "Extra cheese", priceDeltaCents: 80 },
+          { slug: "jalapenos", title: "Jalapeños", priceDeltaCents: 60 },
+        ],
+      },
+    ],
     profiles: [
       {
         email: "manager@harbor-breeze.local",
@@ -231,6 +282,48 @@ const STORES: StoreConfig[] = [
     currencyCode: "EUR",
     locale: "el",
     orderingMode: "hybrid",
+    printers: ["printer_1", "printer_2"],
+    modifiers: [
+      {
+        slug: "sauce",
+        title: "Sauce",
+        minSelect: 1,
+        maxSelect: 1,
+        required: true,
+        itemSlugs: ["pita-pork", "pita-chicken", "gyro-plate", "mixed-grill"],
+        options: [
+          { slug: "tzatziki", title: "Tzatziki" },
+          { slug: "spicy", title: "Spicy" },
+          { slug: "mustard", title: "Mustard" },
+        ],
+      },
+      {
+        slug: "extras",
+        title: "Extras",
+        minSelect: 0,
+        maxSelect: 2,
+        required: false,
+        itemSlugs: ["pita-pork", "pita-chicken", "gyro-plate", "mixed-grill"],
+        options: [
+          { slug: "extra-fries", title: "Extra fries", priceDeltaCents: 150 },
+          { slug: "extra-pita", title: "Extra pita", priceDeltaCents: 100 },
+          { slug: "feta", title: "Feta topping", priceDeltaCents: 120 },
+        ],
+      },
+      {
+        slug: "drink-ice",
+        title: "Ice level",
+        minSelect: 1,
+        maxSelect: 1,
+        required: true,
+        itemSlugs: ["cola", "beer"],
+        options: [
+          { slug: "regular-ice", title: "Regular ice" },
+          { slug: "light-ice", title: "Light ice" },
+          { slug: "no-ice", title: "No ice" },
+        ],
+      },
+    ],
     profiles: [
       {
         email: "manager@acropolis-street.local",
@@ -365,10 +458,20 @@ async function seedStoresAndData(qrAll: QrLine[]) {
     const cfg = STORES[si];
     section(`Store ${si + 1}/${STORES.length}: ${cfg.slug}`);
 
+    const categoryPrinters = Array.from(
+      new Set(
+        (cfg.categories ?? [])
+          .map((c) => c.printerTopic)
+          .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+          .map((p) => p.trim())
+      )
+    );
+    const printerList = cfg.printers && cfg.printers.length > 0 ? cfg.printers : categoryPrinters;
+
     const store = await prisma.store.upsert({
       where: { slug: cfg.slug },
-      update: { name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode } },
-      create: { slug: cfg.slug, name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode } },
+      update: { name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode, printers: printerList } },
+      create: { slug: cfg.slug, name: cfg.name, settingsJson: { orderingMode: cfg.orderingMode, printers: printerList } },
     });
     const storeId = store.id;
     storeIds.push(storeId);
@@ -451,7 +554,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
     }
 
     // categories + items
-    const items: Array<{ id: string; title: string; priceCents: number }> = [];
+    const items: Array<{ id: string; title: string; priceCents: number; slug: string }> = [];
 
     for (let ci = 0; ci < cfg.categories.length; ci++) {
       const cat = cfg.categories[ci];
@@ -509,10 +612,89 @@ async function seedStoresAndData(qrAll: QrLine[]) {
           id: created.id,
           title: created.title,
           priceCents: created.priceCents,
+          slug: it.slug,
         });
       }
 
       bar("store:categories", ci + 1, cfg.categories.length);
+    }
+
+    // modifiers + options + item links
+    const itemBySlug = new Map(items.map((it) => [it.slug, it]));
+    const modifiers = cfg.modifiers ?? [];
+    for (let mi = 0; mi < modifiers.length; mi++) {
+      const mod = modifiers[mi];
+      const minSelect = typeof mod.minSelect === "number" ? mod.minSelect : 0;
+      const maxSelect = typeof mod.maxSelect === "number" ? mod.maxSelect : mod.maxSelect === null ? null : 1;
+
+      const modifier = await prisma.modifier.upsert({
+        where: { storeId_slug: { storeId, slug: mod.slug } },
+        update: {
+          title: mod.title,
+          titleEl: mod.title,
+          titleEn: mod.title,
+          minSelect,
+          maxSelect: maxSelect === null ? null : maxSelect,
+          isAvailable: true,
+        },
+        create: {
+          storeId,
+          slug: mod.slug,
+          title: mod.title,
+          titleEl: mod.title,
+          titleEn: mod.title,
+          minSelect,
+          maxSelect: maxSelect === null ? null : maxSelect,
+          isAvailable: true,
+        },
+      });
+
+      for (let oi = 0; oi < mod.options.length; oi++) {
+        const opt = mod.options[oi];
+        await prisma.modifierOption.upsert({
+          where: {
+            storeId_modifierId_slug: {
+              storeId,
+              modifierId: modifier.id,
+              slug: opt.slug,
+            },
+          },
+          update: {
+            title: opt.title,
+            titleEl: opt.title,
+            titleEn: opt.title,
+            priceDeltaCents: opt.priceDeltaCents ?? 0,
+            sortOrder: oi,
+          },
+          create: {
+            storeId,
+            modifierId: modifier.id,
+            slug: opt.slug,
+            title: opt.title,
+            titleEl: opt.title,
+            titleEn: opt.title,
+            priceDeltaCents: opt.priceDeltaCents ?? 0,
+            sortOrder: oi,
+          },
+        });
+      }
+
+      const uniqueItemSlugs = Array.from(new Set(mod.itemSlugs || []));
+      for (const itemSlug of uniqueItemSlugs) {
+        const item = itemBySlug.get(itemSlug);
+        if (!item) continue;
+        await prisma.itemModifier.upsert({
+          where: { itemId_modifierId: { itemId: item.id, modifierId: modifier.id } },
+          update: { isRequired: mod.required ?? false },
+          create: {
+            storeId,
+            itemId: item.id,
+            modifierId: modifier.id,
+            isRequired: mod.required ?? false,
+          },
+        });
+      }
+      bar("store:modifiers", mi + 1, modifiers.length);
     }
 
     // a couple OPEN visits
