@@ -300,6 +300,11 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           slug: updated.slug,
           name: updated.name,
           orderingMode: getOrderingMode(updated as any),
+          printers:
+            Array.isArray((updated as any)?.settingsJson?.printers) &&
+            ((updated as any).settingsJson.printers as any[]).every((p) => typeof p === "string")
+              ? ((updated as any).settingsJson.printers as string[])
+              : [],
           settings: updated.settingsJson,
         },
       });
