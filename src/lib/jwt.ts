@@ -11,6 +11,10 @@ export interface JWTPayload {
   role: "waiter" | "manager" | "cook" | "architect";
   storeId: string;
   storeSlug: string;
+  cookTypeId?: string | null;
+  waiterTypeId?: string | null;
+  cookTypePrinterTopic?: string | null;
+  waiterTypePrinterTopic?: string | null;
 }
 
 export function signToken(payload: JWTPayload): string {

@@ -117,6 +117,27 @@ function sessionToken64(): string {
   return crypto.randomBytes(32).toString("hex"); // 64 chars
 }
 
+function normalizeSlug(value: string) {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return "";
+  return raw
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100);
+}
+
+function normalizePrinterTopic(value?: string | null, fallback?: string | null) {
+  const raw = (value || fallback || "").trim().toLowerCase();
+  if (!raw) return null;
+  const sanitized = raw
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 255);
+  return sanitized || null;
+}
+
 // ===== seed config =====
 type StoreConfig = {
   slug: string;
@@ -125,7 +146,15 @@ type StoreConfig = {
   locale: string;
   orderingMode: "qr" | "waiter" | "hybrid";
   printers?: string[];
-  profiles: { email: string; role: Role; displayName: string }[];
+  cookTypes?: { slug: string; title: string; printerTopic?: string }[];
+  waiterTypes?: { slug: string; title: string; printerTopic?: string }[];
+  profiles: {
+    email: string;
+    role: Role;
+    displayName: string;
+    cookTypeSlug?: string;
+    waiterTypeSlug?: string;
+  }[];
   modifiers?: {
     slug: string;
     title: string;
@@ -196,6 +225,14 @@ const STORES: StoreConfig[] = [
         ],
       },
     ],
+    cookTypes: [
+      { slug: "bar", title: "Bar Station", printerTopic: "bar" },
+      { slug: "snacks", title: "Snacks Station", printerTopic: "snacks" },
+    ],
+    waiterTypes: [
+      { slug: "drinks", title: "Drinks Service", printerTopic: "bar" },
+      { slug: "snacks", title: "Snack Service", printerTopic: "snacks" },
+    ],
     profiles: [
       {
         email: "manager@harbor-breeze.local",
@@ -206,17 +243,32 @@ const STORES: StoreConfig[] = [
         email: "waiter1@harbor-breeze.local",
         role: Role.WAITER,
         displayName: "Maria Waiter",
+        waiterTypeSlug: "drinks",
+      },
+      {
+        email: "waiter2@harbor-breeze.local",
+        role: Role.WAITER,
+        displayName: "Nikos Waiter",
+        waiterTypeSlug: "snacks",
       },
       {
         email: "cook1@harbor-breeze.local",
         role: Role.COOK,
         displayName: "Bar Kitchen",
+        cookTypeSlug: "bar",
+      },
+      {
+        email: "cook2@harbor-breeze.local",
+        role: Role.COOK,
+        displayName: "Snack Kitchen",
+        cookTypeSlug: "snacks",
       },
     ],
     categories: [
       {
         slug: "cocktails",
         title: "Cocktails",
+        printerTopic: "bar",
         items: [
           {
             slug: "mojito",
@@ -237,6 +289,7 @@ const STORES: StoreConfig[] = [
       {
         slug: "spirits",
         title: "Spirits",
+        printerTopic: "bar",
         items: [
           {
             slug: "gin-tonic",
@@ -257,6 +310,7 @@ const STORES: StoreConfig[] = [
       {
         slug: "bar-snacks",
         title: "Bar Snacks",
+        printerTopic: "snacks",
         items: [
           {
             slug: "nachos",
@@ -324,6 +378,14 @@ const STORES: StoreConfig[] = [
         ],
       },
     ],
+    cookTypes: [
+      { slug: "grill", title: "Grill Station", printerTopic: "grill" },
+      { slug: "bar", title: "Drinks Station", printerTopic: "bar" },
+    ],
+    waiterTypes: [
+      { slug: "food", title: "Food Service", printerTopic: "grill" },
+      { slug: "drinks", title: "Drinks Service", printerTopic: "bar" },
+    ],
     profiles: [
       {
         email: "manager@acropolis-street.local",
@@ -334,17 +396,32 @@ const STORES: StoreConfig[] = [
         email: "waiter1@acropolis-street.local",
         role: Role.WAITER,
         displayName: "Giannis Waiter",
+        waiterTypeSlug: "food",
+      },
+      {
+        email: "waiter2@acropolis-street.local",
+        role: Role.WAITER,
+        displayName: "Eleni Waiter",
+        waiterTypeSlug: "drinks",
       },
       {
         email: "cook1@acropolis-street.local",
         role: Role.COOK,
         displayName: "Grill Master",
+        cookTypeSlug: "grill",
+      },
+      {
+        email: "cook2@acropolis-street.local",
+        role: Role.COOK,
+        displayName: "Bar Prep",
+        cookTypeSlug: "bar",
       },
     ],
     categories: [
       {
         slug: "souvlaki",
         title: "Souvlaki",
+        printerTopic: "grill",
         items: [
           {
             slug: "pita-pork",
@@ -365,6 +442,7 @@ const STORES: StoreConfig[] = [
       {
         slug: "plates",
         title: "Plates",
+        printerTopic: "grill",
         items: [
           {
             slug: "gyro-plate",
@@ -385,6 +463,7 @@ const STORES: StoreConfig[] = [
       {
         slug: "drinks",
         title: "Drinks",
+        printerTopic: "bar",
         items: [
           {
             slug: "cola",
@@ -433,6 +512,8 @@ async function resetAll() {
 
     { label: "auditLogs", fn: () => prisma.auditLog.deleteMany() },
     { label: "profiles", fn: () => prisma.profile.deleteMany() },
+    { label: "waiterTypes", fn: () => prisma.waiterType.deleteMany() },
+    { label: "cookTypes", fn: () => prisma.cookType.deleteMany() },
 
     {
       label: "kitchenTicketSeqs",
@@ -482,10 +563,56 @@ async function seedStoresAndData(qrAll: QrLine[]) {
       create: { storeId, currencyCode: cfg.currencyCode, locale: cfg.locale },
     });
 
+    const cookTypesBySlug = new Map<string, { id: string; slug: string }>();
+    if (cfg.cookTypes?.length) {
+      for (let i = 0; i < cfg.cookTypes.length; i++) {
+        const type = cfg.cookTypes[i];
+        const slug = normalizeSlug(type.slug || type.title) || `cook-${i + 1}`;
+        const printerTopic =
+          normalizePrinterTopic(type.printerTopic, slug) ?? slug;
+        const cooked = await prisma.cookType.upsert({
+          where: { storeId_slug: { storeId, slug } },
+          update: { title: type.title, printerTopic },
+          create: { storeId, slug, title: type.title, printerTopic },
+        });
+        cookTypesBySlug.set(slug, { id: cooked.id, slug: cooked.slug });
+        bar("store:cookTypes", i + 1, cfg.cookTypes.length);
+      }
+    }
+
+    const waiterTypesBySlug = new Map<string, { id: string; slug: string }>();
+    if (cfg.waiterTypes?.length) {
+      for (let i = 0; i < cfg.waiterTypes.length; i++) {
+        const type = cfg.waiterTypes[i];
+        const slug = normalizeSlug(type.slug || type.title) || `waiter-${i + 1}`;
+        const printerTopic =
+          normalizePrinterTopic(type.printerTopic, slug) ?? slug;
+        const created = await prisma.waiterType.upsert({
+          where: { storeId_slug: { storeId, slug } },
+          update: { title: type.title, printerTopic },
+          create: { storeId, slug, title: type.title, printerTopic },
+        });
+        waiterTypesBySlug.set(slug, { id: created.id, slug: created.slug });
+        bar("store:waiterTypes", i + 1, cfg.waiterTypes.length);
+      }
+    }
+
     // store-scoped profiles (all pass = changeme)
     const pw = await hashPassword("changeme");
     for (let i = 0; i < cfg.profiles.length; i++) {
       const p = cfg.profiles[i];
+      const cookTypeId =
+        p.role === Role.COOK
+          ? cookTypesBySlug.get(normalizeSlug(p.cookTypeSlug || ""))?.id ||
+            Array.from(cookTypesBySlug.values())[0]?.id ||
+            null
+          : null;
+      const waiterTypeId =
+        p.role === Role.WAITER
+          ? waiterTypesBySlug.get(normalizeSlug(p.waiterTypeSlug || ""))?.id ||
+            Array.from(waiterTypesBySlug.values())[0]?.id ||
+            null
+          : null;
       await prisma.profile.upsert({
         where: { storeId_email: { storeId, email: p.email } },
         update: {
@@ -493,6 +620,11 @@ async function seedStoresAndData(qrAll: QrLine[]) {
           displayName: p.displayName,
           passwordHash: pw,
           isVerified: true,
+          ...(p.role === Role.COOK ? { cookTypeId, waiterTypeId: null } : {}),
+          ...(p.role === Role.WAITER ? { waiterTypeId, cookTypeId: null } : {}),
+          ...(p.role !== Role.COOK && p.role !== Role.WAITER
+            ? { cookTypeId: null, waiterTypeId: null }
+            : {}),
         },
         create: {
           storeId,
@@ -501,6 +633,8 @@ async function seedStoresAndData(qrAll: QrLine[]) {
           displayName: p.displayName,
           passwordHash: pw,
           isVerified: true,
+          ...(p.role === Role.COOK ? { cookTypeId, waiterTypeId: null } : {}),
+          ...(p.role === Role.WAITER ? { waiterTypeId, cookTypeId: null } : {}),
         },
       });
       bar("store:profiles", i + 1, cfg.profiles.length);

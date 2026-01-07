@@ -23,11 +23,15 @@ export async function authRoutes(fastify: FastifyInstance) {
       let user = store
         ? await db.profile.findFirst({
             where: { email, storeId: store.id },
+            include: { cookType: true, waiterType: true },
           })
         : null;
 
       if (!user) {
-        user = await db.profile.findFirst({ where: { email } });
+        user = await db.profile.findFirst({
+          where: { email },
+          include: { cookType: true, waiterType: true },
+        });
         if (user && user.storeId) {
           // ensure we have the store that owns this profile
           if (!store || store.id !== user.storeId) {
@@ -73,6 +77,10 @@ export async function authRoutes(fastify: FastifyInstance) {
         role,
         storeId: store.id,
         storeSlug: store.slug,
+        cookTypeId: user.cookTypeId ?? null,
+        waiterTypeId: user.waiterTypeId ?? null,
+        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
       return reply.send({
@@ -84,6 +92,24 @@ export async function authRoutes(fastify: FastifyInstance) {
           displayName: user.displayName,
           storeId: store.id,
           storeSlug: store.slug,
+          cookTypeId: user.cookTypeId ?? null,
+          waiterTypeId: user.waiterTypeId ?? null,
+          cookType: user.cookType
+            ? {
+                id: user.cookType.id,
+                slug: user.cookType.slug,
+                title: user.cookType.title,
+                printerTopic: user.cookType.printerTopic,
+              }
+            : null,
+          waiterType: user.waiterType
+            ? {
+                id: user.waiterType.id,
+                slug: user.waiterType.slug,
+                title: user.waiterType.title,
+                printerTopic: user.waiterType.printerTopic,
+              }
+            : null,
         },
       });
     } catch (error) {
@@ -125,6 +151,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
       const user = await db.profile.findFirst({
         where: { storeId: store.id, email },
+        include: { cookType: true, waiterType: true },
       });
 
       if (!user) {
@@ -146,6 +173,10 @@ export async function authRoutes(fastify: FastifyInstance) {
         role,
         storeId: store.id,
         storeSlug: store.slug,
+        cookTypeId: user.cookTypeId ?? null,
+        waiterTypeId: user.waiterTypeId ?? null,
+        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
       // Optionally return JSON for programmatic usage
@@ -160,6 +191,24 @@ export async function authRoutes(fastify: FastifyInstance) {
             displayName: user.displayName,
             storeId: store.id,
             storeSlug: store.slug,
+            cookTypeId: user.cookTypeId ?? null,
+            waiterTypeId: user.waiterTypeId ?? null,
+            cookType: user.cookType
+              ? {
+                  id: user.cookType.id,
+                  slug: user.cookType.slug,
+                  title: user.cookType.title,
+                  printerTopic: user.cookType.printerTopic,
+                }
+              : null,
+            waiterType: user.waiterType
+              ? {
+                  id: user.waiterType.id,
+                  slug: user.waiterType.slug,
+                  title: user.waiterType.title,
+                  printerTopic: user.waiterType.printerTopic,
+                }
+              : null,
           },
         });
       }

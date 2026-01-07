@@ -12,7 +12,10 @@ const assignmentSchema = z.object({
 });
 
 type WaiterTableWithRelations = Prisma.WaiterTableGetPayload<{
-  include: { waiter: true; table: { select: { id: true; label: true; isActive: true } } };
+  include: {
+    waiter: { include: { waiterType: true } };
+    table: { select: { id: true; label: true; isActive: true } };
+  };
 }>;
 
 function serializeAssignment(assignment: WaiterTableWithRelations) {
@@ -23,6 +26,15 @@ function serializeAssignment(assignment: WaiterTableWithRelations) {
       id: assignment.waiter.id,
       email: assignment.waiter.email,
       displayName: assignment.waiter.displayName ?? assignment.waiter.email,
+      waiterTypeId: assignment.waiter.waiterTypeId ?? null,
+      waiterType: assignment.waiter.waiterType
+        ? {
+            id: assignment.waiter.waiterType.id,
+            slug: assignment.waiter.waiterType.slug,
+            title: assignment.waiter.waiterType.title,
+            printerTopic: assignment.waiter.waiterType.printerTopic,
+          }
+        : null,
     },
     table: {
       id: assignment.table.id,
@@ -48,7 +60,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
           db.waiterTable.findMany({
             where: { storeId: store.id },
             include: { 
-              waiter: true, 
+              waiter: { include: { waiterType: true } }, 
               table: { select: { id: true, label: true, isActive: true } },
             },
             orderBy: { createdAt: "asc" },
@@ -56,6 +68,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
           db.profile.findMany({
             where: { storeId: store.id, role: Role.WAITER },
             orderBy: { displayName: "asc" },
+            include: { waiterType: true },
           }),
           db.table.findMany({
             where: { storeId: store.id },
@@ -69,6 +82,15 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
             id: waiter.id,
             email: waiter.email,
             displayName: waiter.displayName ?? waiter.email,
+            waiterTypeId: waiter.waiterTypeId ?? null,
+            waiterType: waiter.waiterType
+              ? {
+                  id: waiter.waiterType.id,
+                  slug: waiter.waiterType.slug,
+                  title: waiter.waiterType.title,
+                  printerTopic: waiter.waiterType.printerTopic,
+                }
+              : null,
           })),
           tables: tables.map((table) => ({
             id: table.id,

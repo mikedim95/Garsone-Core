@@ -673,12 +673,55 @@ export async function orderRoutes(fastify: FastifyInstance) {
             orderItems: ORDER_ITEM_INCLUDE,
           },
         });
-        const placedDates = ordersData
+        let filteredOrders = ordersData;
+        if (actor?.role === "cook") {
+          const rawPrinterTopic =
+            typeof (actor as any)?.cookTypePrinterTopic === "string"
+              ? String((actor as any).cookTypePrinterTopic)
+              : "";
+          let allowedPrinterTopic = rawPrinterTopic
+            ? normalizePrinterTopic(rawPrinterTopic)
+            : null;
+          if (
+            !allowedPrinterTopic &&
+            typeof (actor as any)?.cookTypeId === "string"
+          ) {
+            const cookType = await db.cookType.findFirst({
+              where: {
+                id: (actor as any).cookTypeId,
+                storeId: store.id,
+              },
+            });
+            if (cookType) {
+              allowedPrinterTopic = normalizePrinterTopic(
+                cookType.printerTopic,
+                cookType.slug
+              );
+            }
+          }
+          if (allowedPrinterTopic) {
+            filteredOrders = ordersData
+              .map((order) => {
+                const items = order.orderItems.filter((oi) => {
+                  const cat = (oi as any)?.item?.category;
+                  const topic = normalizePrinterTopic(
+                    cat?.printerTopic,
+                    cat?.slug
+                  );
+                  return topic === allowedPrinterTopic;
+                });
+                if (items.length === 0) return null;
+                return { ...order, orderItems: items } as typeof order;
+              })
+              .filter((order): order is typeof ordersData[number] => Boolean(order));
+          }
+        }
+        const placedDates = filteredOrders
           .map((o) => o.placedAt || o.createdAt)
           .filter(Boolean)
           .map((d) => new Date(d as Date).toISOString())
           .sort();
-        const tableStats = ordersData.reduce<Record<string, number>>(
+        const tableStats = filteredOrders.reduce<Record<string, number>>(
           (acc, o) => {
             const label = (o as any)?.table?.label ?? o.tableId ?? "unknown";
             acc[label] = (acc[label] ?? 0) + 1;
@@ -686,7 +729,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
           {}
         );
-        const categoryStats = ordersData.reduce<Record<string, number>>(
+        const categoryStats = filteredOrders.reduce<Record<string, number>>(
           (acc, o) => {
             (o.orderItems || []).forEach((oi) => {
               const cat =
@@ -701,7 +744,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         );
         console.log(
           "[orders:list] returned",
-          ordersData.length,
+          filteredOrders.length,
           "firstDate",
           placedDates[0],
           "lastDate",
@@ -729,7 +772,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             : undefined;
 
         return reply.send({
-          orders: ordersData.map(serializeOrder),
+          orders: filteredOrders.map(serializeOrder),
           shift: shiftResponse,
         });
       } catch (error) {

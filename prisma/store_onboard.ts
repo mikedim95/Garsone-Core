@@ -56,6 +56,16 @@ const NEW_STORE_CONFIG = {
     email: "cook@random-test-store.local",
     displayName: "Head Cook",
   },
+  cookType: {
+    slug: "kitchen",
+    title: "Kitchen",
+    printerTopic: "kitchen",
+  },
+  waiterType: {
+    slug: "floor",
+    title: "Floor",
+    printerTopic: "kitchen",
+  },
 
   // All 3 profiles will use this password.
   defaultPassword: "changeme",
@@ -66,6 +76,7 @@ const CREATE_DEMO_MENU_AND_ORDERS = true;
 
 // How many days back to create sample orders (if enabled)
 const DAYS_BACK = 60;
+const DEMO_PRINTER_TOPIC = "kitchen";
 
 // Simple demo menu used when CREATE_DEMO_MENU_AND_ORDERS === true.
 const DEMO_MENU: {
@@ -209,6 +220,27 @@ function randFromArray<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function normalizeSlug(value: string) {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return "";
+  return raw
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100);
+}
+
+function normalizePrinterTopic(value?: string | null, fallback?: string | null) {
+  const raw = (value || fallback || "").trim().toLowerCase();
+  if (!raw) return null;
+  const sanitized = raw
+    .replace(/[^a-z0-9:_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 255);
+  return sanitized || null;
+}
+
 function randomTimeOnDay(base: Date): Date {
   const d = new Date(base);
   d.setHours(0, 0, 0, 0);
@@ -266,6 +298,46 @@ async function onboardStore() {
     },
   });
 
+  const cookTypeConfig = cfg.cookType;
+  const cookTypeSlug = cookTypeConfig
+    ? normalizeSlug(cookTypeConfig.slug || cookTypeConfig.title || "cook")
+    : "";
+  const cookType =
+    cookTypeConfig && cookTypeSlug
+      ? await prisma.cookType.create({
+          data: {
+            storeId,
+            slug: cookTypeSlug,
+            title: cookTypeConfig.title,
+            printerTopic:
+              normalizePrinterTopic(
+                cookTypeConfig.printerTopic,
+                cookTypeSlug
+              ) ?? cookTypeSlug,
+          },
+        })
+      : null;
+
+  const waiterTypeConfig = cfg.waiterType;
+  const waiterTypeSlug = waiterTypeConfig
+    ? normalizeSlug(waiterTypeConfig.slug || waiterTypeConfig.title || "waiter")
+    : "";
+  const waiterType =
+    waiterTypeConfig && waiterTypeSlug
+      ? await prisma.waiterType.create({
+          data: {
+            storeId,
+            slug: waiterTypeSlug,
+            title: waiterTypeConfig.title,
+            printerTopic:
+              normalizePrinterTopic(
+                waiterTypeConfig.printerTopic,
+                waiterTypeSlug
+              ) ?? waiterTypeSlug,
+          },
+        })
+      : null;
+
   // Profiles (manager, waiter, cook)
   const passwordHash = await bcrypt.hash(cfg.defaultPassword, 10);
 
@@ -288,6 +360,7 @@ async function onboardStore() {
       role: Role.WAITER,
       displayName: cfg.waiter.displayName,
       isVerified: true,
+      waiterTypeId: waiterType?.id ?? null,
     },
   });
 
@@ -299,6 +372,7 @@ async function onboardStore() {
       role: Role.COOK,
       displayName: cfg.cook.displayName,
       isVerified: true,
+      cookTypeId: cookType?.id ?? null,
     },
   });
 
@@ -370,7 +444,10 @@ async function onboardStore() {
         sortOrder: sortOrder++,
         titleEl: cat.titleEl,
         titleEn: cat.titleEn,
-        printerTopic: (cat.printerTopic || cat.slug).slice(0, 255),
+        printerTopic: (
+          normalizePrinterTopic(cat.printerTopic, DEMO_PRINTER_TOPIC || cat.slug) ||
+          cat.slug
+        ).slice(0, 255),
       },
     });
 

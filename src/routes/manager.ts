@@ -411,6 +411,213 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   );
 
+  const normalizeSlug = (value: string) => {
+    const raw = (value || "").trim().toLowerCase();
+    if (!raw) return "";
+    return raw
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 100);
+  };
+
+  const normalizePrinterTopic = (value?: string | null) => {
+    const raw = (value || "").trim().toLowerCase();
+    if (!raw) return null;
+    const sanitized = raw
+      .replace(/[^a-z0-9:_-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 255);
+    return sanitized || null;
+  };
+
+  // Cook types CRUD
+  fastify.get(
+    "/manager/cook-types",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      const store = await ensureStore(request);
+      const types = await db.cookType.findMany({
+        where: { storeId: store.id },
+        orderBy: { title: "asc" },
+      });
+      return reply.send({ types });
+    }
+  );
+
+  const cookTypeCreate = z.object({
+    title: z.string().min(1),
+    printerTopic: z.string().trim().min(1).max(255).optional(),
+  });
+  fastify.post(
+    "/manager/cook-types",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = cookTypeCreate.parse(request.body);
+        const store = await ensureStore(request);
+        const slugBase = normalizeSlug(body.title);
+        const slug =
+          slugBase || `cook-${Math.random().toString(16).slice(2, 6)}`;
+        const printerTopic =
+          normalizePrinterTopic(body.printerTopic) ??
+          normalizePrinterTopic(body.title) ??
+          slug;
+        const created = await db.cookType.create({
+          data: { storeId: store.id, slug, title: body.title, printerTopic },
+        });
+        return reply.status(201).send({ type: created });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply.status(500).send({ error: "Failed to create cook type" });
+      }
+    }
+  );
+
+  const cookTypeUpdate = z.object({
+    title: z.string().min(1).optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
+  });
+  fastify.patch(
+    "/manager/cook-types/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        const body = cookTypeUpdate.parse(request.body);
+        const data: any = {};
+        if (body.title) data.title = body.title;
+        if (body.printerTopic !== undefined) {
+          data.printerTopic =
+            body.printerTopic === null
+              ? null
+              : normalizePrinterTopic(body.printerTopic);
+        }
+        const updated = await db.cookType.update({ where: { id }, data });
+        return reply.send({ type: updated });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply.status(500).send({ error: "Failed to update cook type" });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/manager/cook-types/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        await db.cookType.delete({ where: { id } });
+        return reply.send({ success: true });
+      } catch {
+        return reply.status(500).send({ error: "Failed to delete cook type" });
+      }
+    }
+  );
+
+  // Waiter types CRUD
+  fastify.get(
+    "/manager/waiter-types",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      const store = await ensureStore(request);
+      const types = await db.waiterType.findMany({
+        where: { storeId: store.id },
+        orderBy: { title: "asc" },
+      });
+      return reply.send({ types });
+    }
+  );
+
+  const waiterTypeCreate = z.object({
+    title: z.string().min(1),
+    printerTopic: z.string().trim().min(1).max(255).optional(),
+  });
+  fastify.post(
+    "/manager/waiter-types",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = waiterTypeCreate.parse(request.body);
+        const store = await ensureStore(request);
+        const slugBase = normalizeSlug(body.title);
+        const slug =
+          slugBase || `waiter-${Math.random().toString(16).slice(2, 6)}`;
+        const printerTopic =
+          normalizePrinterTopic(body.printerTopic) ??
+          normalizePrinterTopic(body.title) ??
+          slug;
+        const created = await db.waiterType.create({
+          data: { storeId: store.id, slug, title: body.title, printerTopic },
+        });
+        return reply.status(201).send({ type: created });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply
+          .status(500)
+          .send({ error: "Failed to create waiter type" });
+      }
+    }
+  );
+
+  const waiterTypeUpdate = z.object({
+    title: z.string().min(1).optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
+  });
+  fastify.patch(
+    "/manager/waiter-types/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        const body = waiterTypeUpdate.parse(request.body);
+        const data: any = {};
+        if (body.title) data.title = body.title;
+        if (body.printerTopic !== undefined) {
+          data.printerTopic =
+            body.printerTopic === null
+              ? null
+              : normalizePrinterTopic(body.printerTopic);
+        }
+        const updated = await db.waiterType.update({ where: { id }, data });
+        return reply.send({ type: updated });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply
+          .status(500)
+          .send({ error: "Failed to update waiter type" });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/manager/waiter-types/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        await db.waiterType.delete({ where: { id } });
+        return reply.send({ success: true });
+      } catch {
+        return reply.status(500).send({ error: "Failed to delete waiter type" });
+      }
+    }
+  );
+
   // Waiters CRUD
   fastify.get(
     "/manager/waiters",
@@ -420,12 +627,22 @@ export async function managerRoutes(fastify: FastifyInstance) {
       const waiters = await db.profile.findMany({
         where: { storeId: store.id, role: "WAITER" },
         orderBy: { displayName: "asc" },
+        include: { waiterType: true },
       });
       return reply.send({
         waiters: waiters.map((w) => ({
           id: w.id,
           email: w.email,
           displayName: w.displayName,
+          waiterTypeId: w.waiterTypeId,
+          waiterType: w.waiterType
+            ? {
+                id: w.waiterType.id,
+                slug: w.waiterType.slug,
+                title: w.waiterType.title,
+                printerTopic: w.waiterType.printerTopic,
+              }
+            : null,
         })),
       });
     }
@@ -435,6 +652,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email(),
     password: z.string().min(6),
     displayName: z.string().min(1),
+    waiterTypeId: z.string().uuid().optional(),
   });
   fastify.post(
     "/manager/waiters",
@@ -443,6 +661,14 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const body = waiterCreateSchema.parse(request.body);
         const store = await ensureStore(request);
+        const waiterType = body.waiterTypeId
+          ? await db.waiterType.findFirst({
+              where: { id: body.waiterTypeId, storeId: store.id },
+            })
+          : null;
+        if (body.waiterTypeId && !waiterType) {
+          return reply.status(404).send({ error: "Waiter type not found" });
+        }
         const passwordHash = await bcrypt.hash(body.password, 10);
         const waiter = await db.profile.create({
           data: {
@@ -451,13 +677,24 @@ export async function managerRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: "WAITER",
             displayName: body.displayName,
+            waiterTypeId: waiterType?.id ?? null,
           },
+          include: { waiterType: true },
         });
         return reply.status(201).send({
           waiter: {
             id: waiter.id,
             email: waiter.email,
             displayName: waiter.displayName,
+            waiterTypeId: waiter.waiterTypeId,
+            waiterType: waiter.waiterType
+              ? {
+                  id: waiter.waiterType.id,
+                  slug: waiter.waiterType.slug,
+                  title: waiter.waiterType.title,
+                  printerTopic: waiter.waiterType.printerTopic,
+                }
+              : null,
           },
         });
       } catch (e) {
@@ -474,6 +711,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email().optional(),
     password: z.string().min(6).optional(),
     displayName: z.string().min(1).optional(),
+    waiterTypeId: z.string().uuid().nullable().optional(),
   });
   fastify.patch(
     "/manager/waiters/:id",
@@ -482,17 +720,46 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = waiterUpdateSchema.parse(request.body);
+        const store = await ensureStore(request);
         const data: any = {};
         if (body.email) data.email = body.email.toLowerCase();
         if (body.displayName) data.displayName = body.displayName;
         if (body.password)
           data.passwordHash = await bcrypt.hash(body.password, 10);
-        const updated = await db.profile.update({ where: { id }, data });
+        if (body.waiterTypeId !== undefined) {
+          if (body.waiterTypeId === null) {
+            data.waiterTypeId = null;
+          } else {
+            const waiterType = await db.waiterType.findFirst({
+              where: { id: body.waiterTypeId, storeId: store.id },
+            });
+            if (!waiterType) {
+              return reply
+                .status(404)
+                .send({ error: "Waiter type not found" });
+            }
+            data.waiterTypeId = waiterType.id;
+          }
+        }
+        const updated = await db.profile.update({
+          where: { id },
+          data,
+          include: { waiterType: true },
+        });
         return reply.send({
           waiter: {
             id: updated.id,
             email: updated.email,
             displayName: updated.displayName,
+            waiterTypeId: updated.waiterTypeId,
+            waiterType: updated.waiterType
+              ? {
+                  id: updated.waiterType.id,
+                  slug: updated.waiterType.slug,
+                  title: updated.waiterType.title,
+                  printerTopic: updated.waiterType.printerTopic,
+                }
+              : null,
           },
         });
       } catch (e) {
@@ -515,6 +782,174 @@ export async function managerRoutes(fastify: FastifyInstance) {
         return reply.send({ success: true });
       } catch {
         return reply.status(500).send({ error: "Failed to delete waiter" });
+      }
+    }
+  );
+
+  // Cooks CRUD
+  fastify.get(
+    "/manager/cooks",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      const store = await ensureStore(request);
+      const cooks = await db.profile.findMany({
+        where: { storeId: store.id, role: "COOK" },
+        orderBy: { displayName: "asc" },
+        include: { cookType: true },
+      });
+      return reply.send({
+        cooks: cooks.map((c) => ({
+          id: c.id,
+          email: c.email,
+          displayName: c.displayName,
+          cookTypeId: c.cookTypeId,
+          cookType: c.cookType
+            ? {
+                id: c.cookType.id,
+                slug: c.cookType.slug,
+                title: c.cookType.title,
+                printerTopic: c.cookType.printerTopic,
+              }
+            : null,
+        })),
+      });
+    }
+  );
+
+  const cookCreateSchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+    displayName: z.string().min(1),
+    cookTypeId: z.string().uuid().optional(),
+  });
+  fastify.post(
+    "/manager/cooks",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = cookCreateSchema.parse(request.body);
+        const store = await ensureStore(request);
+        const cookType = body.cookTypeId
+          ? await db.cookType.findFirst({
+              where: { id: body.cookTypeId, storeId: store.id },
+            })
+          : null;
+        if (body.cookTypeId && !cookType) {
+          return reply.status(404).send({ error: "Cook type not found" });
+        }
+        const passwordHash = await bcrypt.hash(body.password, 10);
+        const cook = await db.profile.create({
+          data: {
+            storeId: store.id,
+            email: body.email.toLowerCase(),
+            passwordHash,
+            role: "COOK",
+            displayName: body.displayName,
+            cookTypeId: cookType?.id ?? null,
+          },
+          include: { cookType: true },
+        });
+        return reply.status(201).send({
+          cook: {
+            id: cook.id,
+            email: cook.email,
+            displayName: cook.displayName,
+            cookTypeId: cook.cookTypeId,
+            cookType: cook.cookType
+              ? {
+                  id: cook.cookType.id,
+                  slug: cook.cookType.slug,
+                  title: cook.cookType.title,
+                  printerTopic: cook.cookType.printerTopic,
+                }
+              : null,
+          },
+        });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply.status(500).send({ error: "Failed to create cook" });
+      }
+    }
+  );
+
+  const cookUpdateSchema = z.object({
+    email: z.string().email().optional(),
+    password: z.string().min(6).optional(),
+    displayName: z.string().min(1).optional(),
+    cookTypeId: z.string().uuid().nullable().optional(),
+  });
+  fastify.patch(
+    "/manager/cooks/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        const body = cookUpdateSchema.parse(request.body);
+        const store = await ensureStore(request);
+        const data: any = {};
+        if (body.email) data.email = body.email.toLowerCase();
+        if (body.displayName) data.displayName = body.displayName;
+        if (body.password)
+          data.passwordHash = await bcrypt.hash(body.password, 10);
+        if (body.cookTypeId !== undefined) {
+          if (body.cookTypeId === null) {
+            data.cookTypeId = null;
+          } else {
+            const cookType = await db.cookType.findFirst({
+              where: { id: body.cookTypeId, storeId: store.id },
+            });
+            if (!cookType) {
+              return reply
+                .status(404)
+                .send({ error: "Cook type not found" });
+            }
+            data.cookTypeId = cookType.id;
+          }
+        }
+        const updated = await db.profile.update({
+          where: { id },
+          data,
+          include: { cookType: true },
+        });
+        return reply.send({
+          cook: {
+            id: updated.id,
+            email: updated.email,
+            displayName: updated.displayName,
+            cookTypeId: updated.cookTypeId,
+            cookType: updated.cookType
+              ? {
+                  id: updated.cookType.id,
+                  slug: updated.cookType.slug,
+                  title: updated.cookType.title,
+                  printerTopic: updated.cookType.printerTopic,
+                }
+              : null,
+          },
+        });
+      } catch (e) {
+        if (e instanceof z.ZodError)
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: e.errors });
+        return reply.status(500).send({ error: "Failed to update cook" });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/manager/cooks/:id",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const { id } = request.params as { id: string };
+        await db.profile.delete({ where: { id } });
+        return reply.send({ success: true });
+      } catch {
+        return reply.status(500).send({ error: "Failed to delete cook" });
       }
     }
   );
@@ -1049,17 +1484,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
       }
     }
   );
-
-  const normalizePrinterTopic = (value?: string | null) => {
-    const raw = (value || "").trim().toLowerCase();
-    if (!raw) return null;
-    const sanitized = raw
-      .replace(/[^a-z0-9:_-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 255);
-    return sanitized || null;
-  };
 
   // Categories CRUD
   fastify.get(
