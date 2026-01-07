@@ -148,8 +148,8 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
             waiterId: waiter.id,
             tableId: table.id,
           },
-          include: { 
-            waiter: true, 
+          include: {
+            waiter: { include: { waiterType: true } },
             table: { select: { id: true, label: true, isActive: true } },
           },
         });
@@ -246,7 +246,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
         const assignments = await db.waiterTable.findMany({
           where: { storeId: store.id, waiterId },
           include: {
-            waiter: true,
+            waiter: { include: { waiterType: true } },
             table: { select: { id: true, label: true, isActive: true } },
           },
           orderBy: { createdAt: "asc" },
