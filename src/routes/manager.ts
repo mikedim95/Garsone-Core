@@ -432,6 +432,32 @@ export async function managerRoutes(fastify: FastifyInstance) {
     return sanitized || null;
   };
 
+  const getStorePrinters = (store: { settingsJson?: any }) => {
+    const raw = (store as any)?.settingsJson?.printers;
+    if (!Array.isArray(raw)) return [] as string[];
+    return raw
+      .map((printer) =>
+        normalizePrinterTopic(typeof printer === "string" ? printer : null)
+      )
+      .filter((printer): printer is string => Boolean(printer));
+  };
+
+  const ensurePrinterTopicAllowed = (
+    store: { settingsJson?: any },
+    value?: string | null
+  ) => {
+    const normalized = normalizePrinterTopic(value);
+    if (!normalized) return null;
+    const storePrinters = getStorePrinters(store);
+    if (storePrinters.length === 0) {
+      throw new Error("No printers configured for this store");
+    }
+    if (!storePrinters.includes(normalized)) {
+      throw new Error("Printer topic must match a configured printer");
+    }
+    return normalized;
+  };
+
   // Cook types CRUD
   fastify.get(
     "/manager/cook-types",
@@ -460,10 +486,14 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const slugBase = normalizeSlug(body.title);
         const slug =
           slugBase || `cook-${Math.random().toString(16).slice(2, 6)}`;
-        const printerTopic =
-          normalizePrinterTopic(body.printerTopic) ??
-          normalizePrinterTopic(body.title) ??
-          slug;
+        let printerTopic: string | null = null;
+        try {
+          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+        } catch (error: any) {
+          return reply
+            .status(400)
+            .send({ error: error?.message || "Invalid printer topic" });
+        }
         const created = await db.cookType.create({
           data: { storeId: store.id, slug, title: body.title, printerTopic },
         });
@@ -489,13 +519,24 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = cookTypeUpdate.parse(request.body);
+        const store = await ensureStore(request);
         const data: any = {};
         if (body.title) data.title = body.title;
         if (body.printerTopic !== undefined) {
-          data.printerTopic =
-            body.printerTopic === null
-              ? null
-              : normalizePrinterTopic(body.printerTopic);
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
+          } else {
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply
+                .status(400)
+                .send({ error: error?.message || "Invalid printer topic" });
+            }
+          }
         }
         const updated = await db.cookType.update({ where: { id }, data });
         return reply.send({ type: updated });
@@ -551,10 +592,14 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const slugBase = normalizeSlug(body.title);
         const slug =
           slugBase || `waiter-${Math.random().toString(16).slice(2, 6)}`;
-        const printerTopic =
-          normalizePrinterTopic(body.printerTopic) ??
-          normalizePrinterTopic(body.title) ??
-          slug;
+        let printerTopic: string | null = null;
+        try {
+          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+        } catch (error: any) {
+          return reply
+            .status(400)
+            .send({ error: error?.message || "Invalid printer topic" });
+        }
         const created = await db.waiterType.create({
           data: { storeId: store.id, slug, title: body.title, printerTopic },
         });
@@ -582,13 +627,24 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = waiterTypeUpdate.parse(request.body);
+        const store = await ensureStore(request);
         const data: any = {};
         if (body.title) data.title = body.title;
         if (body.printerTopic !== undefined) {
-          data.printerTopic =
-            body.printerTopic === null
-              ? null
-              : normalizePrinterTopic(body.printerTopic);
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
+          } else {
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply
+                .status(400)
+                .send({ error: error?.message || "Invalid printer topic" });
+            }
+          }
         }
         const updated = await db.waiterType.update({ where: { id }, data });
         return reply.send({ type: updated });
@@ -980,6 +1036,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           categoryId: i.categoryId,
           category:
             i.category?.titleEn ?? i.category?.titleEl ?? i.category?.title,
+          printerTopic: i.printerTopic ?? null,
         })),
       });
     }
@@ -991,6 +1048,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     descriptionEn: z.string().optional(),
     descriptionEl: z.string().optional(),
     imageUrl: z.string().url().max(2048).optional(),
+    printerTopic: z.string().trim().min(1).max(255),
     priceCents: z.number().int().nonnegative(),
     categoryId: z.string().uuid(),
     isAvailable: z.boolean().optional(),
@@ -1006,6 +1064,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
           .toLowerCase()
           .replace(/\s+/g, "-")
           .slice(0, 60);
+        let printerTopic: string | null = null;
+        try {
+          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+        } catch (error: any) {
+          return reply
+            .status(400)
+            .send({ error: error?.message || "Invalid printer topic" });
+        }
+        if (!printerTopic) {
+          return reply.status(400).send({ error: "Printer topic is required" });
+        }
         const item = await db.item.create({
           data: {
             storeId: store.id,
@@ -1018,6 +1087,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             descriptionEn: body.descriptionEn,
             descriptionEl: body.descriptionEl,
             imageUrl: body.imageUrl,
+            printerTopic,
             priceCents: body.priceCents,
             isAvailable: body.isAvailable ?? true,
           },
@@ -1051,6 +1121,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     descriptionEn: z.string().optional().nullable(),
     descriptionEl: z.string().optional().nullable(),
     imageUrl: z.string().url().max(2048).nullable().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
     priceCents: z.number().int().nonnegative().optional(),
     categoryId: z.string().uuid().optional(),
     isAvailable: z.boolean().optional(),
@@ -1062,7 +1133,24 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = itemUpdateSchema.parse(request.body);
+        const store = await ensureStore(request);
         const data: any = { ...body };
+        if (body.printerTopic !== undefined) {
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
+          } else {
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply
+                .status(400)
+                .send({ error: error?.message || "Invalid printer topic" });
+            }
+          }
+        }
         if (body.titleEn) {
           data.title = body.titleEn;
         } else if (body.title) {
@@ -1071,7 +1159,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
         }
         const updated = await db.item.update({ where: { id }, data });
         invalidateMenuCache();
-        const store = await ensureStore(request);
         publishMessage(
           `stores/${store.slug}/menu/updated`,
           {

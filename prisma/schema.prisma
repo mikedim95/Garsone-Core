@@ -69,14 +69,14 @@ model Category {
 }
 
 model CookType {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String   @db.Uuid
-  slug         String   @db.VarChar(100)
-  title        String   @db.VarChar(255)
-  printerTopic String?  @db.VarChar(255)
-  createdAt    DateTime @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime @updatedAt @db.Timestamp(6)
-  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String    @db.Uuid
+  slug         String    @db.VarChar(100)
+  title        String    @db.VarChar(255)
+  printerTopic String?   @db.VarChar(255)
+  createdAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamp(6)
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
   cooks        Profile[]
 
   @@unique([storeId, slug])
@@ -85,15 +85,15 @@ model CookType {
 }
 
 model WaiterType {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId      String   @db.Uuid
-  slug         String   @db.VarChar(100)
-  title        String   @db.VarChar(255)
-  printerTopic String?  @db.VarChar(255)
-  createdAt    DateTime @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime @updatedAt @db.Timestamp(6)
-  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String    @db.Uuid
+  slug         String    @db.VarChar(100)
+  title        String    @db.VarChar(255)
+  printerTopic String?   @db.VarChar(255)
+  createdAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamp(6)
   waiters      Profile[]
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, slug])
   @@index([storeId])
@@ -112,6 +112,7 @@ model Item {
   descriptionEl String?        @db.VarChar(2000)
   descriptionEn String?        @db.VarChar(2000)
   imageUrl      String?        @db.VarChar(2000)
+  printerTopic  String?        @db.VarChar(255)
   priceCents    Int
   isAvailable   Boolean        @default(true)
   sortOrder     Int            @default(0)
@@ -403,9 +404,9 @@ model Profile {
   cookTypeId   String?       @db.Uuid
   waiterTypeId String?       @db.Uuid
   auditLogs    AuditLog[]
+  cookType     CookType?     @relation(fields: [cookTypeId], references: [id])
   store        Store?        @relation(fields: [storeId], references: [id])
-  cookType     CookType?     @relation(fields: [cookTypeId], references: [id], onDelete: SetNull)
-  waiterType   WaiterType?   @relation(fields: [waiterTypeId], references: [id], onDelete: SetNull)
+  waiterType   WaiterType?   @relation(fields: [waiterTypeId], references: [id])
   waiterShifts WaiterShift[]
   waiterTables WaiterTable[]
 

@@ -30,6 +30,7 @@ type MenuPayload = {
     category: string | null;
     categoryId: string | null;
     available: boolean;
+    printerTopic?: string | null;
     modifiers: Array<{
       id: string;
       name: string;
@@ -222,6 +223,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       category: categoryTitle,
       categoryId: item.categoryId,
       available: item.isAvailable,
+      printerTopic: item.printerTopic ?? null,
       modifiers: modifiersForItem,
     };
   });
