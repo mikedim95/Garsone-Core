@@ -55,11 +55,11 @@ type OrderWithRelations = Prisma.OrderGetPayload<{
             id: true;
             title: true;
             categoryId: true;
+            printerTopic: true;
             category: {
               select: {
                 title: true;
                 slug: true;
-                printerTopic: true;
               };
             };
           };
@@ -128,11 +128,11 @@ const ORDER_ITEM_INCLUDE = {
         id: true,
         title: true,
         categoryId: true,
+        printerTopic: true,
         category: {
           select: {
             title: true,
             slug: true,
-            printerTopic: true,
           },
         },
       },
@@ -197,8 +197,7 @@ function serializeOrder(order: OrderWithRelations) {
       categoryId: (orderItem as any)?.item?.categoryId ?? null,
       categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
       printerTopic: normalizePrinterTopic(
-        (orderItem as any)?.item?.category?.printerTopic,
-        (orderItem as any)?.item?.category?.slug
+        (orderItem as any)?.item?.printerTopic
       ),
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
@@ -263,8 +262,7 @@ function publishPrinterTopicsForOrder(
 ) {
   const grouped = new Map<string, typeof order.orderItems>();
   for (const oi of order.orderItems) {
-    const cat = (oi as any)?.item?.category;
-    const key = normalizePrinterTopic(cat?.printerTopic, cat?.slug);
+    const key = normalizePrinterTopic((oi as any)?.item?.printerTopic);
     const list = grouped.get(key) || [];
     list.push(oi);
     grouped.set(key, list);
@@ -504,8 +502,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
             categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
             printerTopic: normalizePrinterTopic(
-              (orderItem as any)?.item?.category?.printerTopic,
-              (orderItem as any)?.item?.category?.slug
+              (orderItem as any)?.item?.printerTopic
             ),
           })),
         };
@@ -703,10 +700,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             filteredOrders = ordersData
               .map((order) => {
                 const items = order.orderItems.filter((oi) => {
-                  const cat = (oi as any)?.item?.category;
                   const topic = normalizePrinterTopic(
-                    cat?.printerTopic,
-                    cat?.slug
+                    (oi as any)?.item?.printerTopic
                   );
                   return topic === allowedPrinterTopic;
                 });
@@ -968,8 +963,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               categoryId: (oi as any)?.item?.categoryId ?? undefined,
               categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
               printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.category?.printerTopic,
-                (oi as any)?.item?.category?.slug
+                (oi as any)?.item?.printerTopic
               ),
             })),
             order: orderSnapshot,
@@ -1010,8 +1004,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               categoryId: (oi as any)?.item?.categoryId ?? undefined,
               categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
               printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.category?.printerTopic,
-                (oi as any)?.item?.category?.slug
+                (oi as any)?.item?.printerTopic
               ),
             })),
           };
@@ -1043,8 +1036,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               categoryId: (oi as any)?.item?.categoryId ?? undefined,
               categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
               printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.category?.printerTopic,
-                (oi as any)?.item?.category?.slug
+                (oi as any)?.item?.printerTopic
               ),
             })),
           };
@@ -1078,8 +1070,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               categoryId: (oi as any)?.item?.categoryId ?? undefined,
               categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
               printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.category?.printerTopic,
-                (oi as any)?.item?.category?.slug
+                (oi as any)?.item?.printerTopic
               ),
             })),
           };
@@ -1342,8 +1333,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             categoryId: (oi as any)?.item?.categoryId ?? undefined,
             categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
             printerTopic: normalizePrinterTopic(
-              (oi as any)?.item?.category?.printerTopic,
-              (oi as any)?.item?.category?.slug
+              (oi as any)?.item?.printerTopic
             ),
           })),
         };
@@ -1409,8 +1399,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             categoryId: (oi as any)?.item?.categoryId ?? undefined,
             categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
             printerTopic: normalizePrinterTopic(
-              (oi as any)?.item?.category?.printerTopic,
-              (oi as any)?.item?.category?.slug
+              (oi as any)?.item?.printerTopic
             ),
           })),
           order: serializeOrder(order as any),

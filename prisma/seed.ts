@@ -226,12 +226,12 @@ const STORES: StoreConfig[] = [
       },
     ],
     cookTypes: [
-      { slug: "bar", title: "Bar Station", printerTopic: "bar" },
-      { slug: "snacks", title: "Snacks Station", printerTopic: "snacks" },
+      { slug: "bar", title: "Bar Station", printerTopic: "printer_1" },
+      { slug: "snacks", title: "Snacks Station", printerTopic: "printer_2" },
     ],
     waiterTypes: [
-      { slug: "drinks", title: "Drinks Service", printerTopic: "bar" },
-      { slug: "snacks", title: "Snack Service", printerTopic: "snacks" },
+      { slug: "drinks", title: "Drinks Service", printerTopic: "printer_1" },
+      { slug: "snacks", title: "Snack Service", printerTopic: "printer_2" },
     ],
     profiles: [
       {
@@ -379,12 +379,12 @@ const STORES: StoreConfig[] = [
       },
     ],
     cookTypes: [
-      { slug: "grill", title: "Grill Station", printerTopic: "grill" },
-      { slug: "bar", title: "Drinks Station", printerTopic: "bar" },
+      { slug: "grill", title: "Grill Station", printerTopic: "printer_1" },
+      { slug: "bar", title: "Drinks Station", printerTopic: "printer_2" },
     ],
     waiterTypes: [
-      { slug: "food", title: "Food Service", printerTopic: "grill" },
-      { slug: "drinks", title: "Drinks Service", printerTopic: "bar" },
+      { slug: "food", title: "Food Service", printerTopic: "printer_1" },
+      { slug: "drinks", title: "Drinks Service", printerTopic: "printer_2" },
     ],
     profiles: [
       {
@@ -548,6 +548,9 @@ async function seedStoresAndData(qrAll: QrLine[]) {
       )
     );
     const printerList = cfg.printers && cfg.printers.length > 0 ? cfg.printers : categoryPrinters;
+    const normalizedPrinters = printerList
+      .map((printer) => normalizePrinterTopic(printer, printer))
+      .filter((printer): printer is string => Boolean(printer));
 
     const store = await prisma.store.upsert({
       where: { slug: cfg.slug },
@@ -692,9 +695,15 @@ async function seedStoresAndData(qrAll: QrLine[]) {
 
     for (let ci = 0; ci < cfg.categories.length; ci++) {
       const cat = cfg.categories[ci];
-      const printerTopic = (
-        cat.printerTopic || (ci % 2 === 0 ? "printer_1" : "printer_2")
-      ).slice(0, 255);
+      const normalizedCategory = normalizePrinterTopic(cat.printerTopic, cat.slug);
+      const fallbackPrinter =
+        normalizedPrinters[ci % (normalizedPrinters.length || 1)] ??
+        normalizedCategory ??
+        "printer_1";
+      const printerTopic =
+        normalizedCategory && normalizedPrinters.includes(normalizedCategory)
+          ? normalizedCategory
+          : fallbackPrinter;
       const category = await prisma.category.upsert({
         where: { storeId_slug: { storeId, slug: cat.slug } },
         update: {
@@ -727,6 +736,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
             priceCents: it.priceCents,
             isAvailable: true,
             imageUrl: it.imageUrl ?? null,
+            printerTopic,
           },
           create: {
             storeId,
@@ -739,6 +749,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
             isAvailable: true,
             sortOrder: ii,
             imageUrl: it.imageUrl ?? null,
+            printerTopic,
           },
         });
 

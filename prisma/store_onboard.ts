@@ -59,12 +59,12 @@ const NEW_STORE_CONFIG = {
   cookType: {
     slug: "kitchen",
     title: "Kitchen",
-    printerTopic: "kitchen",
+    printerTopic: "printer_1",
   },
   waiterType: {
     slug: "floor",
     title: "Floor",
-    printerTopic: "kitchen",
+    printerTopic: "printer_1",
   },
 
   // All 3 profiles will use this password.
@@ -76,7 +76,8 @@ const CREATE_DEMO_MENU_AND_ORDERS = true;
 
 // How many days back to create sample orders (if enabled)
 const DAYS_BACK = 60;
-const DEMO_PRINTER_TOPIC = "kitchen";
+const DEMO_PRINTER_TOPIC =
+  NEW_STORE_CONFIG.cookType.printerTopic || "printer_1";
 
 // Simple demo menu used when CREATE_DEMO_MENU_AND_ORDERS === true.
 const DEMO_MENU: {
@@ -283,7 +284,7 @@ async function onboardStore() {
     data: {
       slug: cfg.slug,
       name: cfg.name,
-      settingsJson: {},
+      settingsJson: { printers: [DEMO_PRINTER_TOPIC] },
     },
   });
 
@@ -436,6 +437,10 @@ async function onboardStore() {
 
   let sortOrder = 0;
   for (const cat of DEMO_MENU) {
+    const categoryPrinterTopic = (
+      normalizePrinterTopic(cat.printerTopic, DEMO_PRINTER_TOPIC || cat.slug) ||
+      cat.slug
+    ).slice(0, 255);
     const createdCat = await prisma.category.create({
       data: {
         storeId,
@@ -444,10 +449,7 @@ async function onboardStore() {
         sortOrder: sortOrder++,
         titleEl: cat.titleEl,
         titleEn: cat.titleEn,
-        printerTopic: (
-          normalizePrinterTopic(cat.printerTopic, DEMO_PRINTER_TOPIC || cat.slug) ||
-          cat.slug
-        ).slice(0, 255),
+        printerTopic: categoryPrinterTopic,
       },
     });
 
@@ -468,6 +470,7 @@ async function onboardStore() {
           descriptionEn: item.descriptionEn ?? null,
           titleEl: item.titleEl,
           titleEn: item.titleEn,
+          printerTopic: categoryPrinterTopic,
         },
       });
 
