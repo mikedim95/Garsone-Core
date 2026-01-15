@@ -1259,7 +1259,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
     minSelect: z.number().int().min(0).default(0),
-    maxSelect: z.number().int().min(0).optional(),
+    maxSelect: z.number().int().min(0).nullable().optional(),
     isAvailable: z.boolean().optional(),
   });
   fastify.post(
@@ -1312,7 +1312,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
     minSelect: z.number().int().min(0).optional(),
-    maxSelect: z.number().int().min(0).optional(),
+    maxSelect: z.number().int().min(0).nullable().optional(),
     isAvailable: z.boolean().optional(),
   });
   fastify.patch(
