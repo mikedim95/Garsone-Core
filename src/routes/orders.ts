@@ -294,6 +294,7 @@ function publishPrinterTopicsForOrder(
         modifiers: oi.orderItemOptions,
         categoryId: (oi as any)?.item?.categoryId ?? undefined,
         categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+        printerTopic: printerKey,
       })),
     };
     publishMessage(
