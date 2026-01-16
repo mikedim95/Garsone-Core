@@ -865,11 +865,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const actor = (request as any).user;
-        const cookPrinterTopic =
-          actor?.role === "cook"
-            ? await resolveCookPrinterTopic(actor, store)
-            : null;
-        const actor = (request as any).user;
         const actorRole = actor?.role as string | undefined;
         const cookPrinterTopic =
           actorRole === "cook"
@@ -1022,7 +1017,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             order: orderSnapshot,
           };
           const topicBase = store.slug;
-          const cookPublishOptions = {
+          const cookPublishOptions: PublishOptions = {
             roles: ["cook"],
             ...(skipStatusMqtt ? { skipMqtt: true } : {}),
           };
@@ -1070,7 +1065,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             })),
           };
           const topicBase = store.slug;
-          const cookPublishOptions = { roles: ["cook"] };
+          const cookPublishOptions: PublishOptions = { roles: ["cook"] };
           if (!cookPrinterTopic) {
             publishMessage(
               `${topicBase}/orders/ready`,
@@ -1451,6 +1446,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           .parse(request.params ?? {});
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const cookPrinterTopic =
+          actor?.role === "cook"
+            ? await resolveCookPrinterTopic(actor, store)
+            : null;
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
           include: {
@@ -1483,7 +1483,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           })),
           order: serializeOrder(order as any),
         };
-        const cookPublishOptions = { roles: ["cook"] };
+        const cookPublishOptions: PublishOptions = { roles: ["cook"] };
         if (!cookPrinterTopic) {
           publishMessage(
             `${store.slug}/orders/preparing`,
