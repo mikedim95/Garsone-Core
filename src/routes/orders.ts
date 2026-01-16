@@ -154,6 +154,33 @@ const normalizePrinterTopic = (
   return sanitized || "default";
 };
 
+const resolveCookPrinterTopic = async (
+  actor: any,
+  store: { id: string }
+) => {
+  if (!actor || actor.role !== "cook") return null;
+  const raw =
+    typeof actor?.cookTypePrinterTopic === "string"
+      ? String(actor.cookTypePrinterTopic)
+      : "";
+  if (raw.trim().length > 0) {
+    return normalizePrinterTopic(raw);
+  }
+  if (typeof actor?.cookTypeId === "string") {
+    const cookType = await db.cookType.findFirst({
+      where: { id: actor.cookTypeId, storeId: store.id },
+    });
+    const fallback =
+      typeof cookType?.printerTopic === "string"
+        ? cookType.printerTopic
+        : "";
+    if (fallback.trim().length > 0) {
+      return normalizePrinterTopic(fallback);
+    }
+  }
+  return null;
+};
+
 const pickHeaderToken = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value;
 
@@ -258,7 +285,8 @@ function publishPrinterTopicsForOrder(
   storeSlug: string,
   order: OrderWithRelations,
   status: OrderStatus,
-  options?: PublishOptions
+  options?: PublishOptions,
+  allowedPrinterTopic?: string | null
 ) {
   const grouped = new Map<string, typeof order.orderItems>();
   for (const oi of order.orderItems) {
@@ -269,6 +297,11 @@ function publishPrinterTopicsForOrder(
   }
 
   if (grouped.size === 0) return;
+
+  const normalizedAllowed =
+    typeof allowedPrinterTopic === "string" && allowedPrinterTopic.trim()
+      ? normalizePrinterTopic(allowedPrinterTopic)
+      : null;
 
   const basePayload = {
     orderId: order.id,
@@ -284,6 +317,9 @@ function publishPrinterTopicsForOrder(
 
   const statusSegment = String(status || OrderStatus.PLACED).toLowerCase();
   for (const [printerKey, items] of grouped.entries()) {
+    if (normalizedAllowed && printerKey !== normalizedAllowed) {
+      continue;
+    }
     const payload = {
       ...basePayload,
       printerTopic: printerKey,
@@ -828,7 +864,17 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const skipStatusMqtt = body.skipMqtt === true;
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
-        const actorRole = (request as any).user?.role as string | undefined;
+        const actor = (request as any).user;
+        const cookPrinterTopic =
+          actor?.role === "cook"
+            ? await resolveCookPrinterTopic(actor, store)
+            : null;
+        const actor = (request as any).user;
+        const actorRole = actor?.role as string | undefined;
+        const cookPrinterTopic =
+          actorRole === "cook"
+            ? await resolveCookPrinterTopic(actor, store)
+            : null;
 
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
@@ -976,15 +1022,23 @@ export async function orderRoutes(fastify: FastifyInstance) {
             order: orderSnapshot,
           };
           const topicBase = store.slug;
-          publishMessage(`${topicBase}/orders/preparing`, payload, {
+          const cookPublishOptions = {
             roles: ["cook"],
             ...(skipStatusMqtt ? { skipMqtt: true } : {}),
-          });
+          };
+          if (!cookPrinterTopic) {
+            publishMessage(
+              `${topicBase}/orders/preparing`,
+              payload,
+              cookPublishOptions
+            );
+          }
           publishPrinterTopicsForOrder(
             topicBase,
             updatedOrder as OrderWithRelations,
             OrderStatus.PREPARING,
-            { roles: ["cook"], ...(skipStatusMqtt ? { skipMqtt: true } : {}) }
+            cookPublishOptions,
+            cookPrinterTopic
           );
           notifyWaiters(
             `${topicBase}/orders/preparing`,
@@ -1016,9 +1070,21 @@ export async function orderRoutes(fastify: FastifyInstance) {
             })),
           };
           const topicBase = store.slug;
-          publishMessage(`${topicBase}/orders/ready`, payload, {
-            roles: ["cook"],
-          });
+          const cookPublishOptions = { roles: ["cook"] };
+          if (!cookPrinterTopic) {
+            publishMessage(
+              `${topicBase}/orders/ready`,
+              payload,
+              cookPublishOptions
+            );
+          }
+          publishPrinterTopicsForOrder(
+            topicBase,
+            updatedOrder as OrderWithRelations,
+            OrderStatus.READY,
+            cookPublishOptions,
+            cookPrinterTopic
+          );
           notifyWaiters(
             `${topicBase}/orders/ready`,
             payload,
@@ -1417,14 +1483,20 @@ export async function orderRoutes(fastify: FastifyInstance) {
           })),
           order: serializeOrder(order as any),
         };
-        publishMessage(`${store.slug}/orders/preparing`, preparedPayload, {
-          roles: ["cook"],
-        });
+        const cookPublishOptions = { roles: ["cook"] };
+        if (!cookPrinterTopic) {
+          publishMessage(
+            `${store.slug}/orders/preparing`,
+            preparedPayload,
+            cookPublishOptions
+          );
+        }
         publishPrinterTopicsForOrder(
           store.slug,
           order as OrderWithRelations,
           OrderStatus.PREPARING,
-          { roles: ["cook"] }
+          cookPublishOptions,
+          cookPrinterTopic
         );
         return reply.send({ success: true });
       } catch (error) {
