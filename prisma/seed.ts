@@ -655,6 +655,24 @@ async function seedStoresAndData(qrAll: QrLine[]) {
     }
     bar("store:tables", 10, 10);
 
+    // waiter-table assignments: round-robin tables across waiters
+    const waiters = await prisma.profile.findMany({
+      where: { storeId, role: Role.WAITER },
+      orderBy: { email: "asc" },
+    });
+    if (waiters.length > 0) {
+      const assignments = tables.map((table, index) => ({
+        storeId,
+        waiterId: waiters[index % waiters.length].id,
+        tableId: table.id,
+      }));
+      await prisma.waiterTable.createMany({
+        data: assignments,
+        skipDuplicates: true,
+      });
+      bar("store:waiterTables", assignments.length, assignments.length);
+    }
+
     // qr tiles from qr-tiles.txt (MUST be 10/store)
     const storeQr = qrAll.filter((x) => x.storeSlug === cfg.slug);
     if (storeQr.length !== 10)
