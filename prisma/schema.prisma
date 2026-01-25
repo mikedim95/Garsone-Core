@@ -284,6 +284,9 @@ model OrderItem {
   titleSnapshot    String            @db.VarChar(255)
   unitPriceCents   Int
   quantity         Int               @default(1)
+  status           OrderItemStatus   @default(PLACED)
+  acceptedAt       DateTime?         @db.Timestamp(6)
+  servedAt         DateTime?         @db.Timestamp(6)
   createdAt        DateTime          @default(now()) @db.Timestamp(6)
   updatedAt        DateTime          @updatedAt @db.Timestamp(6)
   orderItemOptions OrderItemOption[]
@@ -445,6 +448,12 @@ enum OrderStatus {
   SERVED
   CANCELLED
   PAID
+}
+
+enum OrderItemStatus {
+  PLACED
+  ACCEPTED
+  SERVED
 }
 
 enum PaymentStatus {

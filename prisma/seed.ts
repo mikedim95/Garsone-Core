@@ -13,7 +13,7 @@
  * - Avoids nested relation writes for Order -> OrderItem (schema-name agnostic)
  */
 
-import { PrismaClient, Role, OrderStatus } from "@prisma/client";
+import { PrismaClient, Role, OrderItemStatus, OrderStatus } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcrypt";
@@ -892,7 +892,9 @@ async function seedStoresAndData(qrAll: QrLine[]) {
       const qty = randInt(1, 2);
 
       const placedAt = randomDateWithinDaysBack(30);
-      const paidAt = new Date(placedAt.getTime() + randInt(2, 35) * 60_000);
+      const acceptedAt = new Date(placedAt.getTime() + randInt(2, 10) * 60_000);
+      const servedAt = new Date(acceptedAt.getTime() + randInt(3, 15) * 60_000);
+      const paidAt = new Date(servedAt.getTime() + randInt(2, 20) * 60_000);
 
       const order = await prisma.order.create({
         data: {
@@ -914,6 +916,9 @@ async function seedStoresAndData(qrAll: QrLine[]) {
           titleSnapshot: it.title,
           unitPriceCents: it.priceCents,
           quantity: qty,
+          status: OrderItemStatus.SERVED,
+          acceptedAt,
+          servedAt,
         },
       });
 

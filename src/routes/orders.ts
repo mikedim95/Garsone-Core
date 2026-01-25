@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { Prisma, OrderStatus, ShiftStatus } from "@prisma/client";
+import { Prisma, OrderItemStatus, OrderStatus, ShiftStatus } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware } from "../middleware/auth.js";
@@ -37,6 +37,10 @@ const updateStatusSchema = z.object({
   status: z.nativeEnum(OrderStatus),
   cancelReason: z.string().trim().min(1).max(255).optional(),
   skipMqtt: z.boolean().optional(),
+});
+
+const updateItemStatusSchema = z.object({
+  status: z.nativeEnum(OrderItemStatus),
 });
 
 const callWaiterSchema = z.object({
@@ -226,6 +230,9 @@ function serializeOrder(order: OrderWithRelations) {
       printerTopic: normalizePrinterTopic(
         (orderItem as any)?.item?.printerTopic
       ),
+      status: orderItem.status,
+      acceptedAt: orderItem.acceptedAt,
+      servedAt: orderItem.servedAt,
       title: orderItem.titleSnapshot,
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
@@ -532,9 +539,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
           totalCents: createdOrder.totalCents,
           note: createdOrder.note,
           items: createdOrder.orderItems.map((orderItem) => ({
+            id: orderItem.id,
+            itemId: orderItem.itemId,
             title: orderItem.titleSnapshot,
             quantity: orderItem.quantity,
             unitPriceCents: orderItem.unitPriceCents,
+            status: orderItem.status,
+            acceptedAt: orderItem.acceptedAt,
+            servedAt: orderItem.servedAt,
             modifiers: orderItem.orderItemOptions,
             categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
             categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
@@ -1198,6 +1210,123 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
 
+  fastify.patch(
+    "/orders/:id/items/:itemId/status",
+    {
+      preHandler: [authMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            id: z.string().uuid(),
+            itemId: z.string().uuid(),
+          })
+          .parse(request.params ?? {});
+        const body = updateItemStatusSchema.parse(request.body);
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const actorRole = actor?.role as string | undefined;
+        const isManager = actorRole === "manager" || actorRole === "architect";
+        const allowByRole = () => {
+          if (!actorRole) return false;
+          if (body.status === OrderItemStatus.ACCEPTED)
+            return actorRole === "cook" || isManager;
+          if (body.status === OrderItemStatus.SERVED)
+            return actorRole === "waiter" || isManager;
+          return isManager;
+        };
+
+        if (!allowByRole()) {
+          return reply
+            .status(403)
+            .send({ error: "Insufficient permissions for item status change" });
+        }
+
+        const orderItem = await db.orderItem.findFirst({
+          where: {
+            id: params.itemId,
+            orderId: params.id,
+            order: { storeId: store.id },
+          },
+          include: { order: { select: { id: true, status: true, tableId: true } } },
+        });
+
+        if (!orderItem) {
+          return reply.status(404).send({ error: "Order item not found" });
+        }
+
+        if (orderItem.order?.status === OrderStatus.CANCELLED) {
+          return reply.status(409).send({ error: "Order is cancelled" });
+        }
+
+        const now = new Date();
+        const updateData: any = { status: body.status, updatedAt: now };
+        if (body.status === OrderItemStatus.ACCEPTED) {
+          updateData.acceptedAt = now;
+          updateData.servedAt = null;
+        } else if (body.status === OrderItemStatus.SERVED) {
+          updateData.servedAt = now;
+          if (!orderItem.acceptedAt) {
+            updateData.acceptedAt = now;
+          }
+        } else if (body.status === OrderItemStatus.PLACED) {
+          updateData.acceptedAt = null;
+          updateData.servedAt = null;
+        }
+
+        await db.orderItem.update({
+          where: { id: params.itemId },
+          data: updateData,
+        });
+
+        const order = await db.order.findFirst({
+          where: { id: params.id, storeId: store.id },
+          include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
+        });
+
+        if (!order) {
+          return reply.status(404).send({ error: "Order not found" });
+        }
+
+        const payload = {
+          orderId: order.id,
+          tableId: order.tableId,
+          tableLabel: order.table?.label ?? "",
+          itemId: params.itemId,
+          status: body.status,
+          ts: new Date().toISOString(),
+          order: serializeOrder(order as OrderWithRelations),
+        };
+        const topicBase = store.slug;
+        publishMessage(`${topicBase}/orders/items`, payload, {
+          roles: ["cook", "manager"],
+          skipMqtt: true,
+        });
+        const waiterIdsForOrder = await getWaiterIdsForTable(
+          store.id,
+          order.tableId
+        );
+        notifyWaiters(`${topicBase}/orders/items`, payload, waiterIdsForOrder, {
+          skipMqtt: true,
+        });
+
+        return reply.send({ order: serializeOrder(order as OrderWithRelations) });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Update order item status error:", error);
+        return reply
+          .status(500)
+          .send({ error: "Failed to update order item status" });
+      }
+    }
+  );
+
   fastify.get(
     "/orders/queue",
     {
@@ -1394,9 +1523,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
           totalCents: updated.totalCents,
           note: updated.note,
           items: updated.orderItems.map((oi) => ({
+            id: oi.id,
+            itemId: oi.itemId,
             title: oi.titleSnapshot,
             quantity: oi.quantity,
             unitPriceCents: oi.unitPriceCents,
+            status: oi.status,
+            acceptedAt: oi.acceptedAt,
+            servedAt: oi.servedAt,
             modifiers: oi.orderItemOptions,
             categoryId: (oi as any)?.item?.categoryId ?? undefined,
             categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
