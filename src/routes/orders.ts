@@ -1234,7 +1234,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           if (body.status === OrderItemStatus.ACCEPTED)
             return actorRole === "cook" || isManager;
           if (body.status === OrderItemStatus.SERVED)
-            return actorRole === "waiter" || isManager;
+            return actorRole === "waiter" || actorRole === "cook" || isManager;
           return isManager;
         };
 
