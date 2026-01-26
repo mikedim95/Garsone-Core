@@ -246,6 +246,29 @@ model TableVisit {
   @@map("table_visits")
 }
 
+model LocalityApproval {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId         String   @db.Uuid
+  tableId         String   @db.Uuid
+  tileId          String   @db.Uuid
+  approvalToken   String   @unique @db.VarChar(64)
+  purpose         String   @db.VarChar(32)
+  method          String   @db.VarChar(16)
+  sessionId       String   @db.VarChar(64)
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  expiresAt       DateTime @db.Timestamp(6)
+  consumedAt      DateTime? @db.Timestamp(6)
+  consumedOrderId String?  @db.Uuid
+  store           Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table           Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  tile            QRTile   @relation(fields: [tileId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, tableId, expiresAt])
+  @@index([approvalToken])
+  @@index([consumedOrderId])
+  @@map("locality_approvals")
+}
+
 model Order {
   id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId         String        @db.Uuid

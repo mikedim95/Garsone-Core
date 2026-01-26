@@ -36,6 +36,38 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
   }
 }
 
+export async function optionalAuthMiddleware(request: FastifyRequest, _reply: FastifyReply) {
+  const authHeader = request.headers.authorization;
+  const bearer =
+    authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.substring(7)
+      : undefined;
+  const token =
+    bearer ||
+    (typeof (request.query as any)?.token === "string"
+      ? (request.query as any).token
+      : undefined) ||
+    (request.headers["x-auth-token"] as string | undefined);
+
+  if (!token) return;
+
+  const tokenTrimmed = token.trim();
+  if (!tokenTrimmed) return;
+
+  try {
+    const payload = verifyToken(tokenTrimmed);
+    (request as any).user = payload;
+    if (payload.storeSlug) {
+      (request as any).storeSlug = payload.storeSlug;
+    }
+  } catch (error) {
+    console.warn(
+      "[optionalAuthMiddleware] invalid token",
+      (error as Error)?.message || error
+    );
+  }
+}
+
 export function requireRole(roles: string[]) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const user = (request as any).user;

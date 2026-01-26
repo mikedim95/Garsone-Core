@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { Prisma, OrderItemStatus, OrderStatus, ShiftStatus } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
 import {
@@ -21,6 +21,9 @@ const modifierSelectionSchema = z.record(z.string());
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
   visit: z.string().trim().min(8).max(128).optional(),
+  localityApprovalToken: z.string().trim().min(8).max(128).optional(),
+  localitySessionId: z.string().trim().min(8).max(128).optional(),
+  paymentSessionId: z.string().trim().min(8).max(128).optional(),
   items: z
     .array(
       z.object({
@@ -123,6 +126,7 @@ const ORDERS_MAX_TAKE = Math.max(
   parsePositiveInt(process.env.ORDERS_MAX_TAKE, 10000)
 );
 const REQUIRE_VISIT_TOKEN = REQUIRE_TABLE_VISIT;
+const LOCALITY_PURPOSE = "ORDER_SUBMIT";
 
 const ORDER_ITEM_INCLUDE = {
   include: {
@@ -379,7 +383,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
   fastify.post(
     "/orders",
     {
-      preHandler: [ipWhitelistMiddleware],
+      preHandler: [ipWhitelistMiddleware, optionalAuthMiddleware],
     },
     async (request, reply) => {
       try {
@@ -391,6 +395,26 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         logStep("store");
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role);
+        const hasPaymentSession =
+          typeof body.paymentSessionId === "string" &&
+          body.paymentSessionId.trim().length > 0;
+        const requiresLocality = !isStaff && !hasPaymentSession;
+        const localityApprovalToken =
+          typeof body.localityApprovalToken === "string"
+            ? body.localityApprovalToken.trim()
+            : "";
+        const localitySessionId =
+          typeof body.localitySessionId === "string"
+            ? body.localitySessionId.trim()
+            : "";
+
+        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
+        }
 
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
@@ -511,21 +535,48 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
         logStep("computed");
 
-        const createdOrder = await db.order.create({
-          data: {
-            storeId: store.id,
-            tableId: table.id,
-            status: OrderStatus.PLACED,
-            totalCents: orderTotalCents,
-            note: body.note,
-            orderItems: {
-              create: orderItemsToCreate,
+        const createdOrder = await db.$transaction(async (tx) => {
+          const created = await tx.order.create({
+            data: {
+              storeId: store.id,
+              tableId: table.id,
+              status: OrderStatus.PLACED,
+              totalCents: orderTotalCents,
+              note: body.note,
+              orderItems: {
+                create: orderItemsToCreate,
+              },
             },
-          },
-          include: {
-            table: { select: { id: true, label: true } },
-            orderItems: ORDER_ITEM_INCLUDE,
-          },
+            include: {
+              table: { select: { id: true, label: true } },
+              orderItems: ORDER_ITEM_INCLUDE,
+            },
+          });
+
+          if (requiresLocality) {
+            const consumedAt = new Date();
+            const consumed = await tx.localityApproval.updateMany({
+              where: {
+                approvalToken: localityApprovalToken,
+                storeId: store.id,
+                tableId: table.id,
+                purpose: LOCALITY_PURPOSE,
+                sessionId: localitySessionId,
+                consumedAt: null,
+                expiresAt: { gt: consumedAt },
+              },
+              data: {
+                consumedAt,
+                consumedOrderId: created.id,
+              },
+            });
+
+            if (consumed.count !== 1) {
+              throw new Error("LOCALITY_APPROVAL_INVALID");
+            }
+          }
+
+          return created;
         });
         logStep("dbCreate");
 
@@ -580,6 +631,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
+        }
+        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
         console.error("Create order error:", error);
         return reply.status(500).send({ error: "Failed to create order" });
@@ -1514,7 +1570,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
   fastify.patch(
     "/orders/:id",
     {
-      preHandler: [ipWhitelistMiddleware],
+      preHandler: [ipWhitelistMiddleware, optionalAuthMiddleware],
     },
     async (request, reply) => {
       try {
@@ -1522,6 +1578,23 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const body = createOrderSchema.partial().parse(request.body);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role);
+        const requiresLocality = !isStaff;
+        const localityApprovalToken =
+          typeof body.localityApprovalToken === "string"
+            ? body.localityApprovalToken.trim()
+            : "";
+        const localitySessionId =
+          typeof body.localitySessionId === "string"
+            ? body.localitySessionId.trim()
+            : "";
+
+        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
+        }
 
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
@@ -1594,23 +1667,53 @@ export async function orderRoutes(fastify: FastifyInstance) {
             });
           }
           // Replace items
-          await db.orderItem.deleteMany({ where: { orderId: id } });
           orderItemsData = { create: itemsToCreate };
         }
 
-        const updated = await db.order.update({
-          where: { id },
-          data: {
-            ...(typeof body.note === "string" ? { note: body.note } : {}),
-            ...(orderItemsData
-              ? { orderItems: orderItemsData, totalCents }
-              : {}),
-            updatedAt: new Date(),
-          },
-          include: {
-            table: { select: { id: true, label: true } },
-            orderItems: ORDER_ITEM_INCLUDE,
-          },
+        const updated = await db.$transaction(async (tx) => {
+          if (orderItemsData) {
+            await tx.orderItem.deleteMany({ where: { orderId: id } });
+          }
+
+          const updatedOrder = await tx.order.update({
+            where: { id },
+            data: {
+              ...(typeof body.note === "string" ? { note: body.note } : {}),
+              ...(orderItemsData
+                ? { orderItems: orderItemsData, totalCents }
+                : {}),
+              updatedAt: new Date(),
+            },
+            include: {
+              table: { select: { id: true, label: true } },
+              orderItems: ORDER_ITEM_INCLUDE,
+            },
+          });
+
+          if (requiresLocality) {
+            const consumedAt = new Date();
+            const consumed = await tx.localityApproval.updateMany({
+              where: {
+                approvalToken: localityApprovalToken,
+                storeId: store.id,
+                tableId: updatedOrder.tableId,
+                purpose: LOCALITY_PURPOSE,
+                sessionId: localitySessionId,
+                consumedAt: null,
+                expiresAt: { gt: consumedAt },
+              },
+              data: {
+                consumedAt,
+                consumedOrderId: updatedOrder.id,
+              },
+            });
+
+            if (consumed.count !== 1) {
+              throw new Error("LOCALITY_APPROVAL_INVALID");
+            }
+          }
+
+          return updatedOrder;
         });
 
         // Notify clients (re-emit placed with new content)
@@ -1660,6 +1763,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
+        }
+        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
         console.error("Edit order error:", error);
         return reply.status(500).send({ error: "Failed to edit order" });
