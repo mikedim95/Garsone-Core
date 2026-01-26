@@ -1354,6 +1354,107 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
 
+  fastify.get(
+    "/public/orders/:id/summary",
+    {
+      preHandler: [ipWhitelistMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            id: z.string().uuid(),
+          })
+          .parse(request.params ?? {});
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+        const order = await db.order.findFirst({
+          where: { id: params.id, storeId: store.id },
+          select: {
+            id: true,
+            status: true,
+          },
+        });
+        if (!order) {
+          return reply.status(404).send({ error: "Order not found" });
+        }
+
+        let queuePosition: number | null = null;
+        if (
+          order.status === OrderStatus.PLACED ||
+          order.status === OrderStatus.PREPARING
+        ) {
+          const queueCount = await db.order.count({
+            where: {
+              storeId: store.id,
+              status: { in: [OrderStatus.PLACED, OrderStatus.PREPARING] },
+            },
+          });
+          queuePosition = queueCount > 0 ? queueCount : null;
+        }
+
+        const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const servedOrders = await db.order.findMany({
+          where: {
+            storeId: store.id,
+            OR: [
+              { servedAt: { gte: since } },
+              { readyAt: { gte: since } },
+              { orderItems: { some: { servedAt: { gte: since } } } },
+            ],
+          },
+          select: {
+            servedAt: true,
+            readyAt: true,
+            placedAt: true,
+            createdAt: true,
+            orderItems: { select: { servedAt: true } },
+          },
+        });
+        const durations = servedOrders
+          .map((entry) => {
+            const start = entry.placedAt ?? entry.createdAt;
+            const itemServed = entry.orderItems
+              .map((item) => item.servedAt)
+              .filter((value): value is Date => Boolean(value));
+            const end =
+              entry.servedAt ||
+              entry.readyAt ||
+              (itemServed.length ? new Date(Math.max(...itemServed.map((d) => d.getTime()))) : null);
+            if (!start || !end) return null;
+            const diffMs = end.getTime() - start.getTime();
+            if (diffMs <= 0) return null;
+            return diffMs;
+          })
+          .filter((value): value is number => typeof value === "number");
+        const averageMinutes =
+          durations.length > 0
+            ? Math.round(
+                durations.reduce((sum, value) => sum + value, 0) /
+                  durations.length /
+                  60000
+              )
+            : null;
+        const estimatedMinutes =
+          averageMinutes !== null && typeof queuePosition === "number"
+            ? Math.max(1, Math.round(averageMinutes * queuePosition))
+            : averageMinutes;
+
+        return reply.send({ queuePosition, estimatedMinutes });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Public order summary error:", error);
+        return reply
+          .status(500)
+          .send({ error: "Failed to fetch order summary" });
+      }
+    }
+  );
+
   // Public table orders (PLACED by default)
   fastify.get(
     "/public/table/:id/orders",
