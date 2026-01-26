@@ -33,6 +33,7 @@ model Store {
   waiterShifts      WaiterShift[]
   waiterTables      WaiterTable[]
   waiterTypes       WaiterType[]
+  localityApprovals LocalityApproval[]
 
   @@index([createdAt(sort: Desc)])
   @@map("stores")
@@ -199,6 +200,7 @@ model Table {
   orders       Order[]
   qrTiles      QRTile[]
   tableVisits  TableVisit[]
+  localityApprovals LocalityApproval[]
   store        Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   waiterTables WaiterTable[]
 
@@ -219,6 +221,7 @@ model QRTile {
   store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table       Table?       @relation(fields: [tableId], references: [id], onDelete: Cascade)
   tableVisits TableVisit[]
+  localityApprovals LocalityApproval[]
 
   @@unique([storeId, tableId])
   @@index([storeId])
