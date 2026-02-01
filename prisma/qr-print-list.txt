@@ -1,0 +1,21 @@
+# url,storeSlug,tableLabel,publicCode
+https://www.garsone.gr/q/GT-QW0J-X48B,harbor-breeze-lounge,T1,GT-QW0J-X48B
+https://www.garsone.gr/q/GT-C8JG-JZ7F,harbor-breeze-lounge,T2,GT-C8JG-JZ7F
+https://www.garsone.gr/q/GT-J9RR-N778,harbor-breeze-lounge,T3,GT-J9RR-N778
+https://www.garsone.gr/q/GT-S4GH-22RA,harbor-breeze-lounge,T4,GT-S4GH-22RA
+https://www.garsone.gr/q/GT-K43P-V5Q0,harbor-breeze-lounge,T5,GT-K43P-V5Q0
+https://www.garsone.gr/q/GT-ZA08-3KTE,harbor-breeze-lounge,T6,GT-ZA08-3KTE
+https://www.garsone.gr/q/GT-9ZMP-8W1S,harbor-breeze-lounge,T7,GT-9ZMP-8W1S
+https://www.garsone.gr/q/GT-NQF1-YW0E,harbor-breeze-lounge,T8,GT-NQF1-YW0E
+https://www.garsone.gr/q/GT-DYRP-R3XS,harbor-breeze-lounge,T9,GT-DYRP-R3XS
+https://www.garsone.gr/q/GT-6FCY-9B7K,harbor-breeze-lounge,T10,GT-6FCY-9B7K
+https://www.garsone.gr/q/GT-YTCC-G42J,acropolis-street-food,T1,GT-YTCC-G42J
+https://www.garsone.gr/q/GT-0BW0-BHTR,acropolis-street-food,T2,GT-0BW0-BHTR
+https://www.garsone.gr/q/GT-5DXB-TCE5,acropolis-street-food,T3,GT-5DXB-TCE5
+https://www.garsone.gr/q/GT-RRCR-WH9G,acropolis-street-food,T4,GT-RRCR-WH9G
+https://www.garsone.gr/q/GT-QR8Y-0A3K,acropolis-street-food,T5,GT-QR8Y-0A3K
+https://www.garsone.gr/q/GT-Z384-MGZV,acropolis-street-food,T6,GT-Z384-MGZV
+https://www.garsone.gr/q/GT-QP0A-1V9H,acropolis-street-food,T7,GT-QP0A-1V9H
+https://www.garsone.gr/q/GT-T6PF-04HE,acropolis-street-food,T8,GT-T6PF-04HE
+https://www.garsone.gr/q/GT-B50R-C594,acropolis-street-food,T9,GT-B50R-C594
+https://www.garsone.gr/q/GT-03R4-ENV1,acropolis-street-food,T10,GT-03R4-ENV1
