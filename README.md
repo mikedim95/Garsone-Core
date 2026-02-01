@@ -135,7 +135,7 @@ This is not exhaustive; see `src/routes/` for details.
 - Payments: `POST /payment/viva/checkout-url`,
   `POST /payments/viva/webhook`
 - Realtime: `GET /events/ws?token=...` (WebSocket), `POST /events/publish`
-- QR tiles: `GET /publiccode/:publicCode`, `GET /public/table/:tableId`,
+- QR tiles: `GET /q/:publicCode`, `GET /public/table/:tableId`,
   admin routes under `/admin/.../qr-tiles`
 
 ## Viva Docs

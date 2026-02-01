@@ -1,5 +1,4 @@
 import { FastifyInstance } from "fastify";
-import crypto from "crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
@@ -7,8 +6,21 @@ import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
+const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
+
 const bulkCreateSchema = z.object({
-  count: z.coerce.number().int().min(1).max(500),
+  codes: z
+    .array(
+      z
+        .string()
+        .trim()
+        .transform((value) => value.toUpperCase())
+        .refine((value) => QR_CODE_REGEX.test(value), {
+          message: "INVALID_PUBLIC_CODE_FORMAT",
+        })
+    )
+    .min(1)
+    .max(500),
 });
 
 const updateSchema = z
@@ -25,14 +37,22 @@ const updateSchema = z
     { message: "No fields provided" }
   );
 
-function generatePublicCode(length = 4) {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = crypto.randomBytes(length);
-  let code = "";
-  for (let i = 0; i < length; i += 1) {
-    code += alphabet[bytes[i] % alphabet.length];
+const normalizePublicCode = (value: string) => (value || "").trim().toUpperCase();
+
+function wantsJsonResponse(request: any) {
+  const accept = String(request?.headers?.accept || "").toLowerCase();
+  if (!accept) return true;
+  if (accept.includes("text/html") || accept.includes("application/xhtml+xml")) {
+    return false;
   }
-  return code;
+  if (
+    accept.includes("application/json") ||
+    accept.includes("text/json") ||
+    accept.includes("+json")
+  ) {
+    return true;
+  }
+  return true;
 }
 
 function serializeTile(tile: any) {
@@ -123,61 +143,12 @@ function buildPublicRedirectUrl(
 export async function qrTileRoutes(fastify: FastifyInstance) {
   fastify.get("/publiccode/:publicCode", async (request, reply) => {
     const { publicCode } = request.params as { publicCode: string };
-    const normalizedCode = (publicCode || "").trim().toUpperCase();
-    try {
-      const tile = await db.qRTile.findUnique({
-        where: { publicCode: normalizedCode },
-        include: {
-          store: { select: { id: true, slug: true } },
-          table: { select: { id: true, label: true, isActive: true } },
-        },
-      });
-
-      if (!tile || !tile.isActive) {
-        return reply
-          .status(404)
-          .type("text/html")
-          .send(
-            renderPublicMessage(
-              "Code not active",
-              "This code is not active or does not exist."
-            )
-          );
-      }
-
-      if (!tile.tableId || !tile.table || !tile.table.isActive) {
-        return reply
-          .type("text/html")
-          .send(
-            renderPublicMessage(
-              "Unassigned QR",
-              "This QR tile is not assigned to a table yet."
-            )
-          );
-      }
-
-      const target = buildPublicRedirectUrl(
-        tile.store?.slug || "",
-        tile.tableId,
-        request.headers.host,
-        (request as any).protocol
-      );
-      return reply.redirect(302, target);
-    } catch (error) {
-      fastify.log.error(
-        { err: error, publicCode: normalizedCode },
-        "Failed to resolve public QR code"
-      );
-      return reply
-        .status(500)
-        .type("text/html")
-        .send(
-          renderPublicMessage(
-            "Temporary issue",
-            "We could not resolve this code right now. Please try again in a moment."
-          )
-        );
-    }
+    const code = (publicCode || "").trim();
+    const rawUrl = request.raw?.url || request.url || "";
+    const queryIndex = rawUrl.indexOf("?");
+    const qs = queryIndex >= 0 ? rawUrl.slice(queryIndex + 1) : "";
+    const target = `/q/${encodeURIComponent(code)}${qs ? `?${qs}` : ""}`;
+    return reply.redirect(301, target);
   });
 
   // Resolve a tableId to its store slug/label for QR redirects that lack storeSlug param
@@ -207,33 +178,87 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
 
   fastify.get("/q/:publicCode", async (request, reply) => {
     const { publicCode } = request.params as { publicCode: string };
-    const tile = await db.qRTile.findUnique({
-      where: { publicCode },
-      include: {
-        store: { select: { slug: true } },
-        table: { select: { id: true, label: true } },
-      },
-    });
+    const normalizedCode = normalizePublicCode(publicCode);
+    const prefersJson = wantsJsonResponse(request);
 
-    if (!tile || !tile.isActive) {
-      return reply.status(404).send({ error: "QR_TILE_NOT_FOUND_OR_INACTIVE" });
-    }
-
-    if (!tile.tableId) {
-      return reply.send({
-        status: "UNASSIGNED_TILE",
-        storeSlug: tile.store?.slug,
-        publicCode: tile.publicCode,
+    try {
+      const tile = await db.qRTile.findUnique({
+        where: { publicCode: normalizedCode },
+        include: {
+          store: { select: { id: true, slug: true } },
+          table: { select: { id: true, label: true, isActive: true } },
+        },
       });
-    }
 
-    return reply.send({
-      status: "OK",
-      storeSlug: tile.store?.slug,
-      tableId: tile.tableId,
-      tableLabel: tile.table?.label ?? "",
-      publicCode: tile.publicCode,
-    });
+      if (!tile || !tile.isActive) {
+        if (prefersJson) {
+          return reply.status(404).send({ error: "QR_TILE_NOT_FOUND_OR_INACTIVE" });
+        }
+        return reply
+          .status(404)
+          .type("text/html")
+          .send(
+            renderPublicMessage(
+              "Code not active",
+              "This code is not active or does not exist."
+            )
+          );
+      }
+
+      const hasActiveTable = Boolean(tile.tableId && tile.table && tile.table.isActive);
+      if (!hasActiveTable) {
+        if (prefersJson) {
+          return reply.send({
+            status: "UNASSIGNED_TILE",
+            storeSlug: tile.store?.slug,
+            publicCode: tile.publicCode,
+          });
+        }
+        return reply
+          .type("text/html")
+          .send(
+            renderPublicMessage(
+              "Unassigned QR",
+              "This QR tile is not assigned to a table yet."
+            )
+          );
+      }
+
+      if (prefersJson) {
+        return reply.send({
+          status: "OK",
+          storeSlug: tile.store?.slug,
+          tableId: tile.tableId,
+          tableLabel: tile.table?.label ?? "",
+          publicCode: tile.publicCode,
+        });
+      }
+
+      const target = buildPublicRedirectUrl(
+        tile.store?.slug || "",
+        tile.tableId as string,
+        request.headers.host,
+        (request as any).protocol
+      );
+      return reply.redirect(302, target);
+    } catch (error) {
+      fastify.log.error(
+        { err: error, publicCode: normalizedCode },
+        "Failed to resolve public QR code"
+      );
+      if (prefersJson) {
+        return reply.status(500).send({ error: "FAILED_TO_RESOLVE_QR_TILE" });
+      }
+      return reply
+        .status(500)
+        .type("text/html")
+        .send(
+          renderPublicMessage(
+            "Temporary issue",
+            "We could not resolve this code right now. Please try again in a moment."
+          )
+        );
+    }
   });
 
   fastify.get(
@@ -255,6 +280,87 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             ((s as any).settingsJson.printers as any[]).every((p) => typeof p === "string")
               ? ((s as any).settingsJson.printers as string[])
               : [],
+        })),
+      });
+    }
+  );
+
+  fastify.get(
+    "/admin/stores/overview",
+    { preHandler: adminOnly },
+    async (_request, reply) => {
+      const stores = await db.store.findMany({
+        select: { id: true, slug: true, name: true },
+        orderBy: { name: "asc" },
+      });
+
+      const safeGroupBy = async <T>(fn: () => Promise<T>, label: string): Promise<T> => {
+        try {
+          return await fn();
+        } catch (error: any) {
+          if (error?.code === "P2021" || error?.code === "P2022") {
+            fastify.log.warn({ err: error }, `${label} table missing; skipping counts`);
+            return [] as any;
+          }
+          throw error;
+        }
+      };
+
+      const [profileCounts, tileCounts, orderCounts] = await Promise.all([
+        safeGroupBy(
+          () =>
+            db.profile.groupBy({
+              by: ["storeId"],
+              where: { storeId: { not: null } },
+              _count: { _all: true },
+            }),
+          "profiles"
+        ),
+        safeGroupBy(
+          () =>
+            db.qRTile.groupBy({
+              by: ["storeId"],
+              _count: { _all: true },
+            }),
+          "qr_tiles"
+        ),
+        safeGroupBy(
+          () =>
+            db.order.groupBy({
+              by: ["storeId"],
+              _count: { _all: true },
+            }),
+          "orders"
+        ),
+      ]);
+
+      const profileMap = new Map(
+        (profileCounts as Array<{ storeId: string; _count: { _all: number } }>).map((row) => [
+          row.storeId,
+          row._count._all,
+        ])
+      );
+      const tileMap = new Map(
+        (tileCounts as Array<{ storeId: string; _count: { _all: number } }>).map((row) => [
+          row.storeId,
+          row._count._all,
+        ])
+      );
+      const orderMap = new Map(
+        (orderCounts as Array<{ storeId: string; _count: { _all: number } }>).map((row) => [
+          row.storeId,
+          row._count._all,
+        ])
+      );
+
+      return reply.send({
+        stores: stores.map((store) => ({
+          id: store.id,
+          slug: store.slug,
+          name: store.name,
+          usersCount: profileMap.get(store.id) ?? 0,
+          tilesCount: tileMap.get(store.id) ?? 0,
+          ordersCount: orderMap.get(store.id) ?? 0,
         })),
       });
     }
@@ -434,6 +540,19 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       try {
         const { storeId } = request.params as { storeId: string };
         const body = bulkCreateSchema.parse(request.body ?? {});
+        const codes = body.codes;
+        const seen = new Set<string>();
+        const duplicates: string[] = [];
+        for (const code of codes) {
+          if (seen.has(code)) duplicates.push(code);
+          seen.add(code);
+        }
+        if (duplicates.length > 0) {
+          return reply.status(400).send({
+            error: "DUPLICATE_CODES",
+            codes: Array.from(new Set(duplicates)),
+          });
+        }
 
         const store = await db.store.findUnique({
           where: { id: storeId },
@@ -443,23 +562,20 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
+        const existing = await db.qRTile.findMany({
+          where: { publicCode: { in: codes } },
+          select: { publicCode: true },
+        });
+        if (existing.length > 0) {
+          return reply.status(409).send({
+            error: "CODES_ALREADY_EXIST",
+            codes: existing.map((row) => row.publicCode),
+          });
+        }
+
         const created = await db.$transaction(async (tx) => {
           const tiles: any[] = [];
-          const generatedCodes = new Set<string>();
-          let attempts = 0;
-          const maxAttempts = body.count * 250;
-
-          while (tiles.length < body.count && attempts < maxAttempts) {
-            attempts += 1;
-            const publicCode = generatePublicCode(4);
-            if (generatedCodes.has(publicCode)) continue;
-
-            const exists = await tx.qRTile.findUnique({
-              where: { publicCode },
-              select: { id: true },
-            });
-            if (exists) continue;
-
+          for (const publicCode of codes) {
             const tile = await tx.qRTile.create({
               data: {
                 storeId: store.id,
@@ -467,12 +583,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
                 label: null,
               },
             });
-            generatedCodes.add(publicCode);
             tiles.push(tile);
-          }
-
-          if (tiles.length < body.count) {
-            throw new Error("FAILED_TO_GENERATE_CODES");
           }
           return tiles;
         });
@@ -495,8 +606,8 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
         }
-        if ((error as Error)?.message === "FAILED_TO_GENERATE_CODES") {
-          return reply.status(500).send({ error: "Failed to generate unique QR codes" });
+        if ((error as any)?.code === "P2002") {
+          return reply.status(409).send({ error: "CODES_ALREADY_EXIST" });
         }
         fastify.log.error(error, "Failed to bulk create QR tiles");
         return reply.status(500).send({ error: "Failed to create QR tiles" });

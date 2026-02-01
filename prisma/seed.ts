@@ -2,9 +2,11 @@
  * prisma/seed.ts
  *
  * Requirements covered:
- * - Reads STATIC publicCodes from prisma/qr-tiles.txt (random-looking, stable forever)
- * - Generates prisma/qr-print-list.txt with URLs:
- *     ${PUBLIC_APP_URL}/publiccode/${publicCode}
+ * - Reads STATIC public codes from qr_codes.txt (GT-XXXX-XXXX)
+ * - Assigns 10 codes per store (in STORES order)
+ * - Generates prisma/qr-print-list.txt with assigned URLs
+ * - Generates prisma/qr-url-assignments.txt mapping URLs to stores
+ * - Re-exports qr_codes.txt unchanged after seeding
  * - Seeds 3 stores, 10 tables/store, 10 qrTiles/store
  * - Seeds central architect (architect@demo.local / changeme) with NON-NULL storeId:
  *     assigned to a RANDOM existing store id
@@ -23,10 +25,13 @@ const prisma = new PrismaClient();
 
 // ===== runtime config =====
 const SEED_RESET = process.env.SEED_RESET !== "0";
+const QR_CODES_FILE = path.join(process.cwd(), "qr_codes.txt");
+const QR_PER_STORE = 10;
+const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
 const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
 ).replace(/\/+$/, "");
-const QR_PATH_PREFIX = "/publiccode";
+const QR_PATH_PREFIX = "/q";
 
 // ===== progress bars =====
 function bar(label: string, current: number, total: number, width = 28) {
@@ -45,48 +50,69 @@ function section(title: string) {
 }
 
 // ===== helpers =====
-type QrLine = { storeSlug: string; tableLabel: string; publicCode: string };
+type QrAssignment = {
+  storeSlug: string;
+  tableLabel: string;
+  publicCode: string;
+  url: string;
+};
 
-function loadQrTilesFile(): QrLine[] {
-  const file = path.join(process.cwd(), "prisma", "qr-tiles.txt");
-  if (!fs.existsSync(file)) throw new Error(`Missing file: ${file}`);
-
-  const raw = fs.readFileSync(file, "utf8");
-  const lines = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"));
-
-  const parsed: QrLine[] = [];
-  for (const line of lines) {
-    const parts = line.split(",").map((p) => p.trim());
-    if (parts.length !== 3)
-      throw new Error(
-        `Bad qr-tiles.txt line (expected 3 CSV values): "${line}"`
-      );
-    const [storeSlug, tableLabel, publicCode] = parts;
-    if (!storeSlug || !tableLabel || !publicCode)
-      throw new Error(`Bad qr-tiles.txt line (empty value): "${line}"`);
-    parsed.push({ storeSlug, tableLabel, publicCode });
+function loadQrCodesFile(): { raw: string; codes: string[] } {
+  if (!fs.existsSync(QR_CODES_FILE)) {
+    throw new Error(`Missing file: ${QR_CODES_FILE}`);
   }
 
-  // enforce unique publicCode
+  const raw = fs.readFileSync(QR_CODES_FILE, "utf8");
+  const lines = raw.split(/\r?\n/);
+
+  const codes: string[] = [];
   const seen = new Set<string>();
-  for (const x of parsed) {
-    if (seen.has(x.publicCode))
-      throw new Error(`Duplicate publicCode in qr-tiles.txt: ${x.publicCode}`);
-    seen.add(x.publicCode);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (!QR_CODE_REGEX.test(trimmed)) {
+      throw new Error(`Bad qr_codes.txt line (invalid code): "${line}"`);
+    }
+    if (seen.has(trimmed)) {
+      throw new Error(`Duplicate publicCode in qr_codes.txt: ${trimmed}`);
+    }
+    seen.add(trimmed);
+    codes.push(trimmed);
   }
 
-  return parsed;
+  return { raw, codes };
 }
 
-function writeQrPrintList(all: QrLine[]) {
+function buildQrAssignments(codes: string[], stores: StoreConfig[]): QrAssignment[] {
+  const needed = stores.length * QR_PER_STORE;
+  if (codes.length < needed) {
+    throw new Error(
+      `qr_codes.txt must contain at least ${needed} codes (${QR_PER_STORE} per store, ${stores.length} stores). Found ${codes.length}.`
+    );
+  }
+
+  const assignments: QrAssignment[] = [];
+  let index = 0;
+  for (const store of stores) {
+    for (let i = 1; i <= QR_PER_STORE; i += 1) {
+      const publicCode = codes[index++];
+      const url = `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${publicCode}`;
+      assignments.push({
+        storeSlug: store.slug,
+        tableLabel: `T${i}`,
+        publicCode,
+        url,
+      });
+    }
+  }
+  return assignments;
+}
+
+function writeQrPrintList(assignments: QrAssignment[]) {
   const out = [
     "# url,storeSlug,tableLabel,publicCode",
-    ...all.map(
-      (x) =>
-        `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${x.publicCode},${x.storeSlug},${x.tableLabel},${x.publicCode}`
+    ...assignments.map(
+      (x) => `${x.url},${x.storeSlug},${x.tableLabel},${x.publicCode}`
     ),
     "",
   ].join("\n");
@@ -96,6 +122,26 @@ function writeQrPrintList(all: QrLine[]) {
     out,
     "utf8"
   );
+}
+
+function writeQrUrlAssignments(assignments: QrAssignment[]) {
+  const out = [
+    "# storeSlug,tableLabel,publicCode,url",
+    ...assignments.map(
+      (x) => `${x.storeSlug},${x.tableLabel},${x.publicCode},${x.url}`
+    ),
+    "",
+  ].join("\n");
+
+  fs.writeFileSync(
+    path.join(process.cwd(), "prisma", "qr-url-assignments.txt"),
+    out,
+    "utf8"
+  );
+}
+
+function writeQrCodesFile(raw: string) {
+  fs.writeFileSync(QR_CODES_FILE, raw, "utf8");
 }
 
 function randInt(min: number, max: number): number {
@@ -532,7 +578,7 @@ async function resetAll() {
 }
 
 // ===== seed pieces =====
-async function seedStoresAndData(qrAll: QrLine[]) {
+async function seedStoresAndData(qrAssignments: QrAssignment[]) {
   const storeIds: string[] = [];
 
   for (let si = 0; si < STORES.length; si++) {
@@ -673,11 +719,11 @@ async function seedStoresAndData(qrAll: QrLine[]) {
       bar("store:waiterTables", assignments.length, assignments.length);
     }
 
-    // qr tiles from qr-tiles.txt (MUST be 10/store)
-    const storeQr = qrAll.filter((x) => x.storeSlug === cfg.slug);
-    if (storeQr.length !== 10)
+    // qr tiles from qr_codes.txt assignments (MUST be 10/store)
+    const storeQr = qrAssignments.filter((x) => x.storeSlug === cfg.slug);
+    if (storeQr.length !== QR_PER_STORE)
       throw new Error(
-        `qr-tiles.txt must have exactly 10 entries for ${cfg.slug} (found ${storeQr.length})`
+        `qr_codes.txt must have exactly ${QR_PER_STORE} entries for ${cfg.slug} (found ${storeQr.length})`
       );
 
     for (let i = 0; i < storeQr.length; i++) {
@@ -685,7 +731,7 @@ async function seedStoresAndData(qrAll: QrLine[]) {
       const table = tables.find((t) => t.label === x.tableLabel);
       if (!table)
         throw new Error(
-          `qr-tiles.txt references missing table ${cfg.slug}/${x.tableLabel}`
+          `qr_codes.txt references missing table ${cfg.slug}/${x.tableLabel}`
         );
 
       await prisma.qRTile.upsert({
@@ -969,18 +1015,24 @@ async function seedArchitectAssignedToRandomStore(storeIds: string[]) {
 async function main() {
   section("Seed start");
 
-  const qrAll = loadQrTilesFile();
-  writeQrPrintList(qrAll);
+  const { raw, codes } = loadQrCodesFile();
+  const qrAssignments = buildQrAssignments(codes, STORES);
+  writeQrPrintList(qrAssignments);
 
   section("Generated print list");
-  console.log(
-    `prisma/qr-print-list.txt -> ${PUBLIC_APP_URL}${QR_PATH_PREFIX}/<publicCode>`
-  );
+  console.log("prisma/qr-print-list.txt -> assigned URLs from qr_codes.txt");
 
   if (SEED_RESET) await resetAll();
 
-  const storeIds = await seedStoresAndData(qrAll);
+  const storeIds = await seedStoresAndData(qrAssignments);
   await seedArchitectAssignedToRandomStore(storeIds);
+
+  writeQrUrlAssignments(qrAssignments);
+  section("Generated QR URL assignments");
+  console.log("prisma/qr-url-assignments.txt -> store URL mapping");
+  writeQrCodesFile(raw);
+  section("Exported QR codes");
+  console.log("qr_codes.txt -> unchanged");
 
   section("Seed done");
 }
