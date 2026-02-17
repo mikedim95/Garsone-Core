@@ -185,16 +185,6 @@ function buildPublicRedirectUrl(
 }
 
 export async function qrTileRoutes(fastify: FastifyInstance) {
-  fastify.get("/publiccode/:publicCode", async (request, reply) => {
-    const { publicCode } = request.params as { publicCode: string };
-    const code = (publicCode || "").trim();
-    const rawUrl = request.raw?.url || request.url || "";
-    const queryIndex = rawUrl.indexOf("?");
-    const qs = queryIndex >= 0 ? rawUrl.slice(queryIndex + 1) : "";
-    const target = `/q/${encodeURIComponent(code)}${qs ? `?${qs}` : ""}`;
-    return reply.redirect(301, target);
-  });
-
   // Resolve a tableId to its store slug/label for QR redirects that lack storeSlug param
   fastify.get("/public/table/:tableId", async (request, reply) => {
     const { tableId } = request.params as { tableId: string };
