@@ -22,11 +22,23 @@ const BOOTSTRAP_CACHE = createLruCache<{
 
 export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
   fastify.get("/public/menu-bootstrap", async (request, reply) => {
-    const query = request.query as { storeSlug?: string; tableCode?: string };
+    const query = request.query as {
+      storeSlug?: string;
+      tableCode?: string;
+      lang?: string;
+    };
     const tableCode = (query.tableCode || "").trim();
     try {
       const acceptLang = (request.headers["accept-language"] || "").toString().toLowerCase();
-      const preferGreek = acceptLang.includes("el");
+      const requestedLang = (query.lang || "").trim().toLowerCase();
+      const normalizedLang = requestedLang.startsWith("el")
+        ? "el"
+        : requestedLang.startsWith("en")
+        ? "en"
+        : "";
+      const preferGreek = normalizedLang
+        ? normalizedLang === "el"
+        : acceptLang.includes("el");
       const store = await ensureStore(query.storeSlug || request);
 
       const cacheKey = `${store.slug}:${tableCode || "all"}:${preferGreek ? "el" : "en"}`;
