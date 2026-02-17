@@ -37,13 +37,6 @@ export function resolveDbConfig() {
     render_external: process.env.DATABASE_URL_RENDER_EXTERNAL,
   };
 
-  const directUrlByTarget: Record<DbTarget, string | undefined> = {
-    primary: process.env.DIRECT_URL,
-    default: process.env.DIRECT_URL,
-    render_internal: process.env.DIRECT_URL_RENDER_INTERNAL,
-    render_external: process.env.DIRECT_URL_RENDER_EXTERNAL,
-  };
-
   const databaseUrl =
     maybeEnforceSsl(
       databaseUrlByTarget[target] ||
@@ -56,22 +49,11 @@ export function resolveDbConfig() {
     throw new Error(`[db] DATABASE_URL not configured for DB_CONNECTION=${target}`);
   }
 
-  const directUrl =
-    maybeEnforceSsl(
-      directUrlByTarget[target] ||
-    directUrlByTarget.primary ||
-      directUrlByTarget.default,
-      target
-    );
-
-  return { target, databaseUrl, directUrl };
+  return { target, databaseUrl };
 }
 
 export function applyDbConnection() {
   const config = resolveDbConfig();
   process.env.DATABASE_URL = config.databaseUrl;
-  if (config.directUrl) {
-    process.env.DIRECT_URL = config.directUrl;
-  }
   return config;
 }

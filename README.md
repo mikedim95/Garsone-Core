@@ -82,10 +82,8 @@ environment variables via the host platform.
 ### Database
 
 - `DATABASE_URL` (required)
-- `DIRECT_URL` (optional, for migrations)
 - `DB_CONNECTION` (`primary` | `default` | `render_internal` | `render_external`)
 - `DATABASE_URL_RENDER_INTERNAL`, `DATABASE_URL_RENDER_EXTERNAL`
-- `DIRECT_URL_RENDER_INTERNAL`, `DIRECT_URL_RENDER_EXTERNAL`
 - `PRISMA_LOG_QUERIES` (`1` to log queries)
 
 ### MQTT / Realtime
