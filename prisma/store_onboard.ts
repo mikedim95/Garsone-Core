@@ -9,13 +9,12 @@
 //   - Creates 1 Store + StoreMeta
 //   - Creates 1 manager, 1 waiter, 1 cook
 //   - Creates 10 tables (T1..T10)
-//   - Creates 1 QRTile per table
 //   - Assigns waiter to all tables
+//   - Does NOT create QR tiles (architect dashboard generates them)
 //   - Optionally seeds a demo menu + N days of orders using all OrderStatus values
 
 import { PrismaClient, Role, OrderStatus } from "@prisma/client";
 import bcrypt from "bcrypt";
-import { randomBytes } from "crypto";
 import { applyDbConnection } from "../src/db/config";
 
 const { target: dbTarget, databaseUrl } = applyDbConnection();
@@ -249,11 +248,6 @@ function randomTimeOnDay(base: Date): Date {
   return d;
 }
 
-function randomPublicCode(): string {
-  // 16 hex chars -> fits @db.VarChar(32) easily
-  return randomBytes(8).toString("hex");
-}
-
 // =====================
 // MAIN LOGIC
 // =====================
@@ -396,21 +390,6 @@ async function onboardStore() {
     )
   );
 
-  // QRTiles: one per table
-  const qrTiles = await Promise.all(
-    tables.map((table) =>
-      prisma.qRTile.create({
-        data: {
-          storeId,
-          tableId: table.id,
-          publicCode: randomPublicCode(),
-          label: `QR ${table.label}`,
-          isActive: true,
-        },
-      })
-    )
-  );
-
   // Waiter-table assignments: waiter -> all tables
   for (const table of tables) {
     await prisma.waiterTable.create({
@@ -423,7 +402,7 @@ async function onboardStore() {
   }
 
   console.log(
-    `Created ${tables.length} tables, ${qrTiles.length} QR tiles, and waiter assignments.`
+    `Created ${tables.length} tables and waiter assignments.`
   );
 
   if (!CREATE_DEMO_MENU_AND_ORDERS) {
@@ -465,7 +444,6 @@ async function onboardStore() {
           isAvailable: true,
           sortOrder: 0,
           imageUrl: item.imageUrl ?? null,
-          costCents: item.costCents ?? null,
           descriptionEl: item.descriptionEl ?? null,
           descriptionEn: item.descriptionEn ?? null,
           titleEl: item.titleEl,

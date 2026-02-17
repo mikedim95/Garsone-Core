@@ -7,20 +7,11 @@ import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
+const QR_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const QR_SEGMENT_LEN = 4;
 
-const bulkCreateSchema = z.object({
-  codes: z
-    .array(
-      z
-        .string()
-        .trim()
-        .transform((value) => value.toUpperCase())
-        .refine((value) => QR_CODE_REGEX.test(value), {
-          message: "INVALID_PUBLIC_CODE_FORMAT",
-        })
-    )
-    .min(1)
-    .max(500),
+const generateTilesSchema = z.object({
+  count: z.coerce.number().int().min(1).max(500).default(1),
 });
 
 const updateSchema = z
@@ -38,6 +29,59 @@ const updateSchema = z
   );
 
 const normalizePublicCode = (value: string) => (value || "").trim().toUpperCase();
+
+function randomQrSegment(length = QR_SEGMENT_LEN) {
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out += QR_ALPHABET[Math.floor(Math.random() * QR_ALPHABET.length)];
+  }
+  return out;
+}
+
+function generatePublicCodeCandidate() {
+  return `GT-${randomQrSegment()}-${randomQrSegment()}`;
+}
+
+async function generateUniquePublicCodes(count: number) {
+  const selected: string[] = [];
+  const selectedSet = new Set<string>();
+  let guard = 0;
+
+  while (selected.length < count) {
+    guard += 1;
+    if (guard > 1000) {
+      throw new Error("FAILED_TO_GENERATE_UNIQUE_CODES");
+    }
+
+    const remaining = count - selected.length;
+    const batchSize = Math.max(remaining * 3, 20);
+    const candidates: string[] = [];
+    while (candidates.length < batchSize) {
+      candidates.push(generatePublicCodeCandidate());
+    }
+
+    const uniqueCandidates = Array.from(new Set(candidates)).filter(
+      (code) => !selectedSet.has(code)
+    );
+    if (uniqueCandidates.length === 0) continue;
+
+    const existing = await db.qRTile.findMany({
+      where: { publicCode: { in: uniqueCandidates } },
+      select: { publicCode: true },
+    });
+    const existingSet = new Set(existing.map((row) => row.publicCode));
+
+    for (const code of uniqueCandidates) {
+      if (existingSet.has(code) || selectedSet.has(code)) continue;
+      if (!QR_CODE_REGEX.test(code)) continue;
+      selected.push(code);
+      selectedSet.add(code);
+      if (selected.length >= count) break;
+    }
+  }
+
+  return selected;
+}
 
 function wantsJsonResponse(request: any) {
   const accept = String(request?.headers?.accept || "").toLowerCase();
@@ -539,20 +583,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { storeId } = request.params as { storeId: string };
-        const body = bulkCreateSchema.parse(request.body ?? {});
-        const codes = body.codes;
-        const seen = new Set<string>();
-        const duplicates: string[] = [];
-        for (const code of codes) {
-          if (seen.has(code)) duplicates.push(code);
-          seen.add(code);
-        }
-        if (duplicates.length > 0) {
-          return reply.status(400).send({
-            error: "DUPLICATE_CODES",
-            codes: Array.from(new Set(duplicates)),
-          });
-        }
+        const body = generateTilesSchema.parse(request.body ?? {});
 
         const store = await db.store.findUnique({
           where: { id: storeId },
@@ -562,20 +593,11 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
-        const existing = await db.qRTile.findMany({
-          where: { publicCode: { in: codes } },
-          select: { publicCode: true },
-        });
-        if (existing.length > 0) {
-          return reply.status(409).send({
-            error: "CODES_ALREADY_EXIST",
-            codes: existing.map((row) => row.publicCode),
-          });
-        }
+        const generatedCodes = await generateUniquePublicCodes(body.count);
 
         const created = await db.$transaction(async (tx) => {
           const tiles: any[] = [];
-          for (const publicCode of codes) {
+          for (const publicCode of generatedCodes) {
             const tile = await tx.qRTile.create({
               data: {
                 storeId: store.id,
@@ -607,10 +629,12 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             .send({ error: "Invalid request", details: error.errors });
         }
         if ((error as any)?.code === "P2002") {
-          return reply.status(409).send({ error: "CODES_ALREADY_EXIST" });
+          return reply
+            .status(409)
+            .send({ error: "FAILED_TO_GENERATE_UNIQUE_CODES" });
         }
-        fastify.log.error(error, "Failed to bulk create QR tiles");
-        return reply.status(500).send({ error: "Failed to create QR tiles" });
+        fastify.log.error(error, "Failed to generate QR tiles");
+        return reply.status(500).send({ error: "Failed to generate QR tiles" });
       }
     }
   );

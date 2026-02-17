@@ -1,18 +1,12 @@
 /**
  * prisma/seed.ts
  *
- * Requirements covered:
- * - Reads STATIC public codes from qr_codes.txt (GT-XXXX-XXXX)
- * - Assigns 10 codes per store (in STORES order)
- * - Generates prisma/qr-print-list.txt with assigned URLs
- * - Generates prisma/qr-url-assignments.txt mapping URLs to stores
- * - Re-exports qr_codes.txt unchanged after seeding
- * - Seeds 3 stores, 10 tables/store, 10 qrTiles/store
- * - Seeds central architect (architect@demo.local / changeme) with NON-NULL storeId:
- *     assigned to a RANDOM existing store id
- * - Progress bars
- * - No migrationsqrqr
- * - Avoids nested relation writes for Order -> OrderItem (schema-name agnostic)
+ * Simplified QR flow:
+ * - Single seeded store: acropolis-street-food
+ * - Uses ONLY the first 10 public codes from qr_codes.txt
+ * - Maps code #1..#10 -> tables T1..T10 for acropolis-street-food
+ * - Writes prisma/qr-print-list.txt and prisma/qr-url-assignments.txt
+ * - Extra QR tiles are generated later from Architect dashboard
  */
 
 import { PrismaClient, Role, OrderItemStatus, OrderStatus } from "@prisma/client";
@@ -27,6 +21,7 @@ const prisma = new PrismaClient();
 const SEED_RESET = process.env.SEED_RESET !== "0";
 const QR_CODES_FILE = path.join(process.cwd(), "qr_codes.txt");
 const QR_PER_STORE = 10;
+const PRIMARY_STORE_SLUG = "acropolis-street-food";
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
 const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
@@ -83,27 +78,24 @@ function loadQrCodesFile(): { raw: string; codes: string[] } {
   return { raw, codes };
 }
 
-function buildQrAssignments(codes: string[], stores: StoreConfig[]): QrAssignment[] {
-  const needed = stores.length * QR_PER_STORE;
-  if (codes.length < needed) {
+function buildQrAssignments(codes: string[]): QrAssignment[] {
+  if (codes.length < QR_PER_STORE) {
     throw new Error(
-      `qr_codes.txt must contain at least ${needed} codes (${QR_PER_STORE} per store, ${stores.length} stores). Found ${codes.length}.`
+      `qr_codes.txt must contain at least ${QR_PER_STORE} codes. Found ${codes.length}.`
     );
   }
 
   const assignments: QrAssignment[] = [];
-  let index = 0;
-  for (const store of stores) {
-    for (let i = 1; i <= QR_PER_STORE; i += 1) {
-      const publicCode = codes[index++];
-      const url = `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${publicCode}`;
-      assignments.push({
-        storeSlug: store.slug,
-        tableLabel: `T${i}`,
-        publicCode,
-        url,
-      });
-    }
+  for (let i = 0; i < QR_PER_STORE; i += 1) {
+    const publicCode = codes[i];
+    const tableLabel = `T${i + 1}`;
+    const url = `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${publicCode}`;
+    assignments.push({
+      storeSlug: PRIMARY_STORE_SLUG,
+      tableLabel,
+      publicCode,
+      url,
+    });
   }
   return assignments;
 }
@@ -138,10 +130,6 @@ function writeQrUrlAssignments(assignments: QrAssignment[]) {
     out,
     "utf8"
   );
-}
-
-function writeQrCodesFile(raw: string) {
-  fs.writeFileSync(QR_CODES_FILE, raw, "utf8");
 }
 
 function randInt(min: number, max: number): number {
@@ -205,7 +193,7 @@ type StoreConfig = {
     slug: string;
     title: string;
     minSelect?: number;
-    maxSelect?: number | null;
+    maxSelect?: number;
     required?: boolean;
     itemSlugs: string[];
     options: { slug: string; title: string; priceDeltaCents?: number }[];
@@ -223,7 +211,7 @@ type StoreConfig = {
   }[];
 };
 
-const STORES: StoreConfig[] = [
+const ALL_STORES: StoreConfig[] = [
   {
     slug: "harbor-breeze-lounge",
     name: "Harbor Breeze Lounge",
@@ -531,6 +519,16 @@ const STORES: StoreConfig[] = [
   },
 ];
 
+const STORES: StoreConfig[] = ALL_STORES.filter(
+  (store) => store.slug === PRIMARY_STORE_SLUG
+);
+
+if (STORES.length !== 1) {
+  throw new Error(
+    `Seed expects exactly one store with slug "${PRIMARY_STORE_SLUG}".`
+  );
+}
+
 // ===== reset (best-effort order) =====
 async function resetAll() {
   section("Resetting DB");
@@ -834,7 +832,7 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
     for (let mi = 0; mi < modifiers.length; mi++) {
       const mod = modifiers[mi];
       const minSelect = typeof mod.minSelect === "number" ? mod.minSelect : 0;
-      const maxSelect = typeof mod.maxSelect === "number" ? mod.maxSelect : mod.maxSelect === null ? null : 1;
+      const maxSelect = typeof mod.maxSelect === "number" ? mod.maxSelect : 1;
 
       const modifier = await prisma.modifier.upsert({
         where: { storeId_slug: { storeId, slug: mod.slug } },
@@ -843,7 +841,7 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           titleEl: mod.title,
           titleEn: mod.title,
           minSelect,
-          maxSelect: maxSelect === null ? null : maxSelect,
+          maxSelect,
           isAvailable: true,
         },
         create: {
@@ -853,7 +851,7 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           titleEl: mod.title,
           titleEn: mod.title,
           minSelect,
-          maxSelect: maxSelect === null ? null : maxSelect,
+          maxSelect,
           isAvailable: true,
         },
       });
@@ -975,21 +973,16 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
   return storeIds;
 }
 
-async function seedArchitectAssignedToRandomStore(storeIds: string[]) {
-  section("Seeding architect (random storeId, not null)");
-
-  if (storeIds.length === 0)
-    throw new Error("No stores were seeded; cannot assign architect storeId.");
+async function seedArchitectForStore(storeId: string) {
+  section("Seeding architect");
 
   const email = "architect@demo.local";
   const passwordHash = await hashPassword("changeme");
 
-  const randomStoreId = randFromArray(storeIds);
-
   await prisma.profile.upsert({
     where: { globalKey: email },
     update: {
-      storeId: randomStoreId,
+      storeId,
       email,
       globalKey: email,
       role: Role.ARCHITECT,
@@ -998,7 +991,7 @@ async function seedArchitectAssignedToRandomStore(storeIds: string[]) {
       isVerified: true,
     },
     create: {
-      storeId: randomStoreId,
+      storeId,
       email,
       globalKey: email,
       role: Role.ARCHITECT,
@@ -1015,24 +1008,27 @@ async function seedArchitectAssignedToRandomStore(storeIds: string[]) {
 async function main() {
   section("Seed start");
 
-  const { raw, codes } = loadQrCodesFile();
-  const qrAssignments = buildQrAssignments(codes, STORES);
+  const { codes } = loadQrCodesFile();
+  const qrAssignments = buildQrAssignments(codes);
   writeQrPrintList(qrAssignments);
 
   section("Generated print list");
-  console.log("prisma/qr-print-list.txt -> assigned URLs from qr_codes.txt");
+  console.log(
+    "prisma/qr-print-list.txt -> first 10 qr_codes.txt codes mapped to acropolis-street-food T1..T10"
+  );
 
   if (SEED_RESET) await resetAll();
 
   const storeIds = await seedStoresAndData(qrAssignments);
-  await seedArchitectAssignedToRandomStore(storeIds);
+  const primaryStoreId = storeIds[0];
+  if (!primaryStoreId) {
+    throw new Error("Primary store was not seeded.");
+  }
+  await seedArchitectForStore(primaryStoreId);
 
   writeQrUrlAssignments(qrAssignments);
   section("Generated QR URL assignments");
   console.log("prisma/qr-url-assignments.txt -> store URL mapping");
-  writeQrCodesFile(raw);
-  section("Exported QR codes");
-  console.log("qr_codes.txt -> unchanged");
 
   section("Seed done");
 }
