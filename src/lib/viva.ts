@@ -20,6 +20,12 @@ const VIVA_SOURCE_CODE = process.env.VIVA_SOURCE_CODE || "Default";
 const VIVA_MERCHANT_ID = process.env.VIVA_MERCHANT_ID || "";
 const VIVA_CLIENT_ID = process.env.VIVA_CLIENT_ID || "";
 const VIVA_CLIENT_SECRET = process.env.VIVA_CLIENT_SECRET || "";
+const VIVA_CUSTOMER_COUNTRY_CODE = (
+  process.env.VIVA_CUSTOMER_COUNTRY_CODE || "GR"
+)
+  .trim()
+  .toUpperCase();
+const VIVA_REQUEST_LANG = (process.env.VIVA_REQUEST_LANG || "el-GR").trim();
 const VIVA_TOKEN_URL =
   process.env.VIVA_TOKEN_URL ||
   "https://demo-accounts.vivapayments.com/connect/token";
@@ -159,6 +165,11 @@ export async function createVivaPaymentOrder(
     const amountCents = Math.round(request.amount * 100);
     const currencyCode = Number(process.env.VIVA_CURRENCY_CODE || 978); // 978 = EUR
 
+    const customerCountryCode = /^[A-Z]{2}$/.test(VIVA_CUSTOMER_COUNTRY_CODE)
+      ? VIVA_CUSTOMER_COUNTRY_CODE
+      : "GR";
+    const requestLang = VIVA_REQUEST_LANG || "el-GR";
+
     // Create payment order via Viva API
     // POST /checkout/v2/orders
     const orderPayload: Record<string, unknown> = {
@@ -174,8 +185,8 @@ export async function createVivaPaymentOrder(
       customer: {
         email: request.customerEmail || "customer@example.com",
         fullName: request.customerName || "Customer",
-        countryCode: "US",
-        requestLang: "en-US",
+        countryCode: customerCountryCode,
+        requestLang,
       },
       tags: [
         "restaurant-order",

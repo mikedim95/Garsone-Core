@@ -118,6 +118,8 @@ environment variables via the host platform.
 - `VIVA_CLIENT_ID`, `VIVA_CLIENT_SECRET`, `VIVA_MERCHANT_ID`
 - `VIVA_TOKEN_URL`
 - `VIVA_CURRENCY_CODE` (default `978` for EUR)
+- `VIVA_CUSTOMER_COUNTRY_CODE` (default `GR`)
+- `VIVA_REQUEST_LANG` (default `el-GR`)
 
 ## API Overview
 
