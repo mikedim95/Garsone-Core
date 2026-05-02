@@ -219,7 +219,7 @@ type StoreConfig = {
       title: string;
       subcategory?: string;
       priceCents: number;
-      imageUrl: string;
+      imageUrl?: string;
     }[];
   }[];
 };
@@ -424,6 +424,25 @@ const ALL_STORES: StoreConfig[] = [
           { slug: "no-ice", title: "No ice" },
         ],
       },
+      {
+        slug: "shisha-strength",
+        title: "Shisha strength",
+        minSelect: 1,
+        maxSelect: 1,
+        required: true,
+        itemSlugs: [
+          "shisha-double-apple",
+          "shisha-blueberry-mint",
+          "shisha-lemon-mint",
+          "shisha-grapefruit",
+          "shisha-watermelon-lemon",
+          "shisha-passion-lime",
+        ],
+        options: [
+          { slug: "light", title: "Light" },
+          { slug: "heavy", title: "Heavy" },
+        ],
+      },
     ],
     cookTypes: [
       { slug: "grill", title: "Grill Station", printerTopic: "printer_1" },
@@ -531,6 +550,49 @@ const ALL_STORES: StoreConfig[] = [
             priceCents: 450,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/beer.jpg",
+          },
+        ],
+      },
+      {
+        slug: "shisha",
+        title: "Shisha",
+        printerTopic: "bar",
+        items: [
+          {
+            slug: "shisha-double-apple",
+            title: "Double Apple Shisha",
+            subcategory: "Sweet",
+            priceCents: 1800,
+          },
+          {
+            slug: "shisha-blueberry-mint",
+            title: "Blueberry Mint Shisha",
+            subcategory: "Sweet",
+            priceCents: 1900,
+          },
+          {
+            slug: "shisha-lemon-mint",
+            title: "Lemon Mint Shisha",
+            subcategory: "Sour",
+            priceCents: 1850,
+          },
+          {
+            slug: "shisha-grapefruit",
+            title: "Grapefruit Shisha",
+            subcategory: "Sour",
+            priceCents: 1850,
+          },
+          {
+            slug: "shisha-watermelon-lemon",
+            title: "Watermelon Lemon Shisha",
+            subcategory: "Sweet-Sour",
+            priceCents: 1950,
+          },
+          {
+            slug: "shisha-passion-lime",
+            title: "Passion Lime Shisha",
+            subcategory: "Sweet-Sour",
+            priceCents: 1950,
           },
         ],
       },
