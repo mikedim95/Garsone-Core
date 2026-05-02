@@ -1027,6 +1027,9 @@ export async function managerRoutes(fastify: FastifyInstance) {
           title: i.title,
           titleEn: i.titleEn || i.title,
           titleEl: i.titleEl || i.title,
+          subcategory: i.subcategoryEn ?? i.subcategoryEl ?? null,
+          subcategoryEn: i.subcategoryEn ?? null,
+          subcategoryEl: i.subcategoryEl ?? null,
           description: i.description,
           descriptionEn: i.descriptionEn ?? i.description,
           descriptionEl: i.descriptionEl ?? i.description,
@@ -1042,9 +1045,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   );
 
+  const normalizeOptionalItemText = (value?: string | null) => {
+    if (value == null) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
   const itemCreateSchema = z.object({
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
+    subcategoryEn: z.string().trim().max(255).nullable().optional(),
+    subcategoryEl: z.string().trim().max(255).nullable().optional(),
     descriptionEn: z.string().optional(),
     descriptionEl: z.string().optional(),
     imageUrl: z.string().url().max(2048).optional(),
@@ -1083,6 +1094,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             title: body.titleEn,
             titleEn: body.titleEn,
             titleEl: body.titleEl,
+            subcategoryEn: normalizeOptionalItemText(body.subcategoryEn),
+            subcategoryEl: normalizeOptionalItemText(body.subcategoryEl),
             description: body.descriptionEn,
             descriptionEn: body.descriptionEn,
             descriptionEl: body.descriptionEl,
@@ -1117,6 +1130,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
+    subcategoryEn: z.string().trim().max(255).nullable().optional(),
+    subcategoryEl: z.string().trim().max(255).nullable().optional(),
     description: z.string().optional(),
     descriptionEn: z.string().optional().nullable(),
     descriptionEl: z.string().optional().nullable(),
@@ -1156,6 +1171,12 @@ export async function managerRoutes(fastify: FastifyInstance) {
         } else if (body.title) {
           data.title = body.title;
           data.titleEn = body.title;
+        }
+        if (body.subcategoryEn !== undefined) {
+          data.subcategoryEn = normalizeOptionalItemText(body.subcategoryEn);
+        }
+        if (body.subcategoryEl !== undefined) {
+          data.subcategoryEl = normalizeOptionalItemText(body.subcategoryEl);
         }
         const updated = await db.item.update({ where: { id }, data });
         invalidateMenuCache();

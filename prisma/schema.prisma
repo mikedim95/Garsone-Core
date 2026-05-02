@@ -109,6 +109,8 @@ model Item {
   title         String         @db.VarChar(255)
   titleEl       String?        @db.VarChar(255)
   titleEn       String?        @db.VarChar(255)
+  subcategoryEn String?        @db.VarChar(255)
+  subcategoryEl String?        @db.VarChar(255)
   description   String?        @db.VarChar(2000)
   descriptionEl String?        @db.VarChar(2000)
   descriptionEn String?        @db.VarChar(2000)
@@ -211,14 +213,14 @@ model Table {
 
 model QRTile {
   id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId     String       @db.Uuid
+  storeId     String?      @db.Uuid
   tableId     String?      @db.Uuid
   publicCode  String       @unique @db.VarChar(32)
   label       String?      @db.VarChar(100)
   isActive    Boolean      @default(true)
   createdAt   DateTime     @default(now()) @db.Timestamp(6)
   updatedAt   DateTime     @updatedAt @db.Timestamp(6)
-  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store       Store?       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table       Table?       @relation(fields: [tableId], references: [id], onDelete: Cascade)
   tableVisits TableVisit[]
   localityApprovals LocalityApproval[]

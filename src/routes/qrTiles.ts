@@ -5,6 +5,7 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
+const architectOnly = [authMiddleware, requireRole(["architect"])];
 
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
 const QR_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -16,12 +17,14 @@ const generateTilesSchema = z.object({
 
 const updateSchema = z
   .object({
+    storeId: z.string().uuid().nullable().optional(),
     tableId: z.string().uuid().nullable().optional(),
     isActive: z.boolean().optional(),
-    label: z.string().trim().max(255).optional(),
+    label: z.string().trim().max(255).nullable().optional(),
   })
   .refine(
     (val) =>
+      typeof val.storeId !== "undefined" ||
       typeof val.tableId !== "undefined" ||
       typeof val.isActive !== "undefined" ||
       typeof val.label !== "undefined",
@@ -102,16 +105,53 @@ function wantsJsonResponse(request: any) {
 function serializeTile(tile: any) {
   return {
     id: tile.id,
-    storeId: tile.storeId,
-    storeSlug: tile.store?.slug,
+    storeId: tile.storeId ?? null,
+    storeSlug: tile.store?.slug ?? null,
+    storeName: tile.store?.name ?? null,
     publicCode: tile.publicCode,
-    label: null,
+    label: tile.label ?? null,
     isActive: tile.isActive,
-    tableId: tile.tableId,
+    tableId: tile.tableId ?? null,
     tableLabel: tile.table?.label ?? null,
     createdAt: tile.createdAt,
     updatedAt: tile.updatedAt,
   };
+}
+
+async function createTiles(
+  storeId: string | null,
+  count: number
+) {
+  const generatedCodes = await generateUniquePublicCodes(count);
+
+  const created = await db.$transaction(async (tx) => {
+    const tiles: any[] = [];
+    for (const publicCode of generatedCodes) {
+      const tile = await tx.qRTile.create({
+        data: storeId
+          ? {
+              storeId,
+              publicCode,
+              label: null,
+            }
+          : {
+              publicCode,
+              label: null,
+            },
+      });
+      tiles.push(tile);
+    }
+    return tiles;
+  });
+
+  return db.qRTile.findMany({
+    where: { id: { in: created.map((tile) => tile.id) } },
+    include: {
+      store: { select: { slug: true, name: true } },
+      table: { select: { id: true, label: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 const PUBLIC_APP_BASE_URL = (process.env.PUBLIC_APP_BASE_URL || "").trim();
@@ -400,6 +440,51 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     }
   );
 
+  fastify.get(
+    "/admin/qr-tiles",
+    { preHandler: architectOnly },
+    async (_request, reply) => {
+      const tiles = await db.qRTile.findMany({
+        include: {
+          store: { select: { slug: true, name: true } },
+          table: { select: { id: true, label: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return reply.send({
+        tiles: tiles.map(serializeTile),
+      });
+    }
+  );
+
+  fastify.post(
+    "/admin/qr-tiles/bulk",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const body = generateTilesSchema.parse(request.body ?? {});
+        const created = await createTiles(null, body.count);
+        return reply.status(201).send({
+          tiles: created.map(serializeTile),
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        if ((error as any)?.code === "P2002") {
+          return reply
+            .status(409)
+            .send({ error: "FAILED_TO_GENERATE_UNIQUE_CODES" });
+        }
+        fastify.log.error(error, "Failed to generate global QR tiles");
+        return reply.status(500).send({ error: "Failed to generate QR tiles" });
+      }
+    }
+  );
+
   fastify.patch(
     "/admin/stores/:storeId/ordering-mode",
     { preHandler: adminOnly },
@@ -554,7 +639,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       const tiles = await db.qRTile.findMany({
         where: { storeId },
         include: {
-          store: { select: { slug: true } },
+          store: { select: { slug: true, name: true } },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -583,31 +668,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
-        const generatedCodes = await generateUniquePublicCodes(body.count);
-
-        const created = await db.$transaction(async (tx) => {
-          const tiles: any[] = [];
-          for (const publicCode of generatedCodes) {
-            const tile = await tx.qRTile.create({
-              data: {
-                storeId: store.id,
-                publicCode,
-                label: null,
-              },
-            });
-            tiles.push(tile);
-          }
-          return tiles;
-        });
-
-        const hydrated = await db.qRTile.findMany({
-          where: { id: { in: created.map((t) => t.id) } },
-          include: {
-            store: { select: { slug: true } },
-            table: { select: { id: true, label: true } },
-          },
-          orderBy: { createdAt: "desc" },
-        });
+        const hydrated = await createTiles(store.id, body.count);
 
         return reply
           .status(201)
@@ -636,11 +697,12 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = updateSchema.parse(request.body ?? {});
+        const userRole = String((request as any)?.user?.role || "").toLowerCase();
 
         const tile = await db.qRTile.findUnique({
           where: { id },
           include: {
-            store: { select: { id: true, slug: true } },
+            store: { select: { id: true, slug: true, name: true } },
             table: { select: { id: true, label: true } },
           },
         });
@@ -649,26 +711,66 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "QR_TILE_NOT_FOUND" });
         }
 
+        if (typeof body.storeId !== "undefined" && userRole !== "architect") {
+          return reply
+            .status(403)
+            .send({ error: "Only architects can change venue bindings" });
+        }
+
         const updateData: any = {};
         if (typeof body.isActive !== "undefined") {
           updateData.isActive = body.isActive;
         }
         if (typeof body.label !== "undefined") {
-          updateData.label = null;
+          updateData.label = body.label?.trim() ? body.label.trim() : null;
         }
-        if (typeof body.tableId !== "undefined") {
+
+        let nextStoreId =
+          typeof body.storeId !== "undefined" ? body.storeId : tile.storeId ?? null;
+        const hasStoreChange =
+          typeof body.storeId !== "undefined" && body.storeId !== (tile.storeId ?? null);
+
+        if (typeof body.storeId !== "undefined" && body.storeId) {
+          const store = await db.store.findUnique({
+            where: { id: body.storeId },
+            select: { id: true },
+          });
+          if (!store) {
+            return reply.status(400).send({ error: "STORE_NOT_FOUND" });
+          }
+        }
+
+        if (body.storeId === null) {
+          nextStoreId = null;
+          updateData.storeId = null;
+          updateData.tableId = null;
+        } else if (typeof body.tableId !== "undefined") {
           if (body.tableId === null) {
             updateData.tableId = null;
+            if (typeof body.storeId !== "undefined") {
+              updateData.storeId = nextStoreId;
+            }
           } else {
-            const table = await db.table.findFirst({
-              where: { id: body.tableId, storeId: tile.storeId },
+            const table = await db.table.findUnique({
+              where: { id: body.tableId },
+              select: { id: true, storeId: true },
             });
             if (!table) {
+              return reply.status(400).send({ error: "TABLE_NOT_FOUND" });
+            }
+            if (nextStoreId && table.storeId !== nextStoreId) {
               return reply
                 .status(400)
                 .send({ error: "TABLE_NOT_FOUND_FOR_STORE" });
             }
+            updateData.storeId = table.storeId;
             updateData.tableId = table.id;
+            nextStoreId = table.storeId;
+          }
+        } else if (typeof body.storeId !== "undefined") {
+          updateData.storeId = nextStoreId;
+          if (hasStoreChange) {
+            updateData.tableId = null;
           }
         }
 
@@ -676,7 +778,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           where: { id },
           data: updateData,
           include: {
-            store: { select: { slug: true } },
+            store: { select: { slug: true, name: true } },
             table: { select: { id: true, label: true } },
           },
         });

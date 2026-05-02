@@ -50,7 +50,7 @@ export async function localityRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "QR_TILE_NOT_FOUND_OR_INACTIVE" });
         }
 
-        if (!tile.tableId || !tile.table || !tile.table.isActive) {
+        if (!tile.storeId || !tile.tableId || !tile.table || !tile.table.isActive) {
           return reply.status(409).send({ error: "QR_TILE_UNASSIGNED" });
         }
 

@@ -14,8 +14,20 @@ import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
+import { applyDbConnection } from "../src/db/config";
 
+const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
+
+try {
+  const { hostname, pathname } = new URL(databaseUrl);
+  const dbName = pathname?.replace("/", "") || "";
+  console.log(
+    `[seed] DB_CONNECTION=${dbTarget} -> ${hostname}${dbName ? `/${dbName}` : ""}`
+  );
+} catch {
+  console.log(`[seed] DB_CONNECTION=${dbTarget}`);
+}
 
 // ===== runtime config =====
 const SEED_RESET = process.env.SEED_RESET !== "0";
@@ -205,6 +217,7 @@ type StoreConfig = {
     items: {
       slug: string;
       title: string;
+      subcategory?: string;
       priceCents: number;
       imageUrl: string;
     }[];
@@ -460,6 +473,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "pita-pork",
             title: "Pita Pork",
+            subcategory: "Pita Wraps",
             priceCents: 350,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-pork.jpg",
@@ -467,6 +481,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "pita-chicken",
             title: "Pita Chicken",
+            subcategory: "Pita Wraps",
             priceCents: 380,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-chicken.jpg",
@@ -481,6 +496,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "gyro-plate",
             title: "Gyro Plate",
+            subcategory: "Grill Plates",
             priceCents: 900,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/gyro-plate.jpg",
@@ -488,6 +504,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "mixed-grill",
             title: "Mixed Grill",
+            subcategory: "Grill Plates",
             priceCents: 1400,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/mixed-grill.jpg",
@@ -502,6 +519,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "cola",
             title: "Cola",
+            subcategory: "Cold Drinks",
             priceCents: 200,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/cola.jpg",
@@ -509,6 +527,7 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "beer",
             title: "Beer",
+            subcategory: "Cold Drinks",
             priceCents: 450,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/beer.jpg",
@@ -795,6 +814,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
             title: it.title,
             titleEl: it.title,
             titleEn: it.title,
+            subcategoryEn: it.subcategory ?? null,
+            subcategoryEl: it.subcategory ?? null,
             priceCents: it.priceCents,
             isAvailable: true,
             imageUrl: it.imageUrl ?? null,
@@ -807,6 +828,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
             title: it.title,
             titleEl: it.title,
             titleEn: it.title,
+            subcategoryEn: it.subcategory ?? null,
+            subcategoryEl: it.subcategory ?? null,
             priceCents: it.priceCents,
             isAvailable: true,
             sortOrder: ii,
