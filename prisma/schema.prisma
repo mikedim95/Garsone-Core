@@ -34,6 +34,7 @@ model Store {
   waiterTables      WaiterTable[]
   waiterTypes       WaiterType[]
   localityApprovals LocalityApproval[]
+  nodeAgents        NodeAgent[]
 
   @@index([createdAt(sort: Desc)])
   @@map("stores")
@@ -272,6 +273,45 @@ model LocalityApproval {
   @@map("locality_approvals")
 }
 
+model NodeAgent {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId              String             @db.Uuid
+  slug                 String             @db.VarChar(100)
+  displayName          String             @db.VarChar(255)
+  tokenHash            String             @db.VarChar(128)
+  configJson           Json?
+  desiredConfigVersion Int                @default(1)
+  lastAppliedVersion   Int?
+  lastSeenAt           DateTime?          @db.Timestamp(6)
+  status               NodeAgentStatus    @default(PENDING)
+  statusMessage        String?            @db.VarChar(1000)
+  lastLog              String?
+  createdAt            DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt            DateTime           @updatedAt @db.Timestamp(6)
+  store                Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  events               NodeAgentEvent[]
+
+  @@unique([storeId, slug])
+  @@index([storeId])
+  @@index([lastSeenAt])
+  @@map("node_agents")
+}
+
+model NodeAgentEvent {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nodeId    String    @db.Uuid
+  storeId   String    @db.Uuid
+  ts        DateTime  @default(now()) @db.Timestamp(6)
+  level     String    @db.VarChar(32)
+  message   String    @db.VarChar(1000)
+  metaJson  Json?
+  node      NodeAgent @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@index([nodeId, ts(sort: Desc)])
+  @@index([storeId, ts(sort: Desc)])
+  @@map("node_agent_events")
+}
+
 model Order {
   id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId         String        @db.Uuid
@@ -487,4 +527,13 @@ enum PaymentStatus {
   COMPLETED
   CANCELLED
   FAILED
+}
+
+enum NodeAgentStatus {
+  PENDING
+  ONLINE
+  APPLYING
+  DEGRADED
+  ERROR
+  OFFLINE
 }

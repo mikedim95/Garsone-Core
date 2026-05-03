@@ -12,6 +12,7 @@ import { eventsRoutes } from "./routes/events.js";
 import { qrTileRoutes } from "./routes/qrTiles.js";
 import { localityRoutes } from "./routes/locality.js";
 import { publicMenuBootstrapRoutes } from "./routes/publicMenuBootstrap.js";
+import { nodeAgentRoutes } from "./routes/nodeAgents.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
 import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
@@ -59,6 +60,7 @@ await fastify.register(eventsRoutes);
 await fastify.register(qrTileRoutes);
 await fastify.register(localityRoutes);
 await fastify.register(publicMenuBootstrapRoutes);
+await fastify.register(nodeAgentRoutes);
 
 // Start server
 try {
