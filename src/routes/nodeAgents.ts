@@ -17,6 +17,14 @@ const printerSchema = z.object({
   label: z.string().trim().max(120).optional(),
 });
 
+const wifiNetworkSchema = z.object({
+  id: z.string().trim().max(80).optional(),
+  ssid: z.string().trim().min(1).max(255),
+  password: z.string().max(255).optional().default(""),
+  priority: z.coerce.number().int().min(1).max(20).optional().default(1),
+  hidden: z.boolean().optional().default(false),
+});
+
 const nodeConfigSchema = z.object({
   displayName: z.string().trim().min(1).max(255).default("Venue Pi"),
   nodeSlug: z.string().trim().min(1).max(100).default("main"),
@@ -24,6 +32,7 @@ const nodeConfigSchema = z.object({
   localHostname: z.string().trim().max(255).optional().default(""),
   wifiSsid: z.string().trim().max(255).optional().default(""),
   wifiPassword: z.string().max(255).optional().default(""),
+  wifiNetworks: z.array(wifiNetworkSchema).max(10).optional().default([]),
   mqttHost: z.string().trim().min(1).max(255),
   mqttPort: z.coerce.number().int().min(1).max(65535).default(8883),
   mqttTls: z.boolean().default(true),
@@ -64,6 +73,13 @@ function serializeNode(node: any, includeSensitive = false) {
   if (!includeSensitive) {
     if ("wifiPassword" in safeConfig) safeConfig.wifiPasswordSet = Boolean(safeConfig.wifiPassword);
     if ("mqttPass" in safeConfig) safeConfig.mqttPassSet = Boolean(safeConfig.mqttPass);
+    if (Array.isArray(safeConfig.wifiNetworks)) {
+      safeConfig.wifiNetworks = safeConfig.wifiNetworks.map((wifi: any) => ({
+        ...wifi,
+        passwordSet: Boolean(wifi?.password),
+        password: "",
+      }));
+    }
     delete safeConfig.wifiPassword;
     delete safeConfig.mqttPass;
   }
@@ -138,6 +154,19 @@ function buildAgentConfig(node: any, store: any) {
       tailscaleHostname: config.tailscaleHostname ?? "",
       wifiSsid: config.wifiSsid ?? "",
       wifiPassword: config.wifiPassword ?? "",
+      wifiNetworks: Array.isArray(config.wifiNetworks)
+        ? config.wifiNetworks
+        : config.wifiSsid
+        ? [
+            {
+              id: "wifi-1",
+              ssid: config.wifiSsid,
+              password: config.wifiPassword ?? "",
+              priority: 1,
+              hidden: false,
+            },
+          ]
+        : [],
     },
     printers: Array.isArray(config.printers) ? config.printers : [],
   };
@@ -186,9 +215,49 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const secret = existing ? null : `gnode_${randomBytes(32).toString("base64url")}`;
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
+        const previousWifiById = new Map<string, any>(
+          Array.isArray(previousConfig.wifiNetworks)
+            ? previousConfig.wifiNetworks
+                .filter((wifi: any) => wifi?.id)
+                .map((wifi: any) => [String(wifi.id), wifi])
+            : []
+        );
+        const previousWifiBySsid = new Map<string, any>(
+          Array.isArray(previousConfig.wifiNetworks)
+            ? previousConfig.wifiNetworks
+                .filter((wifi: any) => wifi?.ssid)
+                .map((wifi: any) => [String(wifi.ssid), wifi])
+            : []
+        );
+        const wifiNetworks =
+          body.wifiNetworks.length > 0
+            ? body.wifiNetworks.map((wifi, index) => {
+                const previous =
+                  previousWifiById.get(String(wifi.id || "")) ??
+                  previousWifiBySsid.get(wifi.ssid);
+                return {
+                  ...wifi,
+                  id: wifi.id?.trim() || `wifi-${index + 1}`,
+                  password: wifi.password || previous?.password || "",
+                  priority: wifi.priority || index + 1,
+                  hidden: Boolean(wifi.hidden),
+                };
+              })
+            : body.wifiSsid
+            ? [
+                {
+                  id: "wifi-1",
+                  ssid: body.wifiSsid,
+                  password: body.wifiPassword || previousConfig.wifiPassword || "",
+                  priority: 1,
+                  hidden: false,
+                },
+              ]
+            : [];
         const config = {
           ...body,
           nodeSlug: slug,
+          wifiNetworks,
           wifiPassword: body.wifiPassword || previousConfig.wifiPassword || "",
           mqttPass: body.mqttPass || previousConfig.mqttPass || "",
           printers: body.printers.map((printer, index) => ({
