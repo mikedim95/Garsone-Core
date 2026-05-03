@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
@@ -6,6 +7,13 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { invalidateStoreCache } from "../lib/store.js";
 
 const adminOnly = [authMiddleware, requireRole(["architect"])];
+
+function isMissingNodeAgentTable(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2021" || error.code === "P2022")
+  );
+}
 
 const printerSchema = z.object({
   id: z.string().trim().max(80).optional(),
@@ -190,11 +198,20 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     { preHandler: adminOnly },
     async (request, reply) => {
       const { storeId } = request.params as { storeId: string };
-      const nodes = await db.nodeAgent.findMany({
-        where: { storeId },
-        orderBy: { createdAt: "asc" },
-      });
-      return reply.send({ nodes: nodes.map((node) => serializeNode(node)) });
+      try {
+        const nodes = await db.nodeAgent.findMany({
+          where: { storeId },
+          orderBy: { createdAt: "asc" },
+        });
+        return reply.send({ nodes: nodes.map((node) => serializeNode(node)) });
+      } catch (error) {
+        if (isMissingNodeAgentTable(error)) {
+          fastify.log.warn(error, "Node agent tables are not migrated yet");
+          return reply.send({ nodes: [], migrationRequired: true });
+        }
+        fastify.log.error(error, "Failed to list nodes");
+        return reply.status(500).send({ error: "Failed to list nodes" });
+      }
     }
   );
 
@@ -299,6 +316,9 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if (isMissingNodeAgentTable(error)) {
+          return reply.status(503).send({ error: "NODE_AGENT_MIGRATION_REQUIRED" });
         }
         fastify.log.error(error, "Failed to save node");
         return reply.status(500).send({ error: "Failed to save node" });

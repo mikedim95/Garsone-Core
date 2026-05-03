@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "db:generate": "prisma generate",
-    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:seed:render_internal": "cross-env DB_CONNECTION=render_internal prisma db seed",
     "db:seed:render_external": "cross-env DB_CONNECTION=render_external prisma db seed",
