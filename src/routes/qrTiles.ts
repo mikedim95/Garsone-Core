@@ -1,5 +1,7 @@
 import { FastifyInstance } from "fastify";
+import { Role } from "@prisma/client";
 import { z } from "zod";
+import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
@@ -13,6 +15,19 @@ const QR_SEGMENT_LEN = 4;
 
 const generateTilesSchema = z.object({
   count: z.coerce.number().int().min(1).max(500).default(1),
+});
+
+const createStoreSchema = z.object({
+  slug: z.string().trim().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().trim().min(1).max(255),
+  defaultPassword: z.string().min(8).max(200),
+  currencyCode: z.string().trim().min(1).max(8).default("EUR"),
+  locale: z.string().trim().min(1).max(16).default("el"),
+  printerTopic: z.string().trim().min(1).max(255).default("printer_1"),
+  tableCount: z.coerce.number().int().min(1).max(200).default(10),
+  managerEmail: z.string().email().optional(),
+  waiterEmail: z.string().email().optional(),
+  cookEmail: z.string().email().optional(),
 });
 
 const updateSchema = z
@@ -225,6 +240,114 @@ function buildPublicRedirectUrl(
 }
 
 export async function qrTileRoutes(fastify: FastifyInstance) {
+  fastify.post(
+    "/admin/stores",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      const body = createStoreSchema.parse(request.body ?? {});
+      const existing = await db.store.findUnique({ where: { slug: body.slug } });
+      if (existing) {
+        return reply.status(409).send({ error: "STORE_ALREADY_EXISTS", id: existing.id });
+      }
+
+      const passwordHash = await bcrypt.hash(body.defaultPassword, 10);
+      const store = await db.$transaction(async (tx) => {
+        const createdStore = await tx.store.create({
+          data: {
+            slug: body.slug,
+            name: body.name,
+            settingsJson: { orderingMode: "hybrid", printers: [body.printerTopic] },
+          },
+        });
+        await tx.storeMeta.create({
+          data: {
+            storeId: createdStore.id,
+            currencyCode: body.currencyCode,
+            locale: body.locale,
+          },
+        });
+        const cookType = await tx.cookType.create({
+          data: {
+            storeId: createdStore.id,
+            slug: "kitchen",
+            title: "Kitchen",
+            printerTopic: body.printerTopic,
+          },
+        });
+        const waiterType = await tx.waiterType.create({
+          data: {
+            storeId: createdStore.id,
+            slug: "floor",
+            title: "Floor",
+            printerTopic: body.printerTopic,
+          },
+        });
+        const manager = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.managerEmail ?? `manager@${body.slug}.local`,
+            passwordHash,
+            role: Role.MANAGER,
+            displayName: `${body.name} Manager`,
+            isVerified: true,
+          },
+        });
+        const waiter = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.waiterEmail ?? `waiter@${body.slug}.local`,
+            passwordHash,
+            role: Role.WAITER,
+            displayName: `${body.name} Waiter`,
+            waiterTypeId: waiterType.id,
+            isVerified: true,
+          },
+        });
+        const cook = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.cookEmail ?? `cook@${body.slug}.local`,
+            passwordHash,
+            role: Role.COOK,
+            displayName: `${body.name} Cook`,
+            cookTypeId: cookType.id,
+            isVerified: true,
+          },
+        });
+
+        for (let i = 1; i <= body.tableCount; i += 1) {
+          const table = await tx.table.create({
+            data: { storeId: createdStore.id, label: `T${i}`, isActive: true },
+          });
+          await tx.waiterTable.create({
+            data: {
+              storeId: createdStore.id,
+              waiterId: waiter.id,
+              tableId: table.id,
+            },
+          });
+        }
+
+        return { createdStore, manager, waiter, cook };
+      });
+      invalidateStoreCache(body.slug);
+
+      return reply.status(201).send({
+        store: {
+          id: store.createdStore.id,
+          slug: store.createdStore.slug,
+          name: store.createdStore.name,
+        },
+        profiles: {
+          manager: store.manager.email,
+          waiter: store.waiter.email,
+          cook: store.cook.email,
+        },
+        tableCount: body.tableCount,
+      });
+    }
+  );
+
   // Resolve a tableId to its store slug/label for QR redirects that lack storeSlug param
   fastify.get("/public/table/:tableId", async (request, reply) => {
     const { tableId } = request.params as { tableId: string };
