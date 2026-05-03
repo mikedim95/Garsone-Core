@@ -1,9 +1,7 @@
 // prisma/store_onboard_seed.ts
 //
 // Usage:
-//   1. Adjust NEW_STORE_CONFIG below.
-//   2. Run: npx ts-node prisma/store_onboard_seed.ts
-//      (or add npm script: "onboard:store": "ts-node prisma/store_onboard_seed.ts")
+//   STORE_SLUG=noor STORE_NAME=Noor DEFAULT_PASSWORD=... npm run onboard:store
 //
 // What it does:
 //   - Creates 1 Store + StoreMeta
@@ -11,10 +9,11 @@
 //   - Creates 10 tables (T1..T10)
 //   - Assigns waiter to all tables
 //   - Does NOT create QR tiles (architect dashboard generates them)
-//   - Optionally seeds a demo menu + N days of orders using all OrderStatus values
+//   - Optionally seeds demo menu + orders when CREATE_DEMO_MENU_AND_ORDERS=true
 
 import { PrismaClient, Role, OrderStatus } from "@prisma/client";
 import bcrypt from "bcrypt";
+import "dotenv/config";
 import { applyDbConnection } from "../src/db/config";
 
 const { target: dbTarget, databaseUrl } = applyDbConnection();
@@ -33,45 +32,50 @@ try {
 
 const prisma = new PrismaClient();
 
+function env(name: string, fallback = ""): string {
+  return (process.env[name] ?? fallback).trim();
+}
+
 // =====================
 // CONFIG – FILL THESE
 // =====================
 
 const NEW_STORE_CONFIG = {
-  slug: "random-test-store-from-seed", // MUST be unique
-  name: "Random Test Store",
-  currencyCode: "EUR",
-  locale: "el",
+  slug: env("STORE_SLUG", "noor"), // MUST be unique
+  name: env("STORE_NAME", "Noor"),
+  currencyCode: env("STORE_CURRENCY", "EUR"),
+  locale: env("STORE_LOCALE", "el"),
 
   manager: {
-    email: "manager@random-test-store.local",
-    displayName: "Store Manager",
+    email: env("MANAGER_EMAIL", "manager@noor.local"),
+    displayName: env("MANAGER_NAME", "Noor Manager"),
   },
   waiter: {
-    email: "waiter@random-test-store.local",
-    displayName: "Main Waiter",
+    email: env("WAITER_EMAIL", "waiter@noor.local"),
+    displayName: env("WAITER_NAME", "Noor Waiter"),
   },
   cook: {
-    email: "cook@random-test-store.local",
-    displayName: "Head Cook",
+    email: env("COOK_EMAIL", "cook@noor.local"),
+    displayName: env("COOK_NAME", "Noor Cook"),
   },
   cookType: {
-    slug: "kitchen",
-    title: "Kitchen",
-    printerTopic: "printer_1",
+    slug: env("COOK_TYPE_SLUG", "kitchen"),
+    title: env("COOK_TYPE_TITLE", "Kitchen"),
+    printerTopic: env("PRINTER_TOPIC", "printer_1"),
   },
   waiterType: {
-    slug: "floor",
-    title: "Floor",
-    printerTopic: "printer_1",
+    slug: env("WAITER_TYPE_SLUG", "floor"),
+    title: env("WAITER_TYPE_TITLE", "Floor"),
+    printerTopic: env("PRINTER_TOPIC", "printer_1"),
   },
 
   // All 3 profiles will use this password.
-  defaultPassword: "changeme",
+  defaultPassword: env("DEFAULT_PASSWORD"),
 };
 
 // Toggle this to also create demo menu + orders
-const CREATE_DEMO_MENU_AND_ORDERS = true;
+const CREATE_DEMO_MENU_AND_ORDERS =
+  env("CREATE_DEMO_MENU_AND_ORDERS", "false").toLowerCase() === "true";
 
 // How many days back to create sample orders (if enabled)
 const DAYS_BACK = 60;
@@ -259,6 +263,9 @@ async function onboardStore() {
     throw new Error(
       "Please fill NEW_STORE_CONFIG.slug and NEW_STORE_CONFIG.name"
     );
+  }
+  if (!cfg.defaultPassword) {
+    throw new Error("Set DEFAULT_PASSWORD before onboarding a real store.");
   }
 
   console.log(`\nOnboarding new store: ${cfg.slug}`);

@@ -14,6 +14,7 @@
     "db:studio": "prisma studio",
     "db:push": "prisma db push",
     "db:test": "tsx prisma/test_io.ts",
+    "onboard:store": "tsx prisma/store_onboard.ts",
     "seed": "npm run db:seed",
     "prisma:gen": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
