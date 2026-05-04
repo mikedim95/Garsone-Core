@@ -20,7 +20,7 @@ const printerSchema = z.object({
   id: z.string().trim().max(80).optional(),
   type: z.enum(["58", "80"]),
   ordinal: z.coerce.number().int().min(1).max(99),
-  mac: z.string().trim().min(1).max(64),
+  mac: z.string().trim().max(64).optional().default(""),
   topicSuffix: z.string().trim().min(1).max(100),
   interface: z.string().trim().min(1).max(80).optional(),
   label: z.string().trim().max(120).optional(),
@@ -332,8 +332,7 @@ function claimConfigFromPending(
       mac: String(printer.mac || "").trim(),
       topicSuffix: printer.topicSuffix || `printer_${index + 1}`,
       label: printer.label || printer.topicSuffix || `Printer ${index + 1}`,
-    }))
-    .filter((printer) => printer.mac.length > 0);
+    }));
 
   return nodeConfigSchema.parse({
     displayName: input?.displayName || displayName,
