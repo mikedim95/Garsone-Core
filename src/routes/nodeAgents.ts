@@ -84,6 +84,12 @@ const claimPendingNodeSchema = z.object({
   config: claimConfigSchema.optional(),
 });
 
+const testPrinterSchema = z.object({
+  topicSuffix: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/),
+  mac: z.string().trim().max(64).optional().default(""),
+  label: z.string().trim().max(120).optional().default(""),
+});
+
 function tokenHash(token: string) {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
@@ -101,6 +107,50 @@ function normalizeSlug(value: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 100);
   return slug || "main";
+}
+
+function testPrintPayload(storeSlug: string, printer: z.infer<typeof testPrinterSchema>) {
+  const now = new Date().toISOString();
+  return {
+    orderId: `test-${Date.now()}`,
+    tableId: "architect-test",
+    tableLabel: "Printer test",
+    ticketNumber: "TEST",
+    status: "PREPARING",
+    createdAt: now,
+    ts: now,
+    note: `Architect test print for ${printer.label || printer.topicSuffix}`,
+    printerTopic: printer.topicSuffix,
+    items: [
+      {
+        title: "TEST PRINT",
+        quantity: 1,
+        unitPriceCents: 0,
+        modifiers: [],
+        printerTopic: printer.topicSuffix,
+      },
+      {
+        title: `MAC ${printer.mac || "not set"}`,
+        quantity: 1,
+        unitPriceCents: 0,
+        modifiers: [],
+        printerTopic: printer.topicSuffix,
+      },
+      {
+        title: `Topic ${storeSlug}/orders/preparing/${printer.topicSuffix}`,
+        quantity: 1,
+        unitPriceCents: 0,
+        modifiers: [],
+        printerTopic: printer.topicSuffix,
+      },
+    ],
+    order: {
+      id: `test-${Date.now()}`,
+      status: "PREPARING",
+      note: "Architect printer test",
+      table: { label: "Printer test" },
+    },
+  };
 }
 
 function serializeNode(node: any, includeSensitive = false) {
@@ -646,6 +696,35 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         }
         fastify.log.error(error, "Failed to save node");
         return reply.status(500).send({ error: "Failed to save node" });
+      }
+    }
+  );
+
+  fastify.post(
+    "/admin/stores/:storeId/nodes/main/printers/test",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
+        const printer = testPrinterSchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, slug: true },
+        });
+        if (!store) {
+          return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        }
+
+        const topic = `${store.slug}/orders/preparing/${printer.topicSuffix}`;
+        const payload = testPrintPayload(store.slug, printer);
+        publishMessage(topic, payload, { roles: ["cook"] });
+        return reply.send({ ok: true, topic, payload });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to publish printer test");
+        return reply.status(500).send({ error: "Failed to publish printer test" });
       }
     }
   );
