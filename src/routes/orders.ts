@@ -378,6 +378,9 @@ const resolveStoreSlug = (request: any) =>
   (request as any)?.user?.storeSlug ||
   STORE_SLUG;
 
+const bypassGuestCheckoutChecks = (storeSlug?: string | null) =>
+  (storeSlug || "").trim().toLowerCase() === "noor";
+
 export async function orderRoutes(fastify: FastifyInstance) {
   // Create order (IP whitelisted)
   fastify.post(
@@ -400,7 +403,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const hasPaymentSession =
           typeof body.paymentSessionId === "string" &&
           body.paymentSessionId.trim().length > 0;
-        const requiresLocality = !isStaff && !hasPaymentSession;
+        const requiresLocality =
+          !isStaff &&
+          !hasPaymentSession &&
+          !bypassGuestCheckoutChecks(store.slug);
         const localityApprovalToken =
           typeof body.localityApprovalToken === "string"
             ? body.localityApprovalToken.trim()
@@ -1580,7 +1586,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const store = await ensureStore(storeSlug);
         const actor = (request as any).user;
         const isStaff = Boolean(actor?.role);
-        const requiresLocality = !isStaff;
+        const requiresLocality =
+          !isStaff && !bypassGuestCheckoutChecks(store.slug);
         const localityApprovalToken =
           typeof body.localityApprovalToken === "string"
             ? body.localityApprovalToken.trim()
