@@ -58,7 +58,14 @@ const nodeConfigSchema = z.object({
   supportWhatsapp: z.string().trim().max(100).optional().default(""),
   supportUrl: z.string().trim().max(255).optional().default(""),
   notes: z.string().trim().max(2000).optional().default(""),
-  printers: z.array(printerSchema).min(1).max(99),
+  printers: z.array(printerSchema).max(99),
+});
+
+const claimConfigSchema = nodeConfigSchema.extend({
+  mqttHost: z.string().trim().max(255).optional().default(""),
+  printers: z.array(printerSchema.extend({
+    mac: z.string().trim().max(64).optional().default(""),
+  })).max(99).optional().default([]),
 });
 
 const bootstrapRegisterSchema = z.object({
@@ -74,7 +81,7 @@ const bootstrapRegisterSchema = z.object({
 
 const claimPendingNodeSchema = z.object({
   storeId: z.string().uuid(),
-  config: nodeConfigSchema,
+  config: claimConfigSchema.optional(),
 });
 
 function tokenHash(token: string) {
@@ -229,6 +236,81 @@ function mergeNodeConfig(body: z.infer<typeof nodeConfigSchema>, previousConfig:
       })),
     },
   };
+}
+
+function mqttDefaultsFromEnv() {
+  const rawUrl =
+    process.env.EMQX_URL ||
+    process.env.MQTT_URL ||
+    process.env.MQTT_BROKER_URL ||
+    "";
+  let host = "";
+  let port = 8883;
+  let tls = true;
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      host = parsed.hostname;
+      port = parsed.port ? Number(parsed.port) : parsed.protocol === "mqtt:" ? 1883 : 8883;
+      tls = parsed.protocol === "mqtts:" || parsed.protocol === "wss:";
+    } catch {
+      host = rawUrl.replace(/^mqtts?:\/\//i, "").replace(/:\d+.*$/, "").replace(/\/.*$/, "");
+    }
+  }
+  return {
+    host,
+    port,
+    tls,
+    insecure: String(process.env.MQTT_REJECT_UNAUTHORIZED || "true").toLowerCase() === "false",
+    user: process.env.EMQX_USERNAME || process.env.MQTT_USERNAME || "",
+    pass: process.env.EMQX_PASSWORD || process.env.MQTT_PASSWORD || "",
+  };
+}
+
+function claimConfigFromPending(
+  input: z.infer<typeof claimConfigSchema> | undefined,
+  pending: any
+): z.infer<typeof nodeConfigSchema> {
+  const mqtt = mqttDefaultsFromEnv();
+  const localHostname = String(pending.localHostname || "").trim();
+  const displayName = String(pending.displayName || localHostname || "Venue Pi").trim();
+  const nodeSlug = normalizeSlug(input?.nodeSlug || localHostname || displayName || "main");
+  const printers = (input?.printers || [])
+    .map((printer, index) => ({
+      ...printer,
+      id: printer.id || `printer-${index + 1}`,
+      mac: String(printer.mac || "").trim(),
+      topicSuffix: printer.topicSuffix || `printer_${index + 1}`,
+      label: printer.label || printer.topicSuffix || `Printer ${index + 1}`,
+    }))
+    .filter((printer) => printer.mac.length > 0);
+
+  return nodeConfigSchema.parse({
+    displayName: input?.displayName || displayName,
+    nodeSlug,
+    tailscaleHostname: input?.tailscaleHostname || pending.tailscaleHostname || "",
+    localHostname: input?.localHostname || localHostname,
+    wifiSsid: input?.wifiSsid || "",
+    wifiPassword: input?.wifiPassword || "",
+    wifiNetworks: input?.wifiNetworks || [],
+    mqttHost: input?.mqttHost || mqtt.host,
+    mqttPort: input?.mqttPort || mqtt.port,
+    mqttTls: typeof input?.mqttTls === "boolean" ? input.mqttTls : mqtt.tls,
+    mqttInsecure: typeof input?.mqttInsecure === "boolean" ? input.mqttInsecure : mqtt.insecure,
+    mqttUser: input?.mqttUser || mqtt.user,
+    mqttPass: input?.mqttPass || mqtt.pass,
+    dockerImage: input?.dockerImage || "mikedim95/mqtt-printer:latest",
+    encoding: input?.encoding || "cp1253",
+    codepage: input?.codepage || "7",
+    feedLines: input?.feedLines || 3,
+    pollSeconds: input?.pollSeconds || 30,
+    timezone: input?.timezone || "Europe/Athens",
+    supportPhone: input?.supportPhone || "",
+    supportWhatsapp: input?.supportWhatsapp || "",
+    supportUrl: input?.supportUrl || "",
+    notes: input?.notes || "",
+    printers,
+  });
 }
 
 function buildAgentConfig(node: any, store: any) {
@@ -391,12 +473,14 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const store = await db.store.findUnique({ where: { id: body.storeId } });
         if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
 
+        const claimConfig = claimConfigFromPending(body.config, pending);
+        const claimSlug = normalizeSlug(claimConfig.nodeSlug);
         const existing = await db.nodeAgent.findUnique({
-          where: { storeId_slug: { storeId: body.storeId, slug: normalizeSlug(body.config.nodeSlug) } },
+          where: { storeId_slug: { storeId: body.storeId, slug: claimSlug } },
         });
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
-        const { slug, config } = mergeNodeConfig(body.config, previousConfig);
+        const { slug, config } = mergeNodeConfig(claimConfig, previousConfig);
         const configWithBootstrap = {
           ...config,
           bootstrapNodeKey: pending.nodeKey,
@@ -409,7 +493,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const node = await db.nodeAgent.upsert({
           where: { storeId_slug: { storeId: body.storeId, slug } },
           update: {
-            displayName: body.config.displayName,
+            displayName: claimConfig.displayName,
             tokenHash: tokenHash(token),
             configJson: configWithBootstrap,
             desiredConfigVersion: { increment: 1 },
@@ -418,7 +502,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           create: {
             storeId: body.storeId,
             slug,
-            displayName: body.config.displayName,
+            displayName: claimConfig.displayName,
             tokenHash: tokenHash(token),
             configJson: configWithBootstrap,
             desiredConfigVersion: 1,
