@@ -643,7 +643,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .status(403)
             .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
-        console.error("Create order error:", error);
+        console.error("Create order error:", {
+          error,
+          storeSlug: resolveStoreSlug(request),
+          tableId: (request.body as any)?.tableId,
+          itemCount: Array.isArray((request.body as any)?.items)
+            ? (request.body as any).items.length
+            : 0,
+          editingOrderId: null,
+        });
         return reply.status(500).send({ error: "Failed to create order" });
       }
     }
@@ -1776,7 +1784,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .status(403)
             .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
-        console.error("Edit order error:", error);
+        console.error("Edit order error:", {
+          error,
+          storeSlug: resolveStoreSlug(request),
+          orderId: (request.params as any)?.id,
+          tableId: (request.body as any)?.tableId,
+          itemCount: Array.isArray((request.body as any)?.items)
+            ? (request.body as any).items.length
+            : 0,
+        });
         return reply.status(500).send({ error: "Failed to edit order" });
       }
     }
