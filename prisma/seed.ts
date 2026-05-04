@@ -2,9 +2,10 @@
  * prisma/seed.ts
  *
  * Simplified QR flow:
- * - Single seeded store: acropolis-street-food
- * - Uses ONLY the first 10 public codes from qr_codes.txt
+ * - Seeded stores: acropolis-street-food, noor
+ * - Uses the first 20 public codes from qr_codes.txt
  * - Maps code #1..#10 -> tables T1..T10 for acropolis-street-food
+ * - Maps code #11..#20 -> unassigned QR tiles for noor
  * - Writes prisma/qr-print-list.txt and prisma/qr-url-assignments.txt
  * - Extra QR tiles are generated later from Architect dashboard
  */
@@ -34,6 +35,7 @@ const SEED_RESET = process.env.SEED_RESET !== "0";
 const QR_CODES_FILE = path.join(process.cwd(), "qr_codes.txt");
 const QR_PER_STORE = 10;
 const PRIMARY_STORE_SLUG = "acropolis-street-food";
+const SEEDED_STORE_SLUGS = ["acropolis-street-food", "noor"] as const;
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
 const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
@@ -59,7 +61,7 @@ function section(title: string) {
 // ===== helpers =====
 type QrAssignment = {
   storeSlug: string;
-  tableLabel: string;
+  tableLabel: string | null;
   publicCode: string;
   url: string;
 };
@@ -91,23 +93,29 @@ function loadQrCodesFile(): { raw: string; codes: string[] } {
 }
 
 function buildQrAssignments(codes: string[]): QrAssignment[] {
-  if (codes.length < QR_PER_STORE) {
+  const requiredCodes = QR_PER_STORE * SEEDED_STORE_SLUGS.length;
+  if (codes.length < requiredCodes) {
     throw new Error(
-      `qr_codes.txt must contain at least ${QR_PER_STORE} codes. Found ${codes.length}.`
+      `qr_codes.txt must contain at least ${requiredCodes} codes. Found ${codes.length}.`
     );
   }
 
   const assignments: QrAssignment[] = [];
-  for (let i = 0; i < QR_PER_STORE; i += 1) {
-    const publicCode = codes[i];
-    const tableLabel = `T${i + 1}`;
-    const url = `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${publicCode}`;
-    assignments.push({
-      storeSlug: PRIMARY_STORE_SLUG,
-      tableLabel,
-      publicCode,
-      url,
-    });
+  for (let storeIndex = 0; storeIndex < SEEDED_STORE_SLUGS.length; storeIndex += 1) {
+    const storeSlug = SEEDED_STORE_SLUGS[storeIndex];
+    for (let tableIndex = 0; tableIndex < QR_PER_STORE; tableIndex += 1) {
+      const codeIndex = storeIndex * QR_PER_STORE + tableIndex;
+      const publicCode = codes[codeIndex];
+      const tableLabel =
+        storeSlug === PRIMARY_STORE_SLUG ? `T${tableIndex + 1}` : null;
+      const url = `${PUBLIC_APP_URL}${QR_PATH_PREFIX}/${publicCode}`;
+      assignments.push({
+        storeSlug,
+        tableLabel,
+        publicCode,
+        url,
+      });
+    }
   }
   return assignments;
 }
@@ -116,7 +124,7 @@ function writeQrPrintList(assignments: QrAssignment[]) {
   const out = [
     "# url,storeSlug,tableLabel,publicCode",
     ...assignments.map(
-      (x) => `${x.url},${x.storeSlug},${x.tableLabel},${x.publicCode}`
+      (x) => `${x.url},${x.storeSlug},${x.tableLabel ?? ""},${x.publicCode}`
     ),
     "",
   ].join("\n");
@@ -132,7 +140,7 @@ function writeQrUrlAssignments(assignments: QrAssignment[]) {
   const out = [
     "# storeSlug,tableLabel,publicCode,url",
     ...assignments.map(
-      (x) => `${x.storeSlug},${x.tableLabel},${x.publicCode},${x.url}`
+      (x) => `${x.storeSlug},${x.tableLabel ?? ""},${x.publicCode},${x.url}`
     ),
     "",
   ].join("\n");
@@ -717,13 +725,58 @@ const ALL_STORES: StoreConfig[] = [
   },
 ];
 
-const STORES: StoreConfig[] = ALL_STORES.filter(
+const acropolisTemplate = ALL_STORES.find(
   (store) => store.slug === PRIMARY_STORE_SLUG
 );
 
-if (STORES.length !== 1) {
+if (!acropolisTemplate) {
+  throw new Error(`Missing seed template store "${PRIMARY_STORE_SLUG}".`);
+}
+
+ALL_STORES.push({
+  ...JSON.parse(JSON.stringify(acropolisTemplate)),
+  slug: "noor",
+  name: "Noor",
+  profiles: [
+    {
+      email: "manager@noor.local",
+      role: Role.MANAGER,
+      displayName: "Noor Manager",
+    },
+    {
+      email: "waiter1@noor.local",
+      role: Role.WAITER,
+      displayName: "Noor Waiter",
+      waiterTypeSlug: "food",
+    },
+    {
+      email: "waiter2@noor.local",
+      role: Role.WAITER,
+      displayName: "Noor Drinks",
+      waiterTypeSlug: "drinks",
+    },
+    {
+      email: "cook1@noor.local",
+      role: Role.COOK,
+      displayName: "Noor Grill",
+      cookTypeSlug: "grill",
+    },
+    {
+      email: "cook2@noor.local",
+      role: Role.COOK,
+      displayName: "Noor Bar",
+      cookTypeSlug: "bar",
+    },
+  ],
+});
+
+const STORES: StoreConfig[] = ALL_STORES.filter(
+  (store) => SEEDED_STORE_SLUGS.includes(store.slug as (typeof SEEDED_STORE_SLUGS)[number])
+);
+
+if (STORES.length !== SEEDED_STORE_SLUGS.length) {
   throw new Error(
-    `Seed expects exactly one store with slug "${PRIMARY_STORE_SLUG}".`
+    `Seed expects stores: ${SEEDED_STORE_SLUGS.join(", ")}.`
   );
 }
 
@@ -924,8 +977,10 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
 
     for (let i = 0; i < storeQr.length; i++) {
       const x = storeQr[i];
-      const table = tables.find((t) => t.label === x.tableLabel);
-      if (!table)
+      const table = x.tableLabel
+        ? tables.find((t) => t.label === x.tableLabel)
+        : null;
+      if (x.tableLabel && !table)
         throw new Error(
           `qr_codes.txt references missing table ${cfg.slug}/${x.tableLabel}`
         );
@@ -934,15 +989,15 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
         where: { publicCode: x.publicCode },
         update: {
           storeId,
-          tableId: table.id,
-          label: `Tile ${x.tableLabel}`,
+          tableId: table?.id ?? null,
+          label: x.tableLabel ? `Tile ${x.tableLabel}` : `Unassigned ${i + 1}`,
           isActive: true,
         },
         create: {
           storeId,
-          tableId: table.id,
+          tableId: table?.id ?? null,
           publicCode: x.publicCode,
-          label: `Tile ${x.tableLabel}`,
+          label: x.tableLabel ? `Tile ${x.tableLabel}` : `Unassigned ${i + 1}`,
           isActive: true,
         },
       });
