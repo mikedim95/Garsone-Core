@@ -204,20 +204,37 @@ type StoreConfig = {
   modifiers?: {
     slug: string;
     title: string;
+    titleEn?: string;
+    titleEl?: string;
     minSelect?: number;
     maxSelect?: number;
     required?: boolean;
     itemSlugs: string[];
-    options: { slug: string; title: string; priceDeltaCents?: number }[];
+    options: {
+      slug: string;
+      title: string;
+      titleEn?: string;
+      titleEl?: string;
+      priceDeltaCents?: number;
+    }[];
   }[];
   categories: {
     slug: string;
     title: string;
+    titleEn?: string;
+    titleEl?: string;
     printerTopic?: string;
     items: {
       slug: string;
       title: string;
+      titleEn?: string;
+      titleEl?: string;
       subcategory?: string;
+      subcategoryEn?: string;
+      subcategoryEl?: string;
+      description?: string;
+      descriptionEn?: string;
+      descriptionEl?: string;
       priceCents: number;
       imageUrl?: string;
     }[];
@@ -388,45 +405,53 @@ const ALL_STORES: StoreConfig[] = [
       {
         slug: "sauce",
         title: "Sauce",
+        titleEn: "Sauce",
+        titleEl: "Σάλτσα",
         minSelect: 1,
         maxSelect: 1,
         required: true,
         itemSlugs: ["pita-pork", "pita-chicken", "gyro-plate", "mixed-grill"],
         options: [
-          { slug: "tzatziki", title: "Tzatziki" },
-          { slug: "spicy", title: "Spicy" },
-          { slug: "mustard", title: "Mustard" },
+          { slug: "tzatziki", title: "Tzatziki", titleEn: "Tzatziki", titleEl: "Τζατζίκι" },
+          { slug: "spicy", title: "Spicy", titleEn: "Spicy", titleEl: "Καυτερή" },
+          { slug: "mustard", title: "Mustard", titleEn: "Mustard", titleEl: "Μουστάρδα" },
         ],
       },
       {
         slug: "extras",
         title: "Extras",
+        titleEn: "Extras",
+        titleEl: "Έξτρα",
         minSelect: 0,
         maxSelect: 2,
         required: false,
         itemSlugs: ["pita-pork", "pita-chicken", "gyro-plate", "mixed-grill"],
         options: [
-          { slug: "extra-fries", title: "Extra fries", priceDeltaCents: 150 },
-          { slug: "extra-pita", title: "Extra pita", priceDeltaCents: 100 },
-          { slug: "feta", title: "Feta topping", priceDeltaCents: 120 },
+          { slug: "extra-fries", title: "Extra fries", titleEn: "Extra fries", titleEl: "Έξτρα πατάτες", priceDeltaCents: 150 },
+          { slug: "extra-pita", title: "Extra pita", titleEn: "Extra pita", titleEl: "Έξτρα πίτα", priceDeltaCents: 100 },
+          { slug: "feta", title: "Feta topping", titleEn: "Feta topping", titleEl: "Έξτρα φέτα", priceDeltaCents: 120 },
         ],
       },
       {
         slug: "drink-ice",
         title: "Ice level",
+        titleEn: "Ice level",
+        titleEl: "Ποσότητα πάγου",
         minSelect: 1,
         maxSelect: 1,
         required: true,
         itemSlugs: ["cola", "beer"],
         options: [
-          { slug: "regular-ice", title: "Regular ice" },
-          { slug: "light-ice", title: "Light ice" },
-          { slug: "no-ice", title: "No ice" },
+          { slug: "regular-ice", title: "Regular ice", titleEn: "Regular ice", titleEl: "Κανονικός πάγος" },
+          { slug: "light-ice", title: "Light ice", titleEn: "Light ice", titleEl: "Λίγος πάγος" },
+          { slug: "no-ice", title: "No ice", titleEn: "No ice", titleEl: "Χωρίς πάγο" },
         ],
       },
       {
         slug: "shisha-strength",
         title: "Shisha strength",
+        titleEn: "Shisha strength",
+        titleEl: "Ένταση ναργιλέ",
         minSelect: 1,
         maxSelect: 1,
         required: true,
@@ -439,8 +464,8 @@ const ALL_STORES: StoreConfig[] = [
           "shisha-passion-lime",
         ],
         options: [
-          { slug: "light", title: "Light" },
-          { slug: "heavy", title: "Heavy" },
+          { slug: "light", title: "Light", titleEn: "Light", titleEl: "Ελαφρύς" },
+          { slug: "heavy", title: "Heavy", titleEn: "Heavy", titleEl: "Δυνατός" },
         ],
       },
     ],
@@ -487,12 +512,21 @@ const ALL_STORES: StoreConfig[] = [
       {
         slug: "souvlaki",
         title: "Souvlaki",
+        titleEn: "Souvlaki",
+        titleEl: "Σουβλάκι",
         printerTopic: "grill",
         items: [
           {
             slug: "pita-pork",
             title: "Pita Pork",
+            titleEn: "Pita Pork",
+            titleEl: "Πίτα Χοιρινό",
             subcategory: "Pita Wraps",
+            subcategoryEn: "Pita Wraps",
+            subcategoryEl: "Τυλιχτά Πίτας",
+            description: "Pita wrap with pork gyro, fries, onion and tzatziki.",
+            descriptionEn: "Pita wrap with pork gyro, fries, onion and tzatziki.",
+            descriptionEl: "Τυλιχτή πίτα με χοιρινό γύρο, πατάτες, κρεμμύδι και τζατζίκι.",
             priceCents: 350,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-pork.jpg",
@@ -500,7 +534,14 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "pita-chicken",
             title: "Pita Chicken",
+            titleEn: "Pita Chicken",
+            titleEl: "Πίτα Κοτόπουλο",
             subcategory: "Pita Wraps",
+            subcategoryEn: "Pita Wraps",
+            subcategoryEl: "Τυλιχτά Πίτας",
+            description: "Pita wrap with chicken gyro, fries, tomato and tzatziki.",
+            descriptionEn: "Pita wrap with chicken gyro, fries, tomato and tzatziki.",
+            descriptionEl: "Τυλιχτή πίτα με γύρο κοτόπουλο, πατάτες, ντομάτα και τζατζίκι.",
             priceCents: 380,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-chicken.jpg",
@@ -510,12 +551,21 @@ const ALL_STORES: StoreConfig[] = [
       {
         slug: "plates",
         title: "Plates",
+        titleEn: "Plates",
+        titleEl: "Μερίδες",
         printerTopic: "grill",
         items: [
           {
             slug: "gyro-plate",
             title: "Gyro Plate",
+            titleEn: "Gyro Plate",
+            titleEl: "Μερίδα Γύρος",
             subcategory: "Grill Plates",
+            subcategoryEn: "Grill Plates",
+            subcategoryEl: "Μερίδες Σχάρας",
+            description: "Gyro plate with fries, pita, onion and tzatziki.",
+            descriptionEn: "Gyro plate with fries, pita, onion and tzatziki.",
+            descriptionEl: "Μερίδα γύρου με πατάτες, πίτα, κρεμμύδι και τζατζίκι.",
             priceCents: 900,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/gyro-plate.jpg",
@@ -523,7 +573,14 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "mixed-grill",
             title: "Mixed Grill",
+            titleEn: "Mixed Grill",
+            titleEl: "Ποικιλία Σχάρας",
             subcategory: "Grill Plates",
+            subcategoryEn: "Grill Plates",
+            subcategoryEl: "Μερίδες Σχάρας",
+            description: "Mixed grill selection with pita, fries and sauces.",
+            descriptionEn: "Mixed grill selection with pita, fries and sauces.",
+            descriptionEl: "Ποικιλία σχάρας με πίτα, πατάτες και σάλτσες.",
             priceCents: 1400,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/mixed-grill.jpg",
@@ -533,12 +590,21 @@ const ALL_STORES: StoreConfig[] = [
       {
         slug: "drinks",
         title: "Drinks",
+        titleEn: "Drinks",
+        titleEl: "Ποτά",
         printerTopic: "bar",
         items: [
           {
             slug: "cola",
             title: "Cola",
+            titleEn: "Cola",
+            titleEl: "Κόλα",
             subcategory: "Cold Drinks",
+            subcategoryEn: "Cold Drinks",
+            subcategoryEl: "Κρύα Ροφήματα",
+            description: "Soft drink served cold.",
+            descriptionEn: "Soft drink served cold.",
+            descriptionEl: "Αναψυκτικό σερβιρισμένο παγωμένο.",
             priceCents: 200,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/cola.jpg",
@@ -546,7 +612,14 @@ const ALL_STORES: StoreConfig[] = [
           {
             slug: "beer",
             title: "Beer",
+            titleEn: "Beer",
+            titleEl: "Μπίρα",
             subcategory: "Cold Drinks",
+            subcategoryEn: "Cold Drinks",
+            subcategoryEl: "Κρύα Ροφήματα",
+            description: "Draft beer served chilled.",
+            descriptionEn: "Draft beer served chilled.",
+            descriptionEl: "Μπύρα βαρελίσια παγωμένη.",
             priceCents: 450,
             imageUrl:
               "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/beer.jpg",
@@ -556,42 +629,86 @@ const ALL_STORES: StoreConfig[] = [
       {
         slug: "shisha",
         title: "Shisha",
+        titleEn: "Shisha",
+        titleEl: "Ναργιλές",
         printerTopic: "bar",
         items: [
           {
             slug: "shisha-double-apple",
             title: "Double Apple Shisha",
+            titleEn: "Double Apple Shisha",
+            titleEl: "Ναργιλές Διπλό Μήλο",
             subcategory: "Sweet",
+            subcategoryEn: "Sweet",
+            subcategoryEl: "Γλυκές Γεύσεις",
+            description: "Classic double apple flavor.",
+            descriptionEn: "Classic double apple flavor.",
+            descriptionEl: "Κλασική γεύση διπλό μήλο.",
             priceCents: 1800,
           },
           {
             slug: "shisha-blueberry-mint",
             title: "Blueberry Mint Shisha",
+            titleEn: "Blueberry Mint Shisha",
+            titleEl: "Ναργιλές Μύρτιλο Μέντα",
             subcategory: "Sweet",
+            subcategoryEn: "Sweet",
+            subcategoryEl: "Γλυκές Γεύσεις",
+            description: "Blueberry with a cool mint finish.",
+            descriptionEn: "Blueberry with a cool mint finish.",
+            descriptionEl: "Μύρτιλο με δροσερή επίγευση μέντας.",
             priceCents: 1900,
           },
           {
             slug: "shisha-lemon-mint",
             title: "Lemon Mint Shisha",
+            titleEn: "Lemon Mint Shisha",
+            titleEl: "Ναργιλές Λεμόνι Μέντα",
             subcategory: "Sour",
+            subcategoryEn: "Sour",
+            subcategoryEl: "Ξινές Γεύσεις",
+            description: "Fresh lemon balanced with mint.",
+            descriptionEn: "Fresh lemon balanced with mint.",
+            descriptionEl: "Φρέσκο λεμόνι ισορροπημένο με μέντα.",
             priceCents: 1850,
           },
           {
             slug: "shisha-grapefruit",
             title: "Grapefruit Shisha",
+            titleEn: "Grapefruit Shisha",
+            titleEl: "Ναργιλές Γκρέιπφρουτ",
             subcategory: "Sour",
+            subcategoryEn: "Sour",
+            subcategoryEl: "Ξινές Γεύσεις",
+            description: "Bright grapefruit citrus blend.",
+            descriptionEn: "Bright grapefruit citrus blend.",
+            descriptionEl: "Έντονο εσπεριδοειδές χαρμάνι γκρέιπφρουτ.",
             priceCents: 1850,
           },
           {
             slug: "shisha-watermelon-lemon",
             title: "Watermelon Lemon Shisha",
+            titleEn: "Watermelon Lemon Shisha",
+            titleEl: "Ναργιλές Καρπούζι Λεμόνι",
             subcategory: "Sweet-Sour",
+            subcategoryEn: "Sweet-Sour",
+            subcategoryEl: "Γλυκόξινες Γεύσεις",
+            description: "Juicy watermelon with lemon zest.",
+            descriptionEn: "Juicy watermelon with lemon zest.",
+            descriptionEl: "Ζουμερό καρπούζι με ξύσμα λεμονιού.",
             priceCents: 1950,
           },
           {
             slug: "shisha-passion-lime",
             title: "Passion Lime Shisha",
+            titleEn: "Passion Lime Shisha",
+            titleEl: "Ναργιλές Passion Lime",
             subcategory: "Sweet-Sour",
+            subcategoryEn: "Sweet-Sour",
+            subcategoryEl: "Γλυκόξινες Γεύσεις",
+            description: "Passion fruit with lively lime notes.",
+            descriptionEn: "Passion fruit with lively lime notes.",
+            descriptionEl: "Passion fruit με ζωηρές νότες λάιμ.",
             priceCents: 1950,
           },
         ],
@@ -851,8 +968,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
         where: { storeId_slug: { storeId, slug: cat.slug } },
         update: {
           title: cat.title,
-          titleEl: cat.title,
-          titleEn: cat.title,
+          titleEl: cat.titleEl ?? cat.title,
+          titleEn: cat.titleEn ?? cat.title,
           printerTopic,
           sortOrder: ci,
         },
@@ -860,8 +977,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           storeId,
           slug: cat.slug,
           title: cat.title,
-          titleEl: cat.title,
-          titleEn: cat.title,
+          titleEl: cat.titleEl ?? cat.title,
+          titleEn: cat.titleEn ?? cat.title,
           printerTopic,
           sortOrder: ci,
         },
@@ -874,10 +991,14 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           update: {
             categoryId: category.id,
             title: it.title,
-            titleEl: it.title,
-            titleEn: it.title,
-            subcategoryEn: it.subcategory ?? null,
-            subcategoryEl: it.subcategory ?? null,
+            titleEl: it.titleEl ?? it.title,
+            titleEn: it.titleEn ?? it.title,
+            description: it.description ?? null,
+            descriptionEn: it.descriptionEn ?? it.description ?? null,
+            descriptionEl: it.descriptionEl ?? it.description ?? null,
+            subcategory: it.subcategory ?? null,
+            subcategoryEn: it.subcategoryEn ?? it.subcategory ?? null,
+            subcategoryEl: it.subcategoryEl ?? it.subcategory ?? null,
             priceCents: it.priceCents,
             isAvailable: true,
             imageUrl: it.imageUrl ?? null,
@@ -888,10 +1009,14 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
             categoryId: category.id,
             slug: it.slug,
             title: it.title,
-            titleEl: it.title,
-            titleEn: it.title,
-            subcategoryEn: it.subcategory ?? null,
-            subcategoryEl: it.subcategory ?? null,
+            titleEl: it.titleEl ?? it.title,
+            titleEn: it.titleEn ?? it.title,
+            description: it.description ?? null,
+            descriptionEn: it.descriptionEn ?? it.description ?? null,
+            descriptionEl: it.descriptionEl ?? it.description ?? null,
+            subcategory: it.subcategory ?? null,
+            subcategoryEn: it.subcategoryEn ?? it.subcategory ?? null,
+            subcategoryEl: it.subcategoryEl ?? it.subcategory ?? null,
             priceCents: it.priceCents,
             isAvailable: true,
             sortOrder: ii,
@@ -923,8 +1048,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
         where: { storeId_slug: { storeId, slug: mod.slug } },
         update: {
           title: mod.title,
-          titleEl: mod.title,
-          titleEn: mod.title,
+          titleEl: mod.titleEl ?? mod.title,
+          titleEn: mod.titleEn ?? mod.title,
           minSelect,
           maxSelect,
           isAvailable: true,
@@ -933,8 +1058,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           storeId,
           slug: mod.slug,
           title: mod.title,
-          titleEl: mod.title,
-          titleEn: mod.title,
+          titleEl: mod.titleEl ?? mod.title,
+          titleEn: mod.titleEn ?? mod.title,
           minSelect,
           maxSelect,
           isAvailable: true,
@@ -953,8 +1078,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
           },
           update: {
             title: opt.title,
-            titleEl: opt.title,
-            titleEn: opt.title,
+            titleEl: opt.titleEl ?? opt.title,
+            titleEn: opt.titleEn ?? opt.title,
             priceDeltaCents: opt.priceDeltaCents ?? 0,
             sortOrder: oi,
           },
@@ -963,8 +1088,8 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
             modifierId: modifier.id,
             slug: opt.slug,
             title: opt.title,
-            titleEl: opt.title,
-            titleEn: opt.title,
+            titleEl: opt.titleEl ?? opt.title,
+            titleEn: opt.titleEn ?? opt.title,
             priceDeltaCents: opt.priceDeltaCents ?? 0,
             sortOrder: oi,
           },
