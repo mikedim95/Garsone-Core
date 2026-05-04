@@ -30,6 +30,22 @@ const createStoreSchema = z.object({
   cookEmail: z.string().email().optional(),
 });
 
+const storeUserRoleSchema = z.enum(["MANAGER", "WAITER", "COOK"]);
+
+const storeUserCreateSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6).max(200),
+  displayName: z.string().trim().min(1).max(255),
+  role: storeUserRoleSchema.default("WAITER"),
+});
+
+const storeUserUpdateSchema = z.object({
+  email: z.string().email().optional(),
+  password: z.string().min(6).max(200).optional(),
+  displayName: z.string().trim().min(1).max(255).optional(),
+  role: storeUserRoleSchema.optional(),
+});
+
 const updateSchema = z
   .object({
     storeId: z.string().uuid().nullable().optional(),
@@ -47,6 +63,23 @@ const updateSchema = z
   );
 
 const normalizePublicCode = (value: string) => (value || "").trim().toUpperCase();
+
+function serializeStoreUser(profile: any) {
+  return {
+    id: profile.id,
+    storeId: profile.storeId,
+    email: profile.email,
+    displayName: profile.displayName ?? "",
+    role:
+      profile.role === Role.MANAGER
+        ? "manager"
+        : profile.role === Role.COOK
+        ? "cook"
+        : "waiter",
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
 
 function randomQrSegment(length = QR_SEGMENT_LEN) {
   let out = "";
@@ -345,6 +378,107 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         },
         tableCount: body.tableCount,
       });
+    }
+  );
+
+  fastify.get(
+    "/admin/stores/:storeId/users",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      const { storeId } = request.params as { storeId: string };
+      const store = await db.store.findUnique({ where: { id: storeId } });
+      if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+      const users = await db.profile.findMany({
+        where: {
+          storeId,
+          role: { in: [Role.MANAGER, Role.WAITER, Role.COOK] },
+        },
+        orderBy: [{ role: "asc" }, { displayName: "asc" }],
+      });
+      return reply.send({ users: users.map(serializeStoreUser) });
+    }
+  );
+
+  fastify.post(
+    "/admin/stores/:storeId/users",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = request.params as { storeId: string };
+        const body = storeUserCreateSchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({ where: { id: storeId } });
+        if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        const user = await db.profile.create({
+          data: {
+            storeId,
+            email: body.email.toLowerCase(),
+            passwordHash: await bcrypt.hash(body.password, 10),
+            role: body.role as Role,
+            displayName: body.displayName,
+            isVerified: true,
+          },
+        });
+        return reply.status(201).send({ user: serializeStoreUser(user) });
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if (error?.code === "P2002") {
+          return reply.status(409).send({ error: "USER_ALREADY_EXISTS" });
+        }
+        fastify.log.error(error, "Failed to create store user");
+        return reply.status(500).send({ error: "Failed to create store user" });
+      }
+    }
+  );
+
+  fastify.patch(
+    "/admin/stores/:storeId/users/:userId",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId, userId } = request.params as { storeId: string; userId: string };
+        const body = storeUserUpdateSchema.parse(request.body ?? {});
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+        const data: any = {};
+        if (body.email) data.email = body.email.toLowerCase();
+        if (body.displayName) data.displayName = body.displayName;
+        if (body.password) data.passwordHash = await bcrypt.hash(body.password, 10);
+        if (body.role) {
+          data.role = body.role as Role;
+          if (body.role !== "WAITER") data.waiterTypeId = null;
+          if (body.role !== "COOK") data.cookTypeId = null;
+        }
+        const user = await db.profile.update({ where: { id: userId }, data });
+        return reply.send({ user: serializeStoreUser(user) });
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if (error?.code === "P2002") {
+          return reply.status(409).send({ error: "USER_ALREADY_EXISTS" });
+        }
+        fastify.log.error(error, "Failed to update store user");
+        return reply.status(500).send({ error: "Failed to update store user" });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/admin/stores/:storeId/users/:userId",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId, userId } = request.params as { storeId: string; userId: string };
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+        await db.profile.delete({ where: { id: userId } });
+        return reply.send({ success: true });
+      } catch (error) {
+        fastify.log.error(error, "Failed to delete store user");
+        return reply.status(500).send({ error: "Failed to delete store user" });
+      }
     }
   );
 
