@@ -536,8 +536,8 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
 
         return reply.send({
           node: serializeNode(node),
-          token,
-          tokenOnlyShownOnce: true,
+          token: null,
+          tokenOnlyShownOnce: false,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -582,9 +582,15 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
 
         const body = nodeConfigSchema.parse(request.body ?? {});
         const slug = normalizeSlug(body.nodeSlug);
-        const existing = await db.nodeAgent.findUnique({
+        const existingBySlug = await db.nodeAgent.findUnique({
           where: { storeId_slug: { storeId, slug } },
         });
+        const existing =
+          existingBySlug ||
+          (await db.nodeAgent.findFirst({
+            where: { storeId },
+            orderBy: { createdAt: "asc" },
+          }));
         const secret = existing ? null : `gnode_${randomBytes(32).toString("base64url")}`;
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
@@ -598,31 +604,35 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
             `gcfg_${randomBytes(32).toString("base64url")}`,
         };
 
-        const node = await db.nodeAgent.upsert({
-          where: { storeId_slug: { storeId, slug } },
-          update: {
-            displayName: body.displayName,
-            configJson: configWithSecret,
-            desiredConfigVersion: { increment: 1 },
-            statusMessage: "Configuration updated from Architect",
-          },
-          create: {
-            storeId,
-            slug,
-            displayName: body.displayName,
-            tokenHash: tokenHash(secret as string),
-            configJson: configWithSecret,
-            desiredConfigVersion: 1,
-          },
-        });
+        const node = existing
+          ? await db.nodeAgent.update({
+              where: { id: existing.id },
+              data: {
+                slug,
+                displayName: body.displayName,
+                configJson: configWithSecret,
+                desiredConfigVersion: { increment: 1 },
+                statusMessage: "Configuration updated from Architect",
+              },
+            })
+          : await db.nodeAgent.create({
+              data: {
+                storeId,
+                slug,
+                displayName: body.displayName,
+                tokenHash: tokenHash(secret as string),
+                configJson: configWithSecret,
+                desiredConfigVersion: 1,
+              },
+            });
 
         await syncStorePrinterTopics(storeId, configWithSecret);
         await publishNodeConfigIfAddressable(node, store);
 
         return reply.send({
           node: serializeNode(node),
-          token: secret,
-          tokenOnlyShownOnce: Boolean(secret),
+          token: null,
+          tokenOnlyShownOnce: false,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -630,6 +640,9 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         }
         if (isMissingNodeAgentTable(error)) {
           return reply.status(503).send({ error: "NODE_AGENT_MIGRATION_REQUIRED" });
+        }
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          return reply.status(409).send({ error: "NODE_SLUG_ALREADY_EXISTS" });
         }
         fastify.log.error(error, "Failed to save node");
         return reply.status(500).send({ error: "Failed to save node" });
@@ -669,7 +682,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           { skipMqtt: false }
         );
       }
-      return reply.send({ node: serializeNode(node), token, tokenOnlyShownOnce: true });
+      return reply.send({ node: serializeNode(node), token: null, tokenOnlyShownOnce: false });
     }
   );
 
