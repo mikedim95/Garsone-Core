@@ -34,14 +34,14 @@ const storeUserRoleSchema = z.enum(["MANAGER", "WAITER", "COOK"]);
 
 const storeUserCreateSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6).max(200),
+  password: z.string().min(4).max(200),
   displayName: z.string().trim().min(1).max(255),
   role: storeUserRoleSchema.default("WAITER"),
 });
 
 const storeUserUpdateSchema = z.object({
   email: z.string().email().optional(),
-  password: z.string().min(6).max(200).optional(),
+  password: z.string().min(4).max(200).optional(),
   displayName: z.string().trim().min(1).max(255).optional(),
   role: storeUserRoleSchema.optional(),
 });
@@ -473,7 +473,15 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         const { storeId, userId } = request.params as { storeId: string; userId: string };
         const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
         if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
-        await db.profile.delete({ where: { id: userId } });
+        await db.$transaction(async (tx) => {
+          await tx.auditLog.updateMany({
+            where: { actorProfileId: userId },
+            data: { actorProfileId: null },
+          });
+          await tx.waiterTable.deleteMany({ where: { waiterId: userId } });
+          await tx.waiterShift.deleteMany({ where: { waiterId: userId } });
+          await tx.profile.delete({ where: { id: userId } });
+        });
         return reply.send({ success: true });
       } catch (error) {
         fastify.log.error(error, "Failed to delete store user");
