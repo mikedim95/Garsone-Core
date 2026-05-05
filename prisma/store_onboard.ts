@@ -124,7 +124,7 @@ const DEMO_MENU: {
         priceCents: 350,
         costCents: 120,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-pork.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-pork.jpg",
       },
       {
         slug: "pita-chicken",
@@ -139,7 +139,7 @@ const DEMO_MENU: {
         priceCents: 380,
         costCents: 130,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/souvlaki/pita-chicken.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-chicken.jpg",
       },
     ],
   },
@@ -163,7 +163,7 @@ const DEMO_MENU: {
         priceCents: 900,
         costCents: 320,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/gyro-plate.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/gyro-plate.jpg",
       },
       {
         slug: "mixed-grill",
@@ -178,7 +178,7 @@ const DEMO_MENU: {
         priceCents: 1400,
         costCents: 520,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/plates/mixed-grill.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/mixed-grill.jpg",
       },
     ],
   },
@@ -202,7 +202,7 @@ const DEMO_MENU: {
         priceCents: 200,
         costCents: 70,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/cola.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/cola.jpg",
       },
       {
         slug: "beer",
@@ -217,7 +217,7 @@ const DEMO_MENU: {
         priceCents: 450,
         costCents: 160,
         imageUrl:
-          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/acropolis-street-food/drinks/beer.jpg",
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/beer.jpg",
       },
     ],
   },
@@ -240,7 +240,8 @@ const DEMO_MENU: {
         descriptionEn: "Classic double apple flavor.",
         priceCents: 1800,
         costCents: 650,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Double-apple.webp",
       },
       {
         slug: "shisha-blueberry-mint",
@@ -254,7 +255,8 @@ const DEMO_MENU: {
         descriptionEn: "Blueberry with a cool mint finish.",
         priceCents: 1900,
         costCents: 680,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/blueberry%20mint.webp",
       },
       {
         slug: "shisha-lemon-mint",
@@ -268,7 +270,8 @@ const DEMO_MENU: {
         descriptionEn: "Fresh lemon balanced with mint.",
         priceCents: 1850,
         costCents: 660,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/lime-mint.webp",
       },
       {
         slug: "shisha-grapefruit",
@@ -282,7 +285,8 @@ const DEMO_MENU: {
         descriptionEn: "Bright grapefruit citrus blend.",
         priceCents: 1850,
         costCents: 660,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Grapefruit.webp",
       },
       {
         slug: "shisha-watermelon-lemon",
@@ -296,7 +300,8 @@ const DEMO_MENU: {
         descriptionEn: "Juicy watermelon with lemon zest.",
         priceCents: 1950,
         costCents: 700,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/watermelon-lemon.avif",
       },
       {
         slug: "shisha-passion-lime",
@@ -310,7 +315,8 @@ const DEMO_MENU: {
         descriptionEn: "Passion fruit with lively lime notes.",
         priceCents: 1950,
         costCents: 700,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/passion%20fruit.avif",
       },
     ],
   },

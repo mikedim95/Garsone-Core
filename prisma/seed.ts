@@ -733,8 +733,46 @@ if (!acropolisTemplate) {
   throw new Error(`Missing seed template store "${PRIMARY_STORE_SLUG}".`);
 }
 
+const NOOR_IMAGE_BY_ITEM_SLUG: Record<string, string> = {
+  "pita-pork":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-pork.jpg",
+  "pita-chicken":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-chicken.jpg",
+  "gyro-plate":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/gyro-plate.jpg",
+  "mixed-grill":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/mixed-grill.jpg",
+  cola:
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/cola.jpg",
+  beer:
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/beer.jpg",
+  "shisha-double-apple":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Double-apple.webp",
+  "shisha-grapefruit":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Grapefruit.webp",
+  "shisha-blueberry-mint":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/blueberry%20mint.webp",
+  "shisha-lemon-mint":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/lime-mint.webp",
+  "shisha-passion-lime":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/passion%20fruit.avif",
+  "shisha-watermelon-lemon":
+    "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/watermelon-lemon.avif",
+};
+
+const applyNoorImageOverrides = (store: StoreConfig): StoreConfig => ({
+  ...store,
+  categories: (store.categories ?? []).map((category) => ({
+    ...category,
+    items: (category.items ?? []).map((item) => ({
+      ...item,
+      imageUrl: NOOR_IMAGE_BY_ITEM_SLUG[item.slug] ?? item.imageUrl ?? null,
+    })),
+  })),
+});
+
 ALL_STORES.push({
-  ...JSON.parse(JSON.stringify(acropolisTemplate)),
+  ...applyNoorImageOverrides(JSON.parse(JSON.stringify(acropolisTemplate))),
   slug: "noor",
   name: "Noor",
   profiles: [
