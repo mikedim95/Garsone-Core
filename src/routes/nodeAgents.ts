@@ -207,16 +207,22 @@ function serializePendingNode(row: any) {
 
 function buildConfigAck(node: any, body: any) {
   const meta = body.meta && typeof body.meta === "object" ? body.meta as any : {};
-  if (meta.type !== "config_ack") return null;
+  const isLegacyConfigAck = /^MQTT config (applied|received)$/i.test(String(body.message || ""));
+  if (meta.type !== "config_ack" && !isLegacyConfigAck) return null;
   const receivedAt =
     typeof meta.receivedAt === "string" && meta.receivedAt.trim()
       ? meta.receivedAt.trim()
       : new Date().toISOString();
+  const version = body.version ?? node.lastAppliedVersion ?? null;
+  const applied = Boolean(meta.applied) || /applied/i.test(String(body.message || ""));
   return {
-    version: body.version ?? node.lastAppliedVersion ?? null,
+    version,
     receivedAt,
-    message: body.message || "OK, got it.",
-    applied: Boolean(meta.applied),
+    message:
+      body.message && /^OK, got it/i.test(body.message)
+        ? body.message
+        : `OK, got it. Config${version ? ` v${version}` : ""} ${applied ? "applied" : "received"}.`,
+    applied,
   };
 }
 
