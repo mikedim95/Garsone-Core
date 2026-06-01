@@ -240,11 +240,11 @@ async function syncStorePrinterTopics(storeId: string, config: any) {
   invalidateStoreCache(store.slug);
 }
 
-async function recoverBootstrapNodeKey(body: z.infer<typeof nodeConfigSchema>) {
+async function recoverBootstrapNodeKeys(body: z.infer<typeof nodeConfigSchema>) {
   const names = [body.localHostname, body.tailscaleHostname, body.displayName]
     .map((value) => String(value || "").trim())
     .filter(Boolean);
-  if (names.length === 0) return "";
+  if (names.length === 0) return [];
   const rows = await db.$queryRaw<any[]>`
     SELECT "nodeKey"
     FROM "pending_node_agents"
@@ -253,11 +253,11 @@ async function recoverBootstrapNodeKey(body: z.infer<typeof nodeConfigSchema>) {
         "localHostname" IN (${Prisma.join(names)})
         OR "tailscaleHostname" IN (${Prisma.join(names)})
         OR "displayName" IN (${Prisma.join(names)})
-      )
+    )
     ORDER BY "lastSeenAt" DESC
-    LIMIT 1
+    LIMIT 5
   `;
-  return String(rows[0]?.nodeKey || "").trim();
+  return rows.map((row) => String(row?.nodeKey || "").trim()).filter(Boolean);
 }
 
 function mergeNodeConfig(body: z.infer<typeof nodeConfigSchema>, previousConfig: any = {}) {
@@ -449,23 +449,31 @@ function buildAgentConfig(node: any, store: any) {
   };
 }
 
-async function publishNodeConfigIfAddressable(node: any, store: any, nodeToken: string | null = null) {
+async function publishNodeConfigIfAddressable(
+  node: any,
+  store: any,
+  nodeToken: string | null = null,
+  extraNodeKeys: string[] = []
+) {
   const config = node.configJson && typeof node.configJson === "object" ? node.configJson as any : {};
   const nodeKey = String(config.bootstrapNodeKey || "").trim();
   const configToken = String(config.mqttConfigToken || "").trim();
   if (!nodeKey) return;
-  publishMessage(
-    bootstrapTopic(nodeKey, nodeToken ? "claim" : "config"),
-    {
+  const topicNodeKeys = Array.from(new Set([nodeKey, ...extraNodeKeys].map((key) => key.trim()).filter(Boolean)));
+  for (const topicNodeKey of topicNodeKeys) {
+    publishMessage(
+      bootstrapTopic(topicNodeKey, nodeToken ? "claim" : "config"),
+      {
       type: nodeToken ? "CLAIMED" : "CONFIG_UPDATED",
       nodeId: node.id,
       nodeToken,
       configToken,
       config: buildAgentConfig(node, store),
       ts: new Date().toISOString(),
-    },
-    { skipMqtt: false }
-  );
+      },
+      { skipMqtt: false }
+    );
+  }
 }
 
 async function authenticateNode(request: any) {
@@ -679,12 +687,21 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
         const { config } = mergeNodeConfig(body, previousConfig);
-        const recoveredBootstrapNodeKey =
-          previousConfig.bootstrapNodeKey || (await recoverBootstrapNodeKey(body));
+        const recoveredBootstrapNodeKeys = Array.from(
+          new Set(
+            [
+              String(previousConfig.bootstrapNodeKey || "").trim(),
+              ...(await recoverBootstrapNodeKeys(body)),
+            ].filter(Boolean)
+          )
+        );
+        const recoveredBootstrapNodeKey = recoveredBootstrapNodeKeys[0] || "";
         const recoveredConfigToken =
           previousConfig.mqttConfigToken || `gcfg_${randomBytes(32).toString("base64url")}`;
         const recoveredNodeToken =
-          existing && recoveredBootstrapNodeKey && !previousConfig.mqttConfigToken
+          existing &&
+          recoveredBootstrapNodeKey &&
+          (!previousConfig.mqttConfigToken || (existing.status === "PENDING" && !existing.lastSeenAt))
             ? `gnode_${randomBytes(32).toString("base64url")}`
             : null;
         const configWithSecret = {
@@ -718,7 +735,12 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
             });
 
         await syncStorePrinterTopics(storeId, configWithSecret);
-        await publishNodeConfigIfAddressable(node, store, recoveredNodeToken);
+        await publishNodeConfigIfAddressable(
+          node,
+          store,
+          recoveredNodeToken,
+          recoveredNodeToken ? recoveredBootstrapNodeKeys : []
+        );
 
         return reply.send({
           node: serializeNode(node),
