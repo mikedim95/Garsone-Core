@@ -240,6 +240,26 @@ async function syncStorePrinterTopics(storeId: string, config: any) {
   invalidateStoreCache(store.slug);
 }
 
+async function recoverBootstrapNodeKey(body: z.infer<typeof nodeConfigSchema>) {
+  const names = [body.localHostname, body.tailscaleHostname, body.displayName]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (names.length === 0) return "";
+  const rows = await db.$queryRaw<any[]>`
+    SELECT "nodeKey"
+    FROM "pending_node_agents"
+    WHERE "status" = 'CLAIMED'
+      AND (
+        "localHostname" IN (${Prisma.join(names)})
+        OR "tailscaleHostname" IN (${Prisma.join(names)})
+        OR "displayName" IN (${Prisma.join(names)})
+      )
+    ORDER BY "lastSeenAt" DESC
+    LIMIT 1
+  `;
+  return String(rows[0]?.nodeKey || "").trim();
+}
+
 function mergeNodeConfig(body: z.infer<typeof nodeConfigSchema>, previousConfig: any = {}) {
   const slug = normalizeSlug(body.nodeSlug);
   const previousWifiById = new Map<string, any>(
@@ -429,17 +449,17 @@ function buildAgentConfig(node: any, store: any) {
   };
 }
 
-async function publishNodeConfigIfAddressable(node: any, store: any) {
+async function publishNodeConfigIfAddressable(node: any, store: any, nodeToken: string | null = null) {
   const config = node.configJson && typeof node.configJson === "object" ? node.configJson as any : {};
   const nodeKey = String(config.bootstrapNodeKey || "").trim();
   const configToken = String(config.mqttConfigToken || "").trim();
   if (!nodeKey) return;
   publishMessage(
-    bootstrapTopic(nodeKey, "config"),
+    bootstrapTopic(nodeKey, nodeToken ? "claim" : "config"),
     {
-      type: "CONFIG_UPDATED",
+      type: nodeToken ? "CLAIMED" : "CONFIG_UPDATED",
       nodeId: node.id,
-      nodeToken: null,
+      nodeToken,
       configToken,
       config: buildAgentConfig(node, store),
       ts: new Date().toISOString(),
@@ -659,13 +679,19 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
         const { config } = mergeNodeConfig(body, previousConfig);
+        const recoveredBootstrapNodeKey =
+          previousConfig.bootstrapNodeKey || (await recoverBootstrapNodeKey(body));
+        const recoveredConfigToken =
+          previousConfig.mqttConfigToken || `gcfg_${randomBytes(32).toString("base64url")}`;
+        const recoveredNodeToken =
+          existing && recoveredBootstrapNodeKey && !previousConfig.mqttConfigToken
+            ? `gnode_${randomBytes(32).toString("base64url")}`
+            : null;
         const configWithSecret = {
           ...config,
-          bootstrapNodeKey: previousConfig.bootstrapNodeKey,
+          bootstrapNodeKey: recoveredBootstrapNodeKey,
           bootstrapMacAddresses: previousConfig.bootstrapMacAddresses,
-          mqttConfigToken:
-            previousConfig.mqttConfigToken ||
-            `gcfg_${randomBytes(32).toString("base64url")}`,
+          mqttConfigToken: recoveredConfigToken,
         };
 
         const node = existing
@@ -674,6 +700,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
               data: {
                 slug,
                 displayName: body.displayName,
+                ...(recoveredNodeToken ? { tokenHash: tokenHash(recoveredNodeToken) } : {}),
                 configJson: configWithSecret,
                 desiredConfigVersion: { increment: 1 },
                 statusMessage: "Configuration updated from Architect",
@@ -691,7 +718,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
             });
 
         await syncStorePrinterTopics(storeId, configWithSecret);
-        await publishNodeConfigIfAddressable(node, store);
+        await publishNodeConfigIfAddressable(node, store, recoveredNodeToken);
 
         return reply.send({
           node: serializeNode(node),
