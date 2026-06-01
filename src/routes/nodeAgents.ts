@@ -205,6 +205,21 @@ function serializePendingNode(row: any) {
   };
 }
 
+function buildConfigAck(node: any, body: any) {
+  const meta = body.meta && typeof body.meta === "object" ? body.meta as any : {};
+  if (meta.type !== "config_ack") return null;
+  const receivedAt =
+    typeof meta.receivedAt === "string" && meta.receivedAt.trim()
+      ? meta.receivedAt.trim()
+      : new Date().toISOString();
+  return {
+    version: body.version ?? node.lastAppliedVersion ?? null,
+    receivedAt,
+    message: body.message || "OK, got it.",
+    applied: Boolean(meta.applied),
+  };
+}
+
 async function syncStorePrinterTopics(storeId: string, config: any) {
   const printers = Array.isArray(config?.printers)
     ? Array.from(new Set(config.printers.map((p: any) => String(p?.topicSuffix || "").trim()).filter(Boolean)))
@@ -776,6 +791,9 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     const node = await authenticateNode(request);
     if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
     const body = statusSchema.parse(request.body ?? {});
+    const ack = buildConfigAck(node, body);
+    const existingConfig =
+      node.configJson && typeof node.configJson === "object" ? (node.configJson as any) : {};
     const updated = await db.nodeAgent.update({
       where: { id: node.id },
       data: {
@@ -784,6 +802,14 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         status: body.status,
         statusMessage: body.message || null,
         lastLog: body.log || null,
+        ...(ack
+          ? {
+              configJson: {
+                ...existingConfig,
+                lastConfigAck: ack,
+              },
+            }
+          : {}),
       },
     });
     if (body.message || body.log) {
