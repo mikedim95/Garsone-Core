@@ -19,6 +19,9 @@ type MenuCategory = {
 };
 
 const PRINTER_TOPIC = "printer_1";
+const NOOR_MENU_IMAGE_BASE_URL =
+  process.env.NOOR_MENU_IMAGE_BASE_URL ||
+  "https://order-flow-api-3uuy.onrender.com/media/garsone-media/noor/Menu";
 
 const slugify = (value: string) =>
   value
@@ -30,6 +33,9 @@ const slugify = (value: string) =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
+
+const noorImageUrl = (slug: string) =>
+  `${NOOR_MENU_IMAGE_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(slug)}.webp`;
 
 const shishaItem = (
   tier: "simple" | "special" | "premium",
@@ -207,7 +213,7 @@ async function main() {
             description: null,
             descriptionEn: null,
             descriptionEl: null,
-            imageUrl: null,
+            imageUrl: noorImageUrl(item.slug),
             printerTopic: PRINTER_TOPIC,
             priceCents: item.priceCents,
             isAvailable: true,
@@ -225,7 +231,7 @@ async function main() {
             description: null,
             descriptionEn: null,
             descriptionEl: null,
-            imageUrl: null,
+            imageUrl: noorImageUrl(item.slug),
             printerTopic: PRINTER_TOPIC,
             priceCents: item.priceCents,
             isAvailable: true,

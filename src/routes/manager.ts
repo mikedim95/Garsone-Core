@@ -25,6 +25,107 @@ const guessMimeType = (filePath: string) => {
 const pickFirstEnv = (...values: Array<string | undefined>) =>
   values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() || "";
 
+const getR2Config = () => {
+  const endpoint = pickFirstEnv(
+    process.env.R2_S3_ENDPOINT,
+    process.env.S3_ENDPOINT,
+    process.env.AWS_ENDPOINT_URL_S3,
+    process.env.AWS_S3_ENDPOINT,
+    process.env.CLOUDFLARE_R2_ENDPOINT
+  );
+  const bucket = pickFirstEnv(
+    process.env.R2_BUCKET,
+    process.env.S3_BUCKET,
+    process.env.AWS_S3_BUCKET,
+    process.env.CLOUDFLARE_R2_BUCKET
+  );
+  const accessKeyId = pickFirstEnv(
+    process.env.R2_ACCESS_KEY_ID,
+    process.env.R2_ACCESS_KEY,
+    process.env.AWS_ACCESS_KEY_ID,
+    process.env.S3_ACCESS_KEY_ID
+  );
+  const secretAccessKey = pickFirstEnv(
+    process.env.R2_SECRET_ACCESS_KEY,
+    process.env.R2_SECRET_KEY,
+    process.env.AWS_SECRET_ACCESS_KEY,
+    process.env.S3_SECRET_ACCESS_KEY
+  );
+  return {
+    endpoint,
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    publicBaseUrl: pickFirstEnv(
+      process.env.R2_PUBLIC_BASE_URL,
+      process.env.R2_PUBLIC_URL,
+      process.env.CLOUDFLARE_R2_PUBLIC_URL
+    ),
+    region: process.env.R2_REGION || "auto",
+  };
+};
+
+const signR2Request = (
+  method: string,
+  endpoint: string,
+  bucket: string,
+  key: string,
+  body: Buffer,
+  accessKeyId: string,
+  secretAccessKey: string,
+  region: string,
+  extraHeaders: Record<string, string> = {}
+) => {
+  const normalizedEndpoint = endpoint.replace(/\/$/, "");
+  const host = new URL(normalizedEndpoint).host;
+  const encodedKey = key.split("/").map(encodeURIComponent).join("/");
+  const path = `/${encodeURIComponent(bucket)}${encodedKey ? `/${encodedKey}` : ""}`;
+  const now = new Date();
+  const iso = now.toISOString();
+  const amzDate = iso.replace(/[:-]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+  const signedHeaderValues: Record<string, string> = {
+    host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...extraHeaders,
+  };
+  const sortedHeaderNames = Object.keys(signedHeaderValues).sort();
+  const canonicalHeaders = sortedHeaderNames
+    .map((headerName) => `${headerName.toLowerCase()}:${signedHeaderValues[headerName]}\n`)
+    .join("");
+  const signedHeaders = sortedHeaderNames.map((headerName) => headerName.toLowerCase()).join(";");
+  const canonicalRequest = [
+    method,
+    path,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const algorithm = "AWS4-HMAC-SHA256";
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = [
+    algorithm,
+    amzDate,
+    credentialScope,
+    createHash("sha256").update(canonicalRequest).digest("hex"),
+  ].join("\n");
+  const kDate = createHmac("sha256", Buffer.from(`AWS4${secretAccessKey}`)).update(dateStamp).digest();
+  const kRegion = createHmac("sha256", kDate).update(region).digest();
+  const kService = createHmac("sha256", kRegion).update("s3").digest();
+  const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
+  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+  return {
+    url: `${normalizedEndpoint}${path}`,
+    headers: {
+      ...signedHeaderValues,
+      Authorization: `${algorithm} Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    },
+  };
+};
+
 const deriveR2PublicBase = (imageUrl?: string | null, storeSlug?: string | null) => {
   const raw = String(imageUrl || "").trim();
   const slug = String(storeSlug || "").trim();
@@ -63,6 +164,63 @@ export async function managerRoutes(fastify: FastifyInstance) {
       return reply.type(guessMimeType(filePath)).send(data);
     } catch {
       return reply.status(404).send({ error: "File not found" });
+    }
+  });
+
+  fastify.get("/media/:bucket/*", async (request, reply) => {
+    try {
+      const params = request.params as any;
+      const bucket = String(params?.bucket || "").trim();
+      const key = String(params?.["*"] || "").trim();
+      const normalized = key
+        .split("/")
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+      if (
+        !bucket ||
+        !normalized.length ||
+        normalized.some((segment) => segment === "." || segment === "..")
+      ) {
+        return reply.status(400).send({ error: "Invalid media path" });
+      }
+
+      const config = getR2Config();
+      if (
+        !config.endpoint ||
+        !config.bucket ||
+        !config.accessKeyId ||
+        !config.secretAccessKey ||
+        bucket !== config.bucket
+      ) {
+        return reply.status(404).send({ error: "Media not found" });
+      }
+
+      const requestedKey = normalized.join("/");
+      const signed = signR2Request(
+        "GET",
+        config.endpoint,
+        bucket,
+        requestedKey,
+        Buffer.alloc(0),
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region
+      );
+      const res = await fetch(signed.url, {
+        method: "GET",
+        headers: signed.headers as any,
+      } as any);
+      if (!res.ok) {
+        return reply.status(res.status === 404 ? 404 : 502).send({ error: "Media not found" });
+      }
+
+      const contentType = res.headers.get("content-type") || guessMimeType(requestedKey);
+      const cacheControl = "public, max-age=31536000, immutable";
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return reply.header("Cache-Control", cacheControl).type(contentType).send(buffer);
+    } catch (error) {
+      fastify.log.error(error, "R2 media fetch error");
+      return reply.status(500).send({ error: "Media fetch failed" });
     }
   });
 
@@ -114,38 +272,16 @@ export async function managerRoutes(fastify: FastifyInstance) {
         });
 
         // R2 config (S3-compatible)
-        const R2_ENDPOINT = pickFirstEnv(
-          process.env.R2_S3_ENDPOINT,
-          process.env.S3_ENDPOINT,
-          process.env.AWS_ENDPOINT_URL_S3,
-          process.env.AWS_S3_ENDPOINT,
-          process.env.CLOUDFLARE_R2_ENDPOINT
-        ); // e.g. https://<accountid>.r2.cloudflarestorage.com
-        const R2_BUCKET = pickFirstEnv(
-          process.env.R2_BUCKET,
-          process.env.S3_BUCKET,
-          process.env.AWS_S3_BUCKET,
-          process.env.CLOUDFLARE_R2_BUCKET
-        );
-        const R2_ACCESS = pickFirstEnv(
-          process.env.R2_ACCESS_KEY_ID,
-          process.env.R2_ACCESS_KEY,
-          process.env.AWS_ACCESS_KEY_ID,
-          process.env.S3_ACCESS_KEY_ID
-        );
-        const R2_SECRET = pickFirstEnv(
-          process.env.R2_SECRET_ACCESS_KEY,
-          process.env.R2_SECRET_KEY,
-          process.env.AWS_SECRET_ACCESS_KEY,
-          process.env.S3_SECRET_ACCESS_KEY
-        );
+        const r2Config = getR2Config();
+        const R2_ENDPOINT = r2Config.endpoint; // e.g. https://<accountid>.r2.cloudflarestorage.com
+        const R2_BUCKET = r2Config.bucket;
+        const R2_ACCESS = r2Config.accessKeyId;
+        const R2_SECRET = r2Config.secretAccessKey;
         const R2_PUBLIC = pickFirstEnv(
-          process.env.R2_PUBLIC_BASE_URL,
-          process.env.R2_PUBLIC_URL,
-          process.env.CLOUDFLARE_R2_PUBLIC_URL,
+          r2Config.publicBaseUrl,
           deriveR2PublicBase(existingStoreImage?.imageUrl, storeSlug)
         ); // e.g. https://pub-xxxx.r2.dev
-        const R2_REGION = process.env.R2_REGION || "auto";
+        const R2_REGION = r2Config.region;
         const requireR2Uploads =
           String(process.env.REQUIRE_R2_UPLOADS || "").toLowerCase() === "true";
 
@@ -188,48 +324,22 @@ export async function managerRoutes(fastify: FastifyInstance) {
 
           const key = await buildKey();
           const endpoint = R2_ENDPOINT.replace(/\/$/, "");
-          const url = `${endpoint}/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
 
-          const now = new Date();
-          // AWS SigV4 timestamps: 20250101T120000Z
-          const iso = now.toISOString(); // e.g. 2025-12-22T12:34:56.789Z
-          const amzDate = iso.replace(/[:-]/g, "").replace(/\.\d{3}Z$/, "Z"); // 20251222T123456Z
-          const dateStamp = amzDate.slice(0, 8);
-          const host = new URL(endpoint).host;
-          const payloadHash = createHash("sha256").update(buffer).digest("hex");
+          const signed = signR2Request(
+            "PUT",
+            endpoint,
+            R2_BUCKET,
+            key,
+            buffer,
+            R2_ACCESS,
+            R2_SECRET,
+            R2_REGION,
+            { "Content-Type": mimeType }
+          );
 
-          const canonicalUri = `/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
-          const canonicalQueryString = "";
-          const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
-          const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-          const canonicalRequest = ["PUT", canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join("\n");
-
-          const algorithm = "AWS4-HMAC-SHA256";
-          const credentialScope = `${dateStamp}/${R2_REGION}/s3/aws4_request`;
-          const stringToSign = [
-            algorithm,
-            amzDate,
-            credentialScope,
-            createHash("sha256").update(canonicalRequest).digest("hex"),
-          ].join("\n");
-
-          const kDate = createHmac("sha256", Buffer.from("AWS4" + R2_SECRET)).update(dateStamp).digest();
-          const kRegion = createHmac("sha256", kDate).update(R2_REGION).digest();
-          const kService = createHmac("sha256", kRegion).update("s3").digest();
-          const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
-          const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
-
-          const authorization = `${algorithm} Credential=${R2_ACCESS}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-          const res = await fetch(url, {
+          const res = await fetch(signed.url, {
             method: "PUT",
-            headers: {
-              host,
-              "x-amz-content-sha256": payloadHash,
-              "x-amz-date": amzDate,
-              Authorization: authorization,
-              "Content-Type": mimeType,
-            } as any,
+            headers: signed.headers as any,
             body: buffer,
           } as any);
 
