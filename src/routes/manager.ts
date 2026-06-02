@@ -166,20 +166,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
               include: { category: true },
             });
             if (item) {
-              const categoryName = slugSegment(
-                (item.category as any)?.titleEn || (item.category as any)?.titleEl || (item.category as any)?.title || "Uncategorized"
-              );
               const itemTitle = slugSegment(item.titleEn || item.title || "Item");
               const ext = extFrom(fileName, mimeType);
               const objectName = `${itemTitle}.${ext}`;
               // Desired public URL example when bucket == store slug:
-              //   https://pub-xxx.r2.dev/<storeSlug>/<Category>/<Item>.jpg
+              //   https://pub-xxx.r2.dev/<storeSlug>/Menu/<Item>.jpg
               // If bucket equals store slug, omit the store slug from the key to avoid duplication.
               if (R2_BUCKET && slugSegment(R2_BUCKET) === storeSlug) {
-                return `${categoryName}/${objectName}`;
+                return `Menu/${objectName}`;
               }
               // Otherwise include store slug in the key under a shared bucket.
-              return `${storeSlug}/${categoryName}/${objectName}`;
+              return `${storeSlug}/Menu/${objectName}`;
             }
           }
           const safeName = `${Date.now()}-${slugSegment(fileName.replace(/\.[^.]+$/, "")) || "upload"}.${extFrom(fileName, mimeType)}`;
