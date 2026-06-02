@@ -66,7 +66,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Image upload to R2 (S3 API) if configured, otherwise fallback to Supabase. Body: { fileName, mimeType, base64, itemId? }
+  // Image upload to R2 (S3 API) if configured, otherwise fallback to legacy storage.
+  // Body: { fileName, mimeType, base64, itemId? }
   fastify.post(
     "/manager/uploads/image",
     { preHandler: managerOnly },
@@ -145,6 +146,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
           deriveR2PublicBase(existingStoreImage?.imageUrl, storeSlug)
         ); // e.g. https://pub-xxxx.r2.dev
         const R2_REGION = process.env.R2_REGION || "auto";
+        const requireR2Uploads =
+          String(process.env.REQUIRE_R2_UPLOADS || "").toLowerCase() === "true";
 
         const extFrom = (name: string, mt: string) => {
           const dot = name.lastIndexOf(".");
@@ -260,6 +263,22 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const r2Result = await tryR2();
         if (r2Result) {
           return reply.send(r2Result);
+        }
+        if (requireR2Uploads) {
+          const missing = [
+            ["R2_S3_ENDPOINT", R2_ENDPOINT],
+            ["R2_BUCKET", R2_BUCKET],
+            ["R2_ACCESS_KEY_ID", R2_ACCESS],
+            ["R2_SECRET_ACCESS_KEY", R2_SECRET],
+            ["R2_PUBLIC_BASE_URL", R2_PUBLIC],
+          ]
+            .filter(([, value]) => !value)
+            .map(([name]) => name);
+          const detail = missing.length
+            ? `Missing R2 config: ${missing.join(", ")}`
+            : "R2 upload failed";
+          fastify.log.error({ missing }, "R2 upload required but unavailable");
+          return reply.status(500).send({ error: detail });
         }
 
         const SUPA_URL = process.env.SUPABASE_URL;
