@@ -62,6 +62,10 @@ const updateSchema = z
     { message: "No fields provided" }
   );
 
+const purgeStoreHistorySchema = z.object({
+  confirmation: z.string().trim().min(1).max(255),
+});
+
 const normalizePublicCode = (value: string) => (value || "").trim().toUpperCase();
 
 function serializeStoreUser(profile: any) {
@@ -702,6 +706,112 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           ordersCount: orderMap.get(store.id) ?? 0,
         })),
       });
+    }
+  );
+
+  fastify.delete(
+    "/admin/stores/:storeId/history",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = request.params as { storeId: string };
+        const body = purgeStoreHistorySchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, slug: true, name: true },
+        });
+        if (!store) {
+          return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        }
+
+        const expectedConfirmation = `DELETE HISTORY ${store.slug}`;
+        if (body.confirmation !== expectedConfirmation) {
+          return reply.status(400).send({
+            error: "CONFIRMATION_MISMATCH",
+            expected: expectedConfirmation,
+          });
+        }
+
+        const actorId =
+          typeof (request as any)?.user?.userId === "string"
+            ? (request as any).user.userId
+            : null;
+
+        const result = await db.$transaction(async (tx: any) => {
+          const [
+            orders,
+            tableVisits,
+            localityApprovals,
+            waiterShifts,
+            kitchenTicketSeqs,
+            auditLogs,
+            nodeAgentEvents,
+          ] = await Promise.all([
+            tx.order.count({ where: { storeId } }),
+            tx.tableVisit.count({ where: { storeId } }),
+            tx.localityApproval.count({ where: { storeId } }),
+            tx.waiterShift.count({ where: { storeId } }),
+            tx.kitchenTicketSeq.count({ where: { storeId } }),
+            tx.auditLog.count({ where: { storeId } }),
+            tx.nodeAgentEvent.count({ where: { storeId } }),
+          ]);
+
+          await tx.localityApproval.deleteMany({ where: { storeId } });
+          await tx.tableVisit.deleteMany({ where: { storeId } });
+          await tx.waiterShift.deleteMany({ where: { storeId } });
+          await tx.kitchenTicketSeq.deleteMany({ where: { storeId } });
+          await tx.nodeAgentEvent.deleteMany({ where: { storeId } });
+          await tx.auditLog.deleteMany({ where: { storeId } });
+          await tx.order.deleteMany({ where: { storeId } });
+
+          await tx.auditLog.create({
+            data: {
+              storeId,
+              action: "store.history_purged",
+              entityType: "store",
+              entityId: storeId,
+              actorProfileId: actorId,
+              metaJson: {
+                storeSlug: store.slug,
+                storeName: store.name,
+                deleted: {
+                  orders,
+                  tableVisits,
+                  localityApprovals,
+                  waiterShifts,
+                  kitchenTicketSeqs,
+                  auditLogs,
+                  nodeAgentEvents,
+                },
+              },
+            },
+          });
+
+          return {
+            orders,
+            tableVisits,
+            localityApprovals,
+            waiterShifts,
+            kitchenTicketSeqs,
+            auditLogs,
+            nodeAgentEvents,
+          };
+        });
+
+        return reply.send({
+          success: true,
+          store: { id: store.id, slug: store.slug, name: store.name },
+          deleted: result,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to purge store history");
+        return reply.status(500).send({ error: "Failed to purge store history" });
+      }
     }
   );
 
