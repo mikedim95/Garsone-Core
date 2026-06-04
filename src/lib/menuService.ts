@@ -12,6 +12,7 @@ type MenuPayload = {
     title: string;
     titleEn?: string | null;
     titleEl?: string | null;
+    imageUrl?: string | null;
     sortOrder?: number | null;
     printerTopic?: string | null;
   }>;
@@ -114,6 +115,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
         title: true,
         titleEn: true,
         titleEl: true,
+        imageUrl: true,
         printerTopic: true,
         sortOrder: true,
         updatedAt: true,
@@ -262,6 +264,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       title: localize(preferGreek, category.titleEn, category.titleEl, category.title),
       titleEn: category.titleEn || category.title,
       titleEl: category.titleEl || category.title,
+      imageUrl: category.imageUrl ?? null,
       sortOrder: category.sortOrder ?? undefined,
       printerTopic: category.printerTopic ?? null,
     })),

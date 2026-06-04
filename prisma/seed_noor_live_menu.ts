@@ -13,6 +13,7 @@ type MenuCategory = {
   slug: string;
   title: string;
   titleEl: string;
+  imageSlug?: string;
   sortOrder: number;
   reuseSlugs?: string[];
   items: MenuItem[];
@@ -36,6 +37,14 @@ const slugify = (value: string) =>
 
 const noorImageUrl = (slug: string) =>
   `${NOOR_MENU_IMAGE_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(slug)}.webp`;
+
+const categoryImageSlugByCategorySlug: Record<string, string> = {
+  coffee: "cappuccino",
+  beverages: "natural-juice",
+  drinks: "drink-special",
+  beer: "beer-corona",
+  shisha: "shisha-special-love66",
+};
 
 const shishaItem = (
   tier: "simple" | "special" | "premium",
@@ -169,6 +178,7 @@ async function ensureCategory(tx: any, storeId: string, category: MenuCategory) 
         title: category.title,
         titleEn: category.title,
         titleEl: category.titleEl,
+        imageUrl: noorImageUrl(category.imageSlug ?? categoryImageSlugByCategorySlug[category.slug] ?? category.slug),
         printerTopic: PRINTER_TOPIC,
         sortOrder: category.sortOrder,
       },
@@ -182,6 +192,7 @@ async function ensureCategory(tx: any, storeId: string, category: MenuCategory) 
       title: category.title,
       titleEn: category.title,
       titleEl: category.titleEl,
+      imageUrl: noorImageUrl(category.imageSlug ?? categoryImageSlugByCategorySlug[category.slug] ?? category.slug),
       printerTopic: PRINTER_TOPIC,
       sortOrder: category.sortOrder,
     },

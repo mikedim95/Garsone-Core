@@ -58,6 +58,7 @@ model Category {
   title        String   @db.VarChar(255)
   titleEl      String?  @db.VarChar(255)
   titleEn      String?  @db.VarChar(255)
+  imageUrl     String?  @db.VarChar(2000)
   printerTopic String?  @db.VarChar(255)
   sortOrder    Int      @default(0)
   createdAt    DateTime @default(now()) @db.Timestamp(6)

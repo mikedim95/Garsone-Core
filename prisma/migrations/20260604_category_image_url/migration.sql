@@ -1,0 +1,2 @@
+ALTER TABLE "categories"
+  ADD COLUMN IF NOT EXISTS "imageUrl" VARCHAR(2000);

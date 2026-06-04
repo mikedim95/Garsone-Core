@@ -1861,6 +1861,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   const categoryCreate = z.object({
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
+    imageUrl: z.string().url().max(2048).nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).optional(),
   });
@@ -1887,11 +1888,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
             title: body.titleEn,
             titleEn: body.titleEn,
             titleEl: body.titleEl,
+            imageUrl: body.imageUrl ?? null,
             slug,
             sortOrder: body.sortOrder ?? 0,
             printerTopic,
           },
         });
+        invalidateMenuCache();
         return reply.status(201).send({ category: cat });
       } catch (e) {
         if (e instanceof z.ZodError)
@@ -1907,6 +1910,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
+    imageUrl: z.string().url().max(2048).nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
@@ -1933,6 +1937,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           data.printerTopic = normalizedPrinterTopic;
         }
         const updated = await db.category.update({ where: { id }, data });
+        invalidateMenuCache();
         return reply.send({ category: updated });
       } catch (e) {
         if (e instanceof z.ZodError)
@@ -1951,6 +1956,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         await db.category.delete({ where: { id } });
+        invalidateMenuCache();
         return reply.send({ success: true });
       } catch (e) {
         return reply.status(500).send({ error: "Failed to delete category" });
