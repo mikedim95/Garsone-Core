@@ -202,6 +202,7 @@ async function ensureCategory(tx: any, storeId: string, category: MenuCategory) 
 async function main() {
   const store = await db.store.findUnique({ where: { slug: "noor" } });
   if (!store) throw new Error('Store "noor" not found');
+  const canonicalCategorySlugs = menu.map((category) => category.slug);
 
   await db.$transaction(async (tx) => {
     await tx.item.updateMany({
@@ -251,6 +252,14 @@ async function main() {
         });
       }
     }
+
+    await tx.category.deleteMany({
+      where: {
+        storeId: store.id,
+        slug: { notIn: canonicalCategorySlugs },
+        items: { none: { isAvailable: true } },
+      },
+    });
   });
 
   const categories = await db.category.findMany({
