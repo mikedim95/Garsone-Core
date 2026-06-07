@@ -1,9 +1,13 @@
 import { FastifyInstance } from "fastify";
 import { ensureStore } from "../lib/store.js";
-import { getMenuPayload, invalidateMenuCache } from "../lib/menuService.js";
+import { getMenuPayload, invalidateMenuCache as invalidateBaseMenuCache } from "../lib/menuService.js";
 import { applyCacheHeaders, isNotModified } from "../lib/httpCache.js";
+import { invalidateMenuBootstrapCache } from "./publicMenuBootstrap.js";
 
-export { invalidateMenuCache };
+export function invalidateMenuCache() {
+  invalidateBaseMenuCache();
+  invalidateMenuBootstrapCache();
+}
 
 export async function menuRoutes(fastify: FastifyInstance) {
   fastify.get("/menu", async (request, reply) => {

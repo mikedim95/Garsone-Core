@@ -23,6 +23,10 @@ const BOOTSTRAP_CACHE = createLruCache<{
   max: 100,
 });
 
+export function invalidateMenuBootstrapCache() {
+  BOOTSTRAP_CACHE.clear();
+}
+
 export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
   fastify.get("/public/menu-bootstrap", async (request, reply) => {
     const query = request.query as {
