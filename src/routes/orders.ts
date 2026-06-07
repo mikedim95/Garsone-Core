@@ -16,7 +16,7 @@ import {
 } from "../lib/tableVisits.js";
 import { createVivaPaymentOrder } from "../lib/viva.js";
 
-const modifierSelectionSchema = z.record(z.string());
+const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string())]));
 
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
@@ -354,12 +354,12 @@ function publishPrinterTopicsForOrder(
 
 function parseModifiers(value?: unknown) {
   if (!value) {
-    return {} as Record<string, string>;
+    return {} as Record<string, string | string[]>;
   }
 
   if (typeof value === "string") {
     if (value.trim().length === 0) {
-      return {} as Record<string, string>;
+      return {} as Record<string, string | string[]>;
     }
 
     try {
@@ -474,7 +474,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           const orderItemOptions: Prisma.OrderItemOptionCreateWithoutOrderItemInput[] =
             [];
 
-          for (const [modifierId, optionId] of Object.entries(selections)) {
+          for (const [modifierId, selectedOptionIds] of Object.entries(selections)) {
             const link = modifierLinks.get(modifierId);
 
             if (!link) {
@@ -484,27 +484,48 @@ export async function orderRoutes(fastify: FastifyInstance) {
             }
 
             const modifier = link.modifier;
-            const option = modifier.modifierOptions.find(
-              (opt) => opt.id === optionId
-            );
+            const optionIds = Array.isArray(selectedOptionIds)
+              ? selectedOptionIds
+              : [selectedOptionIds];
+            const uniqueOptionIds = [...new Set(optionIds.filter(Boolean))];
+            const minSelect = link.isRequired ? Math.max(1, modifier.minSelect) : modifier.minSelect;
+            const maxSelect = modifier.maxSelect;
 
-            if (!option) {
+            if (uniqueOptionIds.length < minSelect) {
               return reply
                 .status(400)
-                .send({ error: "Modifier option not found" });
+                .send({ error: "Missing required modifiers" });
             }
 
-            unitPriceCents += option.priceDeltaCents;
-            orderItemOptions.push({
-              modifier: {
-                connect: { id: modifier.id },
-              },
-              modifierOption: {
-                connect: { id: option.id },
-              },
-              titleSnapshot: `${modifier.title}: ${option.title}`,
-              priceDeltaCents: option.priceDeltaCents,
-            });
+            if (maxSelect !== null && uniqueOptionIds.length > maxSelect) {
+              return reply
+                .status(400)
+                .send({ error: "Too many modifier options selected" });
+            }
+
+            for (const optionId of uniqueOptionIds) {
+              const option = modifier.modifierOptions.find(
+                (opt) => opt.id === optionId
+              );
+
+              if (!option) {
+                return reply
+                  .status(400)
+                  .send({ error: "Modifier option not found" });
+              }
+
+              unitPriceCents += option.priceDeltaCents;
+              orderItemOptions.push({
+                modifier: {
+                  connect: { id: modifier.id },
+                },
+                modifierOption: {
+                  connect: { id: option.id },
+                },
+                titleSnapshot: `${modifier.title}: ${option.title}`,
+                priceDeltaCents: option.priceDeltaCents,
+              });
+            }
           }
 
           const requiredModifiersMissing = dbItem.itemModifiers.some((link) => {
@@ -516,7 +537,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             if (!minRequired) {
               return false;
             }
-            return !selections[link.modifierId];
+            const selected = selections[link.modifierId];
+            return Array.isArray(selected) ? selected.length === 0 : !selected;
           });
 
           if (requiredModifiersMissing) {
@@ -1652,23 +1674,31 @@ export async function orderRoutes(fastify: FastifyInstance) {
             const quantity = Math.max(1, Number(it.quantity || 1));
             const selections = parseModifiers(it.modifiers);
             const links = dbItem.itemModifiers;
-            const options = Object.entries(selections)
-              .map(([modifierId, optionId]) => {
-                const mod = links.find(
-                  (l: any) => l.modifierId === modifierId
-                )?.modifier;
-                const opt = mod?.modifierOptions.find(
-                  (o: any) => o.id === optionId
-                );
-                if (!opt) return null;
-                return {
+            const options: any[] = [];
+            for (const [modifierId, selectedOptionIds] of Object.entries(selections)) {
+              const link = links.find((l: any) => l.modifierId === modifierId);
+              const mod = link?.modifier;
+              if (!mod) continue;
+              const optionIds = Array.isArray(selectedOptionIds) ? selectedOptionIds : [selectedOptionIds];
+              const uniqueOptionIds = [...new Set(optionIds.filter(Boolean))];
+              const minSelect = link.isRequired ? Math.max(1, mod.minSelect) : mod.minSelect;
+              if (uniqueOptionIds.length < minSelect) {
+                return reply.status(400).send({ error: "Missing required modifiers" });
+              }
+              if (mod.maxSelect !== null && uniqueOptionIds.length > mod.maxSelect) {
+                return reply.status(400).send({ error: "Too many modifier options selected" });
+              }
+              for (const optionId of uniqueOptionIds) {
+                const opt = mod.modifierOptions.find((o: any) => o.id === optionId);
+                if (!opt) continue;
+                options.push({
                   modifierId,
                   modifierOptionId: optionId,
                   titleSnapshot: opt.title,
                   priceDeltaCents: opt.priceDeltaCents,
-                };
-              })
-              .filter(Boolean) as any[];
+                });
+              }
+            }
             const unitPriceCents =
               dbItem.priceCents +
               options.reduce((s, o) => s + o.priceDeltaCents, 0);
