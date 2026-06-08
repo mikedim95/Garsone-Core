@@ -141,6 +141,7 @@ const ORDER_ITEM_INCLUDE = {
           select: {
             title: true,
             slug: true,
+            printerTopic: true,
           },
         },
       },
@@ -301,7 +302,10 @@ function publishPrinterTopicsForOrder(
 ) {
   const grouped = new Map<string, typeof order.orderItems>();
   for (const oi of order.orderItems) {
-    const key = normalizePrinterTopic((oi as any)?.item?.printerTopic);
+    const key = normalizePrinterTopic(
+      (oi as any)?.item?.printerTopic,
+      (oi as any)?.item?.category?.printerTopic
+    );
     const list = grouped.get(key) || [];
     list.push(oi);
     grouped.set(key, list);
@@ -335,9 +339,14 @@ function publishPrinterTopicsForOrder(
       ...basePayload,
       printerTopic: printerKey,
       items: items.map((oi) => ({
+        id: oi.id,
+        itemId: oi.itemId,
         title: oi.titleSnapshot,
         quantity: oi.quantity,
         unitPriceCents: oi.unitPriceCents,
+        status: oi.status,
+        acceptedAt: oi.acceptedAt,
+        servedAt: oi.servedAt,
         modifiers: oi.orderItemOptions,
         categoryId: (oi as any)?.item?.categoryId ?? undefined,
         categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
@@ -630,7 +639,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
             categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
             printerTopic: normalizePrinterTopic(
-              (orderItem as any)?.item?.printerTopic
+              (orderItem as any)?.item?.printerTopic,
+              (orderItem as any)?.item?.category?.printerTopic
             ),
           })),
         };
@@ -1784,7 +1794,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             categoryId: (oi as any)?.item?.categoryId ?? undefined,
             categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
             printerTopic: normalizePrinterTopic(
-              (oi as any)?.item?.printerTopic
+              (oi as any)?.item?.printerTopic,
+              (oi as any)?.item?.category?.printerTopic
             ),
           })),
         };
