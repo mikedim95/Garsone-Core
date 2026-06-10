@@ -1085,9 +1085,31 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        await db.profile.delete({ where: { id } });
+        const store = await ensureStore(request);
+        const waiter = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: "WAITER" },
+          select: { id: true },
+        });
+        if (!waiter) {
+          return reply.status(404).send({ error: "Waiter not found" });
+        }
+
+        await db.$transaction([
+          db.waiterTable.deleteMany({
+            where: { storeId: store.id, waiterId: id },
+          }),
+          db.waiterShift.deleteMany({
+            where: { storeId: store.id, waiterId: id },
+          }),
+          db.auditLog.updateMany({
+            where: { storeId: store.id, actorProfileId: id },
+            data: { actorProfileId: null },
+          }),
+          db.profile.delete({ where: { id } }),
+        ]);
         return reply.send({ success: true });
-      } catch {
+      } catch (e) {
+        request.log.error(e, "Failed to delete waiter");
         return reply.status(500).send({ error: "Failed to delete waiter" });
       }
     }
