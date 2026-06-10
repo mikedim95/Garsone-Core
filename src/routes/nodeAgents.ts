@@ -88,6 +88,7 @@ const testPrinterSchema = z.object({
   topicSuffix: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/),
   mac: z.string().trim().max(64).optional().default(""),
   label: z.string().trim().max(120).optional().default(""),
+  type: z.enum(["58", "80"]).optional().default("58"),
 });
 
 function tokenHash(token: string) {
@@ -109,47 +110,15 @@ function normalizeSlug(value: string) {
   return slug || "main";
 }
 
-function testPrintPayload(storeSlug: string, printer: z.infer<typeof testPrinterSchema>) {
+function testPrintPayload(storeSlug: string, storeName: string, printer: z.infer<typeof testPrinterSchema>) {
   const now = new Date().toISOString();
   return {
-    orderId: `test-${Date.now()}`,
-    tableId: "architect-test",
-    tableLabel: "Printer test",
-    ticketNumber: "TEST",
-    status: "PREPARING",
-    createdAt: now,
+    type: "PRINTER_TEST",
     ts: now,
-    note: `Architect test print for ${printer.label || printer.topicSuffix}`,
     printerTopic: printer.topicSuffix,
-    items: [
-      {
-        title: "TEST PRINT",
-        quantity: 1,
-        unitPriceCents: 0,
-        modifiers: [],
-        printerTopic: printer.topicSuffix,
-      },
-      {
-        title: `MAC ${printer.mac || "not set"}`,
-        quantity: 1,
-        unitPriceCents: 0,
-        modifiers: [],
-        printerTopic: printer.topicSuffix,
-      },
-      {
-        title: `Topic ${storeSlug}/orders/preparing/${printer.topicSuffix}`,
-        quantity: 1,
-        unitPriceCents: 0,
-        modifiers: [],
-        printerTopic: printer.topicSuffix,
-      },
-    ],
-    order: {
-      id: `test-${Date.now()}`,
-      status: "PREPARING",
-      note: "Architect printer test",
-      table: { label: "Printer test" },
-    },
+    printerName: printer.label || printer.topicSuffix,
+    printerWidth: printer.type,
+    venueName: storeName || storeSlug,
   };
 }
 
@@ -778,14 +747,14 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const printer = testPrinterSchema.parse(request.body ?? {});
         const store = await db.store.findUnique({
           where: { id: storeId },
-          select: { id: true, slug: true },
+          select: { id: true, slug: true, name: true },
         });
         if (!store) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
         const topic = `${store.slug}/orders/preparing/${printer.topicSuffix}`;
-        const payload = testPrintPayload(store.slug, printer);
+        const payload = testPrintPayload(store.slug, store.name, printer);
         publishMessage(topic, payload, { roles: ["cook"] });
         return reply.send({ ok: true, topic, payload });
       } catch (error) {
