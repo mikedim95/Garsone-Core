@@ -1584,6 +1584,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const query = z
           .object({
             status: z.nativeEnum(OrderStatus).optional(),
+            unpaid: z.string().optional(),
             take: z.coerce.number().int().positive().max(100).optional(),
           })
           .parse(request.query ?? {});
@@ -1595,11 +1596,19 @@ export async function orderRoutes(fastify: FastifyInstance) {
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
         }
+        const unpaidOnly =
+          query.unpaid === "1" ||
+          query.unpaid === "true" ||
+          query.unpaid === "yes";
         const orders = await db.order.findMany({
           where: {
             storeId: store.id,
             tableId: params.id,
-            ...(query.status ? { status: query.status } : {}),
+            ...(unpaidOnly
+              ? { status: { not: OrderStatus.PAID } }
+              : query.status
+              ? { status: query.status }
+              : {}),
           },
           orderBy: { placedAt: "desc" },
           take: query.take ?? 20,
