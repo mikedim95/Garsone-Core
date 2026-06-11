@@ -15,6 +15,7 @@ import {
   REQUIRE_TABLE_VISIT,
 } from "../lib/tableVisits.js";
 import { createVivaPaymentOrder } from "../lib/viva.js";
+import { notifyCustomerOrderStatus } from "../lib/customerPush.js";
 
 const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string())]));
 
@@ -1022,6 +1023,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           body.cancelReason.trim().length > 0
             ? body.cancelReason.trim()
             : undefined;
+        const statusChanged = existing.status !== body.status;
         const updateData: any = {
           status: body.status,
           updatedAt: now,
@@ -1295,6 +1297,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
             { skipMqtt: true }
           );
           broadcastToGuests("orders/paid", payload);
+        }
+
+        if (statusChanged) {
+          void notifyCustomerOrderStatus({
+            order: updatedOrder,
+            storeSlug: store.slug,
+          }).catch((error) => {
+            console.warn("Customer push notification failed:", error);
+          });
         }
 
         return reply.send({ order: serializeOrder(updatedOrder) });

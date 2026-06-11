@@ -25,6 +25,7 @@ model Store {
   modifierOptions   ModifierOption[]
   modifiers         Modifier[]
   orders            Order[]
+  customerPushSubscriptions CustomerPushSubscription[]
   profiles          Profile[]
   qrTiles           QRTile[]
   storeMeta         StoreMeta?
@@ -202,6 +203,7 @@ model Table {
   createdAt    DateTime      @default(now()) @db.Timestamp(6)
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
   orders       Order[]
+  customerPushSubscriptions CustomerPushSubscription[]
   qrTiles      QRTile[]
   tableVisits  TableVisit[]
   localityApprovals LocalityApproval[]
@@ -337,6 +339,7 @@ model Order {
   paymentId       String?       @db.VarChar(255)
   paymentError    String?
   orderItems      OrderItem[]
+  customerPushSubscriptions CustomerPushSubscription[]
   store           Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table           Table         @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
@@ -344,6 +347,26 @@ model Order {
   @@index([tableId, placedAt(sort: Desc)])
   @@index([storeId, paymentStatus])
   @@map("orders")
+}
+
+model CustomerPushSubscription {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  tableId   String   @db.Uuid
+  orderId   String?  @db.Uuid
+  endpoint  String   @unique @db.VarChar(1000)
+  p256dh    String   @db.VarChar(255)
+  auth      String   @db.VarChar(255)
+  userAgent String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, tableId])
+  @@index([orderId])
+  @@map("customer_push_subscriptions")
 }
 
 model OrderItem {
