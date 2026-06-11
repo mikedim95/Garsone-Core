@@ -37,6 +37,10 @@ const createOrderSchema = z.object({
   note: z.string().max(500).optional(),
 });
 
+const updatePendingTableOrdersSchema = createOrderSchema.omit({ tableId: true }).extend({
+  orderIds: z.array(z.string().uuid()).min(1).max(20).optional(),
+});
+
 const updateStatusSchema = z.object({
   status: z.nativeEnum(OrderStatus),
   cancelReason: z.string().trim().min(1).max(255).optional(),
@@ -1628,6 +1632,357 @@ export async function orderRoutes(fastify: FastifyInstance) {
         return reply
           .status(500)
           .send({ error: "Failed to fetch table orders" });
+      }
+    }
+  );
+
+  // Edit all still-placed orders for a table as one customer-facing draft.
+  fastify.patch(
+    "/public/table/:id/orders/pending",
+    {
+      preHandler: [ipWhitelistMiddleware, optionalAuthMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            id: z.string().uuid(),
+          })
+          .parse(request.params ?? {});
+        const body = updatePendingTableOrdersSchema.parse(request.body);
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role);
+        const requiresLocality =
+          !isStaff && !bypassGuestCheckoutChecks(store.slug);
+        const localityApprovalToken =
+          typeof body.localityApprovalToken === "string"
+            ? body.localityApprovalToken.trim()
+            : "";
+        const localitySessionId =
+          typeof body.localitySessionId === "string"
+            ? body.localitySessionId.trim()
+            : "";
+
+        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
+        }
+
+        const table = await db.table.findFirst({
+          where: { id: params.id, storeId: store.id },
+        });
+        if (!table) {
+          return reply.status(404).send({ error: "Table not found" });
+        }
+
+        const requestedOrderIds = Array.from(new Set(body.orderIds ?? []));
+        const editableOrders = await db.order.findMany({
+          where: {
+            storeId: store.id,
+            tableId: params.id,
+            status: OrderStatus.PLACED,
+            ...(requestedOrderIds.length
+              ? { id: { in: requestedOrderIds } }
+              : {}),
+          },
+          orderBy: { placedAt: "asc" },
+          include: {
+            table: { select: { id: true, label: true } },
+            orderItems: ORDER_ITEM_INCLUDE,
+          },
+        });
+
+        if (
+          requestedOrderIds.length > 0 &&
+          editableOrders.length !== requestedOrderIds.length
+        ) {
+          return reply
+            .status(409)
+            .send({ error: "One or more orders can no longer be edited" });
+        }
+        if (editableOrders.length === 0) {
+          return reply
+            .status(404)
+            .send({ error: "No pending orders found for this table" });
+        }
+
+        const itemIds = body.items.map((it) => it.itemId);
+        const dbItems = await db.item.findMany({
+          where: {
+            storeId: store.id,
+            id: { in: itemIds },
+            isAvailable: true,
+          },
+          include: {
+            itemModifiers: {
+              include: { modifier: { include: { modifierOptions: true } } },
+            },
+          },
+        });
+        const mapById = new Map(dbItems.map((item) => [item.id, item]));
+        let totalCents = 0;
+        const itemsToCreate: any[] = [];
+
+        for (const it of body.items) {
+          const dbItem = mapById.get(it.itemId);
+          if (!dbItem) {
+            return reply.status(400).send({ error: "Item not available" });
+          }
+
+          const quantity = Math.max(1, Number(it.quantity || 1));
+          const selections = parseModifiers(it.modifiers);
+          const links = dbItem.itemModifiers;
+          const options: any[] = [];
+
+          for (const [modifierId, selectedOptionIds] of Object.entries(selections)) {
+            const link = links.find((entry: any) => entry.modifierId === modifierId);
+            const modifier = link?.modifier;
+            if (!modifier) {
+              return reply
+                .status(400)
+                .send({ error: "Modifier not allowed for item" });
+            }
+
+            const optionIds = Array.isArray(selectedOptionIds)
+              ? selectedOptionIds
+              : [selectedOptionIds];
+            const uniqueOptionIds = [...new Set(optionIds.filter(Boolean))];
+            const minSelect = link.isRequired
+              ? Math.max(1, modifier.minSelect)
+              : modifier.minSelect;
+
+            if (uniqueOptionIds.length < minSelect) {
+              return reply
+                .status(400)
+                .send({ error: "Missing required modifiers" });
+            }
+            if (modifier.maxSelect !== null && uniqueOptionIds.length > modifier.maxSelect) {
+              return reply
+                .status(400)
+                .send({ error: "Too many modifier options selected" });
+            }
+
+            for (const optionId of uniqueOptionIds) {
+              const option = modifier.modifierOptions.find(
+                (candidate: any) => candidate.id === optionId
+              );
+              if (!option) {
+                return reply
+                  .status(400)
+                  .send({ error: "Modifier option not found" });
+              }
+              options.push({
+                modifier: { connect: { id: modifier.id } },
+                modifierOption: { connect: { id: option.id } },
+                titleSnapshot: `${modifier.title}: ${option.title}`,
+                priceDeltaCents: option.priceDeltaCents,
+              });
+            }
+          }
+
+          const requiredModifiersMissing = dbItem.itemModifiers.some((link) => {
+            const modifier = link.modifier;
+            const minRequired =
+              link.isRequired || modifier.minSelect > 0
+                ? 1
+                : modifier.minSelect;
+            if (!minRequired) return false;
+            const selected = selections[link.modifierId];
+            return Array.isArray(selected) ? selected.length === 0 : !selected;
+          });
+
+          if (requiredModifiersMissing) {
+            return reply
+              .status(400)
+              .send({ error: "Missing required modifiers" });
+          }
+
+          const unitPriceCents =
+            dbItem.priceCents +
+            options.reduce((sum, option) => sum + option.priceDeltaCents, 0);
+          totalCents += unitPriceCents * quantity;
+          itemsToCreate.push({
+            item: { connect: { id: dbItem.id } },
+            titleSnapshot: dbItem.title,
+            unitPriceCents,
+            quantity,
+            orderItemOptions: { create: options },
+          });
+        }
+
+        const primaryOrder = editableOrders[0];
+        const supersededOrders = editableOrders.slice(1);
+        const supersededOrderIds = supersededOrders.map((order) => order.id);
+        const now = new Date();
+
+        const updated = await db.$transaction(async (tx) => {
+          await tx.orderItem.deleteMany({ where: { orderId: primaryOrder.id } });
+
+          if (supersededOrderIds.length > 0) {
+            await tx.order.updateMany({
+              where: {
+                id: { in: supersededOrderIds },
+                storeId: store.id,
+                tableId: params.id,
+                status: OrderStatus.PLACED,
+              },
+              data: {
+                status: OrderStatus.CANCELLED,
+                cancelledAt: now,
+                cancelReason: "Merged into updated pending order",
+                updatedAt: now,
+              },
+            });
+          }
+
+          const updatedOrder = await tx.order.update({
+            where: { id: primaryOrder.id },
+            data: {
+              note: typeof body.note === "string" ? body.note : primaryOrder.note,
+              totalCents,
+              orderItems: { create: itemsToCreate },
+              updatedAt: now,
+            },
+            include: {
+              table: { select: { id: true, label: true } },
+              orderItems: ORDER_ITEM_INCLUDE,
+            },
+          });
+
+          if (requiresLocality) {
+            const consumed = await tx.localityApproval.updateMany({
+              where: {
+                approvalToken: localityApprovalToken,
+                storeId: store.id,
+                tableId: updatedOrder.tableId,
+                purpose: LOCALITY_PURPOSE,
+                sessionId: localitySessionId,
+                consumedAt: null,
+                expiresAt: { gt: now },
+              },
+              data: {
+                consumedAt: now,
+                consumedOrderId: updatedOrder.id,
+              },
+            });
+
+            if (consumed.count !== 1) {
+              throw new Error("LOCALITY_APPROVAL_INVALID");
+            }
+          }
+
+          return updatedOrder;
+        });
+
+        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+        const topicBase = store.slug;
+        const payloadPlaced = {
+          orderId: updated.id,
+          tableId: updated.tableId,
+          tableLabel: updated.table?.label ?? "",
+          ticketNumber: (updated as any).ticketNumber ?? undefined,
+          createdAt: updated.createdAt,
+          totalCents: updated.totalCents,
+          note: updated.note,
+          items: updated.orderItems.map((oi) => ({
+            id: oi.id,
+            itemId: oi.itemId,
+            title: oi.titleSnapshot,
+            quantity: oi.quantity,
+            unitPriceCents: oi.unitPriceCents,
+            status: oi.status,
+            acceptedAt: oi.acceptedAt,
+            servedAt: oi.servedAt,
+            modifiers: oi.orderItemOptions,
+            categoryId: (oi as any)?.item?.categoryId ?? undefined,
+            categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+            printerTopic: normalizePrinterTopic(
+              (oi as any)?.item?.printerTopic,
+              (oi as any)?.item?.category?.printerTopic
+            ),
+          })),
+        };
+        publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
+          roles: ["cook"],
+        });
+        publishPrinterTopicsForOrder(
+          topicBase,
+          updated as OrderWithRelations,
+          OrderStatus.PLACED,
+          { roles: ["cook"] }
+        );
+        notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
+          skipMqtt: true,
+        });
+
+        for (const order of supersededOrders) {
+          const payloadCanceled = {
+            orderId: order.id,
+            tableId: order.tableId,
+            tableLabel: order.table?.label ?? "",
+            ticketNumber: (order as any).ticketNumber ?? undefined,
+            status: OrderStatus.CANCELLED,
+            ts: now.toISOString(),
+            items: order.orderItems.map((oi) => ({
+              title: oi.titleSnapshot,
+              quantity: oi.quantity,
+              unitPriceCents: oi.unitPriceCents,
+              modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.printerTopic
+              ),
+            })),
+          };
+          publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
+            roles: ["cook"],
+          });
+          notifyWaiters(
+            `${topicBase}/orders/canceled`,
+            payloadCanceled,
+            waiterIds,
+            { skipMqtt: true }
+          );
+          publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
+            anonymousOnly: true,
+            skipMqtt: true,
+          });
+          publishMessage(`${topicBase}/orders/cancelled`, payloadCanceled, {
+            anonymousOnly: true,
+            skipMqtt: true,
+          });
+        }
+
+        return reply.send({
+          order: serializeOrder(updated),
+          supersededOrderIds,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
+          return reply
+            .status(403)
+            .send({ error: "LOCALITY_APPROVAL_INVALID" });
+        }
+        console.error("Edit pending table orders error:", {
+          error,
+          storeSlug: resolveStoreSlug(request),
+          tableId: (request.params as any)?.id,
+          itemCount: Array.isArray((request.body as any)?.items)
+            ? (request.body as any).items.length
+            : 0,
+        });
+        return reply
+          .status(500)
+          .send({ error: "Failed to edit pending orders" });
       }
     }
   );
