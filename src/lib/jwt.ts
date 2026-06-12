@@ -8,7 +8,7 @@ const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ||
 export interface JWTPayload {
   userId: string;
   email: string;
-  role: "waiter" | "manager" | "cook" | "architect";
+  role: "waiter" | "manager" | "cook" | "architect" | "hybrid";
   storeId: string;
   storeSlug: string;
   cookTypeId?: string | null;

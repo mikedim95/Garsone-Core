@@ -736,7 +736,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               status?: ShiftStatus;
             }
           | undefined;
-        if (actor?.role === "waiter" && actor?.id) {
+        if ((actor?.role === "waiter" || actor?.role === "hybrid") && actor?.id) {
           const now = new Date();
           const activeShift = await db.waiterShift.findFirst({
             where: {
@@ -833,7 +833,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           },
         });
         let filteredOrders = ordersData;
-        if (actor?.role === "cook") {
+        if (actor?.role === "cook" || actor?.role === "hybrid") {
           const rawPrinterTopic =
             typeof (actor as any)?.cookTypePrinterTopic === "string"
               ? String((actor as any).cookTypePrinterTopic)
@@ -986,7 +986,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const actor = (request as any).user;
         const actorRole = actor?.role as string | undefined;
         const cookPrinterTopic =
-          actorRole === "cook"
+          actorRole === "cook" || actorRole === "hybrid"
             ? await resolveCookPrinterTopic(actor, store)
             : null;
 
@@ -1007,11 +1007,11 @@ export async function orderRoutes(fastify: FastifyInstance) {
           if (!role) return false;
           const isManager = role === "manager" || role === "architect";
           if (next === OrderStatus.SERVED || next === OrderStatus.PAID)
-            return role === "waiter" || isManager;
+            return role === "waiter" || role === "hybrid" || isManager;
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
-            return role === "cook" || isManager;
+            return role === "cook" || role === "hybrid" || isManager;
           if (next === OrderStatus.CANCELLED)
-            return isManager || role === "cook";
+            return isManager || role === "cook" || role === "hybrid";
           return isManager;
         };
 
@@ -2230,7 +2230,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const store = await ensureStore(storeSlug);
         const actor = (request as any).user;
         const cookPrinterTopic =
-          actor?.role === "cook"
+          actor?.role === "cook" || actor?.role === "hybrid"
             ? await resolveCookPrinterTopic(actor, store)
             : null;
         const order = await db.order.findFirst({

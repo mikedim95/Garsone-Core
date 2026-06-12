@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
+import { serializeRole } from "../lib/roles.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
 const architectOnly = [authMiddleware, requireRole(["architect"])];
@@ -30,7 +31,7 @@ const createStoreSchema = z.object({
   cookEmail: z.string().email().optional(),
 });
 
-const storeUserRoleSchema = z.enum(["MANAGER", "WAITER", "COOK"]);
+const storeUserRoleSchema = z.enum(["MANAGER", "WAITER", "COOK", "HYBRID"]);
 
 const storeUserCreateSchema = z.object({
   email: z.string().email(),
@@ -74,12 +75,7 @@ function serializeStoreUser(profile: any) {
     storeId: profile.storeId,
     email: profile.email,
     displayName: profile.displayName ?? "",
-    role:
-      profile.role === Role.MANAGER
-        ? "manager"
-        : profile.role === Role.COOK
-        ? "cook"
-        : "waiter",
+    role: serializeRole(profile.role),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };
@@ -395,7 +391,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       const users = await db.profile.findMany({
         where: {
           storeId,
-          role: { in: [Role.MANAGER, Role.WAITER, Role.COOK] },
+          role: { in: [Role.MANAGER, Role.WAITER, Role.COOK, Role.HYBRID] },
         },
         orderBy: [{ role: "asc" }, { displayName: "asc" }],
       });
@@ -451,8 +447,8 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         if (body.password) data.passwordHash = await bcrypt.hash(body.password, 10);
         if (body.role) {
           data.role = body.role as Role;
-          if (body.role !== "WAITER") data.waiterTypeId = null;
-          if (body.role !== "COOK") data.cookTypeId = null;
+          if (body.role !== "WAITER" && body.role !== "HYBRID") data.waiterTypeId = null;
+          if (body.role !== "COOK" && body.role !== "HYBRID") data.cookTypeId = null;
         }
         const user = await db.profile.update({ where: { id: userId }, data });
         return reply.send({ user: serializeStoreUser(user) });

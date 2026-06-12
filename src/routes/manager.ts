@@ -3,6 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { kitchenServiceRoles, staffServiceRoles } from "../lib/roles.js";
 import { ensureStore } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { invalidateMenuCache } from "./menu.js";
@@ -932,7 +933,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const store = await ensureStore(request);
       const waiters = await db.profile.findMany({
-        where: { storeId: store.id, role: "WAITER" },
+        where: { storeId: store.id, role: { in: staffServiceRoles } },
         orderBy: { displayName: "asc" },
         include: { waiterType: true },
       });
@@ -941,6 +942,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           id: w.id,
           email: w.email,
           displayName: w.displayName,
+          role: w.role,
           waiterTypeId: w.waiterTypeId,
           waiterType: w.waiterType
             ? {
@@ -960,6 +962,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     password: z.string().min(6),
     displayName: z.string().min(1),
     waiterTypeId: z.string().uuid().optional(),
+    hybrid: z.boolean().optional(),
   });
   fastify.post(
     "/manager/waiters",
@@ -982,7 +985,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             storeId: store.id,
             email: body.email.toLowerCase(),
             passwordHash,
-            role: "WAITER",
+            role: body.hybrid ? "HYBRID" : "WAITER",
             displayName: body.displayName,
             waiterTypeId: waiterType?.id ?? null,
           },
@@ -993,6 +996,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             id: waiter.id,
             email: waiter.email,
             displayName: waiter.displayName,
+            role: waiter.role,
             waiterTypeId: waiter.waiterTypeId,
             waiterType: waiter.waiterType
               ? {
@@ -1058,6 +1062,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             id: updated.id,
             email: updated.email,
             displayName: updated.displayName,
+            role: updated.role,
             waiterTypeId: updated.waiterTypeId,
             waiterType: updated.waiterType
               ? {
@@ -1087,7 +1092,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const { id } = request.params as { id: string };
         const store = await ensureStore(request);
         const waiter = await db.profile.findFirst({
-          where: { id, storeId: store.id, role: "WAITER" },
+          where: { id, storeId: store.id, role: { in: staffServiceRoles } },
           select: { id: true },
         });
         if (!waiter) {
@@ -1122,7 +1127,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const store = await ensureStore(request);
       const cooks = await db.profile.findMany({
-        where: { storeId: store.id, role: "COOK" },
+        where: { storeId: store.id, role: { in: kitchenServiceRoles } },
         orderBy: { displayName: "asc" },
         include: { cookType: true },
       });
@@ -1131,6 +1136,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           id: c.id,
           email: c.email,
           displayName: c.displayName,
+          role: c.role,
           cookTypeId: c.cookTypeId,
           cookType: c.cookType
             ? {
@@ -1183,6 +1189,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             id: cook.id,
             email: cook.email,
             displayName: cook.displayName,
+            role: cook.role,
             cookTypeId: cook.cookTypeId,
             cookType: cook.cookType
               ? {
@@ -1238,6 +1245,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
             data.cookTypeId = cookType.id;
           }
         }
+        const cook = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
+          select: { id: true },
+        });
+        if (!cook) {
+          return reply.status(404).send({ error: "Cook not found" });
+        }
         const updated = await db.profile.update({
           where: { id },
           data,
@@ -1248,6 +1262,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             id: updated.id,
             email: updated.email,
             displayName: updated.displayName,
+            role: updated.role,
             cookTypeId: updated.cookTypeId,
             cookType: updated.cookType
               ? {
@@ -1275,6 +1290,14 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
+        const store = await ensureStore(request);
+        const cook = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
+          select: { id: true },
+        });
+        if (!cook) {
+          return reply.status(404).send({ error: "Cook not found" });
+        }
         await db.profile.delete({ where: { id } });
         return reply.send({ success: true });
       } catch {

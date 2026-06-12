@@ -3,6 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { signToken } from "../lib/jwt.js";
+import { serializeRole } from "../lib/roles.js";
 import { ensureStore, getRequestedStoreSlug, getOrderingMode } from "../lib/store.js";
 import { authMiddleware } from "../middleware/auth.js";
 
@@ -68,14 +69,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
 
-      const role =
-        user.role === "MANAGER"
-          ? "manager"
-          : user.role === "COOK"
-          ? "cook"
-          : user.role === "ARCHITECT"
-          ? "architect"
-          : "waiter";
+      const role = serializeRole(user.role);
 
       const token = signToken({
         userId: user.id,
@@ -195,14 +189,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "USER_NOT_FOUND_FOR_STORE" });
       }
 
-      const role =
-        user.role === "MANAGER"
-          ? "manager"
-          : user.role === "COOK"
-          ? "cook"
-          : user.role === "ARCHITECT"
-          ? "architect"
-          : "waiter";
+      const role = serializeRole(user.role);
 
       const token = signToken({
         userId: user.id,

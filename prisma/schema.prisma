@@ -528,6 +528,7 @@ enum ShiftStatus {
 enum Role {
   GUEST
   WAITER
+  HYBRID
   MANAGER
   COOK
   ARCHITECT

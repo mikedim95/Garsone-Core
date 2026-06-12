@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { verifyToken } from '../lib/jwt.js';
+import { roleMatches } from '../lib/roles.js';
 
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
   try {
@@ -72,7 +73,7 @@ export function requireRole(roles: string[]) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const user = (request as any).user;
 
-    if (!user || !roles.includes(user.role)) {
+    if (!user || !roleMatches(user.role, roles)) {
       return reply.status(403).send({ error: 'Insufficient permissions' });
     }
   };

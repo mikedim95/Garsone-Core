@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { ensureStore } from "../lib/store.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { publishMessage } from "../lib/mqtt.js";
+import { staffServiceRoles } from "../lib/roles.js";
 
 const assignmentSchema = z.object({
   waiterId: z.string().uuid(),
@@ -66,7 +67,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
             orderBy: { createdAt: "asc" },
           }),
           db.profile.findMany({
-            where: { storeId: store.id, role: Role.WAITER },
+            where: { storeId: store.id, role: { in: staffServiceRoles } },
             orderBy: { displayName: "asc" },
             include: { waiterType: true },
           }),
@@ -119,7 +120,11 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
 
         const [waiter, table] = await Promise.all([
           db.profile.findFirst({
-            where: { id: body.waiterId, storeId: store.id, role: Role.WAITER },
+            where: {
+              id: body.waiterId,
+              storeId: store.id,
+              role: { in: staffServiceRoles },
+            },
           }),
           db.table.findFirst({
             where: { id: body.tableId, storeId: store.id },
