@@ -79,7 +79,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         storeSlug: store.slug,
         cookTypeId: user.cookTypeId ?? null,
         waiterTypeId: user.waiterTypeId ?? null,
-        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        printerTopic: user.printerTopic ?? null,
+        cookTypePrinterTopic: user.printerTopic ?? user.cookType?.printerTopic ?? null,
         waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
@@ -94,6 +95,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           storeSlug: store.slug,
           cookTypeId: user.cookTypeId ?? null,
           waiterTypeId: user.waiterTypeId ?? null,
+          printerTopic: user.printerTopic ?? null,
           cookType: user.cookType
             ? {
                 id: user.cookType.id,
@@ -199,7 +201,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         storeSlug: store.slug,
         cookTypeId: user.cookTypeId ?? null,
         waiterTypeId: user.waiterTypeId ?? null,
-        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        printerTopic: user.printerTopic ?? null,
+        cookTypePrinterTopic: user.printerTopic ?? user.cookType?.printerTopic ?? null,
         waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
@@ -217,6 +220,7 @@ export async function authRoutes(fastify: FastifyInstance) {
             storeSlug: store.slug,
             cookTypeId: user.cookTypeId ?? null,
             waiterTypeId: user.waiterTypeId ?? null,
+            printerTopic: user.printerTopic ?? null,
             cookType: user.cookType
               ? {
                   id: user.cookType.id,

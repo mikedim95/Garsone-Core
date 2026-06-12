@@ -663,16 +663,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   );
 
-  const normalizeSlug = (value: string) => {
-    const raw = (value || "").trim().toLowerCase();
-    if (!raw) return "";
-    return raw
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 100);
-  };
-
   const normalizePrinterTopic = (value?: string | null) => {
     const raw = (value || "").trim().toLowerCase();
     if (!raw) return null;
@@ -710,222 +700,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
     return normalized;
   };
 
-  // Cook types CRUD
-  fastify.get(
-    "/manager/cook-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      const store = await ensureStore(request);
-      const types = await db.cookType.findMany({
-        where: { storeId: store.id },
-        orderBy: { title: "asc" },
-      });
-      return reply.send({ types });
-    }
-  );
-
-  const cookTypeCreate = z.object({
-    title: z.string().min(1),
-    printerTopic: z.string().trim().min(1).max(255).optional(),
-  });
-  fastify.post(
-    "/manager/cook-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const body = cookTypeCreate.parse(request.body);
-        const store = await ensureStore(request);
-        const slugBase = normalizeSlug(body.title);
-        const slug =
-          slugBase || `cook-${Math.random().toString(16).slice(2, 6)}`;
-        let printerTopic: string | null = null;
-        try {
-          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
-        } catch (error: any) {
-          return reply
-            .status(400)
-            .send({ error: error?.message || "Invalid printer topic" });
-        }
-        const created = await db.cookType.create({
-          data: { storeId: store.id, slug, title: body.title, printerTopic },
-        });
-        return reply.status(201).send({ type: created });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply.status(500).send({ error: "Failed to create cook type" });
-      }
-    }
-  );
-
-  const cookTypeUpdate = z.object({
-    title: z.string().min(1).optional(),
-    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
-  });
-  fastify.patch(
-    "/manager/cook-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        const body = cookTypeUpdate.parse(request.body);
-        const store = await ensureStore(request);
-        const data: any = {};
-        if (body.title) data.title = body.title;
-        if (body.printerTopic !== undefined) {
-          if (body.printerTopic === null) {
-            data.printerTopic = null;
-          } else {
-            try {
-              data.printerTopic = ensurePrinterTopicAllowed(
-                store,
-                body.printerTopic
-              );
-            } catch (error: any) {
-              return reply
-                .status(400)
-                .send({ error: error?.message || "Invalid printer topic" });
-            }
-          }
-        }
-        const updated = await db.cookType.update({ where: { id }, data });
-        return reply.send({ type: updated });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply.status(500).send({ error: "Failed to update cook type" });
-      }
-    }
-  );
-
-  fastify.delete(
-    "/manager/cook-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        await db.cookType.delete({ where: { id } });
-        return reply.send({ success: true });
-      } catch {
-        return reply.status(500).send({ error: "Failed to delete cook type" });
-      }
-    }
-  );
-
-  // Waiter types CRUD
-  fastify.get(
-    "/manager/waiter-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      const store = await ensureStore(request);
-      const types = await db.waiterType.findMany({
-        where: { storeId: store.id },
-        orderBy: { title: "asc" },
-      });
-      return reply.send({ types });
-    }
-  );
-
-  const waiterTypeCreate = z.object({
-    title: z.string().min(1),
-    printerTopic: z.string().trim().min(1).max(255).optional(),
-  });
-  fastify.post(
-    "/manager/waiter-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const body = waiterTypeCreate.parse(request.body);
-        const store = await ensureStore(request);
-        const slugBase = normalizeSlug(body.title);
-        const slug =
-          slugBase || `waiter-${Math.random().toString(16).slice(2, 6)}`;
-        let printerTopic: string | null = null;
-        try {
-          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
-        } catch (error: any) {
-          return reply
-            .status(400)
-            .send({ error: error?.message || "Invalid printer topic" });
-        }
-        const created = await db.waiterType.create({
-          data: { storeId: store.id, slug, title: body.title, printerTopic },
-        });
-        return reply.status(201).send({ type: created });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply
-          .status(500)
-          .send({ error: "Failed to create waiter type" });
-      }
-    }
-  );
-
-  const waiterTypeUpdate = z.object({
-    title: z.string().min(1).optional(),
-    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
-  });
-  fastify.patch(
-    "/manager/waiter-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        const body = waiterTypeUpdate.parse(request.body);
-        const store = await ensureStore(request);
-        const data: any = {};
-        if (body.title) data.title = body.title;
-        if (body.printerTopic !== undefined) {
-          if (body.printerTopic === null) {
-            data.printerTopic = null;
-          } else {
-            try {
-              data.printerTopic = ensurePrinterTopicAllowed(
-                store,
-                body.printerTopic
-              );
-            } catch (error: any) {
-              return reply
-                .status(400)
-                .send({ error: error?.message || "Invalid printer topic" });
-            }
-          }
-        }
-        const updated = await db.waiterType.update({ where: { id }, data });
-        return reply.send({ type: updated });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply
-          .status(500)
-          .send({ error: "Failed to update waiter type" });
-      }
-    }
-  );
-
-  fastify.delete(
-    "/manager/waiter-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        await db.waiterType.delete({ where: { id } });
-        return reply.send({ success: true });
-      } catch {
-        return reply.status(500).send({ error: "Failed to delete waiter type" });
-      }
-    }
-  );
-
   // Waiters CRUD
   fastify.get(
     "/manager/waiters",
@@ -935,7 +709,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
       const waiters = await db.profile.findMany({
         where: { storeId: store.id, role: { in: staffServiceRoles } },
         orderBy: { displayName: "asc" },
-        include: { waiterType: true },
       });
       return reply.send({
         waiters: waiters.map((w) => ({
@@ -943,15 +716,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
           email: w.email,
           displayName: w.displayName,
           role: w.role,
-          waiterTypeId: w.waiterTypeId,
-          waiterType: w.waiterType
-            ? {
-                id: w.waiterType.id,
-                slug: w.waiterType.slug,
-                title: w.waiterType.title,
-                printerTopic: w.waiterType.printerTopic,
-              }
-            : null,
         })),
       });
     }
@@ -961,8 +725,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email(),
     password: z.string().min(6),
     displayName: z.string().min(1),
-    waiterTypeId: z.string().uuid().optional(),
     hybrid: z.boolean().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.post(
     "/manager/waiters",
@@ -971,13 +735,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const body = waiterCreateSchema.parse(request.body);
         const store = await ensureStore(request);
-        const waiterType = body.waiterTypeId
-          ? await db.waiterType.findFirst({
-              where: { id: body.waiterTypeId, storeId: store.id },
-            })
-          : null;
-        if (body.waiterTypeId && !waiterType) {
-          return reply.status(404).send({ error: "Waiter type not found" });
+        let printerTopic: string | null = null;
+        if (body.hybrid && body.printerTopic) {
+          try {
+            printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+          } catch (error: any) {
+            return reply.status(400).send({ error: error.message });
+          }
         }
         const passwordHash = await bcrypt.hash(body.password, 10);
         const waiter = await db.profile.create({
@@ -987,9 +751,10 @@ export async function managerRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: body.hybrid ? "HYBRID" : "WAITER",
             displayName: body.displayName,
-            waiterTypeId: waiterType?.id ?? null,
+            printerTopic,
+            waiterTypeId: null,
+            cookTypeId: null,
           },
-          include: { waiterType: true },
         });
         return reply.status(201).send({
           waiter: {
@@ -997,15 +762,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             email: waiter.email,
             displayName: waiter.displayName,
             role: waiter.role,
-            waiterTypeId: waiter.waiterTypeId,
-            waiterType: waiter.waiterType
-              ? {
-                  id: waiter.waiterType.id,
-                  slug: waiter.waiterType.slug,
-                  title: waiter.waiterType.title,
-                  printerTopic: waiter.waiterType.printerTopic,
-                }
-              : null,
+            printerTopic: waiter.printerTopic,
           },
         });
       } catch (e) {
@@ -1022,7 +779,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email().optional(),
     password: z.string().min(6).optional(),
     displayName: z.string().min(1).optional(),
-    waiterTypeId: z.string().uuid().nullable().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.patch(
     "/manager/waiters/:id",
@@ -1037,25 +794,23 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (body.displayName) data.displayName = body.displayName;
         if (body.password)
           data.passwordHash = await bcrypt.hash(body.password, 10);
-        if (body.waiterTypeId !== undefined) {
-          if (body.waiterTypeId === null) {
-            data.waiterTypeId = null;
+        if (body.printerTopic !== undefined) {
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
           } else {
-            const waiterType = await db.waiterType.findFirst({
-              where: { id: body.waiterTypeId, storeId: store.id },
-            });
-            if (!waiterType) {
-              return reply
-                .status(404)
-                .send({ error: "Waiter type not found" });
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply.status(400).send({ error: error.message });
             }
-            data.waiterTypeId = waiterType.id;
           }
         }
         const updated = await db.profile.update({
           where: { id },
           data,
-          include: { waiterType: true },
         });
         return reply.send({
           waiter: {
@@ -1063,15 +818,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             email: updated.email,
             displayName: updated.displayName,
             role: updated.role,
-            waiterTypeId: updated.waiterTypeId,
-            waiterType: updated.waiterType
-              ? {
-                  id: updated.waiterType.id,
-                  slug: updated.waiterType.slug,
-                  title: updated.waiterType.title,
-                  printerTopic: updated.waiterType.printerTopic,
-                }
-              : null,
+            printerTopic: updated.printerTopic,
           },
         });
       } catch (e) {
@@ -1139,7 +886,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
       const cooks = await db.profile.findMany({
         where: { storeId: store.id, role: { in: kitchenServiceRoles } },
         orderBy: { displayName: "asc" },
-        include: { cookType: true },
       });
       return reply.send({
         cooks: cooks.map((c) => ({
@@ -1147,15 +893,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           email: c.email,
           displayName: c.displayName,
           role: c.role,
-          cookTypeId: c.cookTypeId,
-          cookType: c.cookType
-            ? {
-                id: c.cookType.id,
-                slug: c.cookType.slug,
-                title: c.cookType.title,
-                printerTopic: c.cookType.printerTopic,
-              }
-            : null,
+          printerTopic: c.printerTopic,
         })),
       });
     }
@@ -1165,7 +903,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email(),
     password: z.string().min(6),
     displayName: z.string().min(1),
-    cookTypeId: z.string().uuid().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.post(
     "/manager/cooks",
@@ -1174,13 +912,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const body = cookCreateSchema.parse(request.body);
         const store = await ensureStore(request);
-        const cookType = body.cookTypeId
-          ? await db.cookType.findFirst({
-              where: { id: body.cookTypeId, storeId: store.id },
-            })
-          : null;
-        if (body.cookTypeId && !cookType) {
-          return reply.status(404).send({ error: "Cook type not found" });
+        let printerTopic: string | null = null;
+        if (body.printerTopic) {
+          try {
+            printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+          } catch (error: any) {
+            return reply.status(400).send({ error: error.message });
+          }
         }
         const passwordHash = await bcrypt.hash(body.password, 10);
         const cook = await db.profile.create({
@@ -1190,9 +928,10 @@ export async function managerRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: "COOK",
             displayName: body.displayName,
-            cookTypeId: cookType?.id ?? null,
+            printerTopic,
+            cookTypeId: null,
+            waiterTypeId: null,
           },
-          include: { cookType: true },
         });
         return reply.status(201).send({
           cook: {
@@ -1200,15 +939,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             email: cook.email,
             displayName: cook.displayName,
             role: cook.role,
-            cookTypeId: cook.cookTypeId,
-            cookType: cook.cookType
-              ? {
-                  id: cook.cookType.id,
-                  slug: cook.cookType.slug,
-                  title: cook.cookType.title,
-                  printerTopic: cook.cookType.printerTopic,
-                }
-              : null,
+            printerTopic: cook.printerTopic,
           },
         });
       } catch (e) {
@@ -1225,7 +956,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email().optional(),
     password: z.string().min(6).optional(),
     displayName: z.string().min(1).optional(),
-    cookTypeId: z.string().uuid().nullable().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.patch(
     "/manager/cooks/:id",
@@ -1240,19 +971,18 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (body.displayName) data.displayName = body.displayName;
         if (body.password)
           data.passwordHash = await bcrypt.hash(body.password, 10);
-        if (body.cookTypeId !== undefined) {
-          if (body.cookTypeId === null) {
-            data.cookTypeId = null;
+        if (body.printerTopic !== undefined) {
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
           } else {
-            const cookType = await db.cookType.findFirst({
-              where: { id: body.cookTypeId, storeId: store.id },
-            });
-            if (!cookType) {
-              return reply
-                .status(404)
-                .send({ error: "Cook type not found" });
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply.status(400).send({ error: error.message });
             }
-            data.cookTypeId = cookType.id;
           }
         }
         const cook = await db.profile.findFirst({
@@ -1265,7 +995,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const updated = await db.profile.update({
           where: { id },
           data,
-          include: { cookType: true },
         });
         return reply.send({
           cook: {
@@ -1273,15 +1002,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
             email: updated.email,
             displayName: updated.displayName,
             role: updated.role,
-            cookTypeId: updated.cookTypeId,
-            cookType: updated.cookType
-              ? {
-                  id: updated.cookType.id,
-                  slug: updated.cookType.slug,
-                  title: updated.cookType.title,
-                  printerTopic: updated.cookType.printerTopic,
-                }
-              : null,
+            printerTopic: updated.printerTopic,
           },
         });
       } catch (e) {
@@ -1311,7 +1032,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (cook.role === "HYBRID") {
           await db.profile.update({
             where: { id },
-            data: { role: "WAITER", cookTypeId: null },
+            data: { role: "WAITER", cookTypeId: null, printerTopic: null },
           });
         } else {
           await db.profile.delete({ where: { id } });

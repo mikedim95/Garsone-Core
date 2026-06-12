@@ -299,22 +299,6 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             locale: body.locale,
           },
         });
-        const cookType = await tx.cookType.create({
-          data: {
-            storeId: createdStore.id,
-            slug: "kitchen",
-            title: "Kitchen",
-            printerTopic: body.printerTopic,
-          },
-        });
-        const waiterType = await tx.waiterType.create({
-          data: {
-            storeId: createdStore.id,
-            slug: "floor",
-            title: "Floor",
-            printerTopic: body.printerTopic,
-          },
-        });
         const manager = await tx.profile.create({
           data: {
             storeId: createdStore.id,
@@ -332,7 +316,6 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: Role.WAITER,
             displayName: `${body.name} Waiter`,
-            waiterTypeId: waiterType.id,
             isVerified: true,
           },
         });
@@ -343,7 +326,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: Role.COOK,
             displayName: `${body.name} Cook`,
-            cookTypeId: cookType.id,
+            printerTopic: body.printerTopic,
             isVerified: true,
           },
         });
@@ -448,7 +431,10 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         if (body.role) {
           data.role = body.role as Role;
           if (body.role !== "WAITER" && body.role !== "HYBRID") data.waiterTypeId = null;
-          if (body.role !== "COOK" && body.role !== "HYBRID") data.cookTypeId = null;
+          if (body.role !== "COOK" && body.role !== "HYBRID") {
+            data.cookTypeId = null;
+            data.printerTopic = null;
+          }
         }
         const user = await db.profile.update({ where: { id: userId }, data });
         return reply.send({ user: serializeStoreUser(user) });

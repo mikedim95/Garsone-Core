@@ -172,7 +172,12 @@ const resolveCookPrinterTopic = async (
   actor: any,
   store: { id: string }
 ) => {
-  if (!actor || actor.role !== "cook") return null;
+  if (!actor || (actor.role !== "cook" && actor.role !== "hybrid")) return null;
+  const direct =
+    typeof actor?.printerTopic === "string" ? String(actor.printerTopic) : "";
+  if (direct.trim().length > 0) {
+    return normalizePrinterTopic(direct);
+  }
   const raw =
     typeof actor?.cookTypePrinterTopic === "string"
       ? String(actor.cookTypePrinterTopic)
@@ -835,7 +840,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
         let filteredOrders = ordersData;
         if (actor?.role === "cook" || actor?.role === "hybrid") {
           const rawPrinterTopic =
-            typeof (actor as any)?.cookTypePrinterTopic === "string"
+            typeof (actor as any)?.printerTopic === "string"
+              ? String((actor as any).printerTopic)
+              : typeof (actor as any)?.cookTypePrinterTopic === "string"
               ? String((actor as any).cookTypePrinterTopic)
               : "";
           let allowedPrinterTopic = rawPrinterTopic

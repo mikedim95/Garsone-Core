@@ -496,6 +496,7 @@ model Profile {
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
   ratingAvg    Decimal?      @db.Decimal(4, 2)
   isVerified   Boolean       @default(false)
+  printerTopic String?       @db.VarChar(255)
   cookTypeId   String?       @db.Uuid
   waiterTypeId String?       @db.Uuid
   auditLogs    AuditLog[]

@@ -13,6 +13,7 @@ export interface JWTPayload {
   storeSlug: string;
   cookTypeId?: string | null;
   waiterTypeId?: string | null;
+  printerTopic?: string | null;
   cookTypePrinterTopic?: string | null;
   waiterTypePrinterTopic?: string | null;
 }
