@@ -1093,13 +1093,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const store = await ensureStore(request);
         const waiter = await db.profile.findFirst({
           where: { id, storeId: store.id, role: { in: staffServiceRoles } },
-          select: { id: true },
+          select: { id: true, role: true },
         });
         if (!waiter) {
           return reply.status(404).send({ error: "Waiter not found" });
         }
 
-        await db.$transaction([
+        const cleanup = [
           db.waiterTable.deleteMany({
             where: { storeId: store.id, waiterId: id },
           }),
@@ -1110,8 +1110,18 @@ export async function managerRoutes(fastify: FastifyInstance) {
             where: { storeId: store.id, actorProfileId: id },
             data: { actorProfileId: null },
           }),
-          db.profile.delete({ where: { id } }),
-        ]);
+        ];
+        await db.$transaction(
+          waiter.role === "HYBRID"
+            ? [
+                ...cleanup,
+                db.profile.update({
+                  where: { id },
+                  data: { role: "COOK", waiterTypeId: null },
+                }),
+              ]
+            : [...cleanup, db.profile.delete({ where: { id } })]
+        );
         return reply.send({ success: true });
       } catch (e) {
         request.log.error(e, "Failed to delete waiter");
@@ -1293,12 +1303,19 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const store = await ensureStore(request);
         const cook = await db.profile.findFirst({
           where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
-          select: { id: true },
+          select: { id: true, role: true },
         });
         if (!cook) {
           return reply.status(404).send({ error: "Cook not found" });
         }
-        await db.profile.delete({ where: { id } });
+        if (cook.role === "HYBRID") {
+          await db.profile.update({
+            where: { id },
+            data: { role: "WAITER", cookTypeId: null },
+          });
+        } else {
+          await db.profile.delete({ where: { id } });
+        }
         return reply.send({ success: true });
       } catch {
         return reply.status(500).send({ error: "Failed to delete cook" });
