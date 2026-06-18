@@ -1356,9 +1356,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const allowByRole = () => {
           if (!actorRole) return false;
           if (body.status === OrderItemStatus.ACCEPTED)
-            return actorRole === "cook" || isManager;
+            return actorRole === "cook" || actorRole === "hybrid" || isManager;
           if (body.status === OrderItemStatus.SERVED)
-            return actorRole === "waiter" || actorRole === "cook" || isManager;
+            return (
+              actorRole === "waiter" ||
+              actorRole === "cook" ||
+              actorRole === "hybrid" ||
+              isManager
+            );
           return isManager;
         };
 
