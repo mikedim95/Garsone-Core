@@ -770,6 +770,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        request.log.error(e, "Failed to create waiter");
         return reply.status(500).send({ error: "Failed to create waiter" });
       }
     }
@@ -947,6 +948,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        request.log.error(e, "Failed to create cook");
         return reply.status(500).send({ error: "Failed to create cook" });
       }
     }

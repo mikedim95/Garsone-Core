@@ -18,6 +18,7 @@ import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
 import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
 import { ensureProfilePrinterTopic } from "./db/ensureProfilePrinterTopic.js";
+import { ensureStaffSchema } from "./db/ensureStaffSchema.js";
 
 // Load local .env only for non-production environments.
 // In online deployments, rely solely on platform-provided env vars.
@@ -48,6 +49,7 @@ fastify.get("/health", async (request, reply) => {
 
 setupRealtimeGateway(fastify);
 getMqttClient();
+await ensureStaffSchema();
 await ensureProfilePrinterTopic();
 await ensureOrderPaymentColumns();
 
