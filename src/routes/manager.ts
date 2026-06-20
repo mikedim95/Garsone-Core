@@ -680,14 +680,26 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Table not found" });
         }
 
-        await db.waiterTable.deleteMany({
-          where: { storeId: store.id, tableId: id },
-        });
+        if (!table.isActive) {
+          await db.$transaction([
+            db.qRTile.updateMany({
+              where: { storeId: store.id, tableId: id },
+              data: { tableId: null },
+            }),
+            db.table.delete({ where: { id } }),
+          ]);
+          return reply.send({ deleted: true, id });
+        }
 
-        await db.table.update({
-          where: { id },
-          data: { isActive: false },
-        });
+        await db.$transaction([
+          db.waiterTable.deleteMany({
+            where: { storeId: store.id, tableId: id },
+          }),
+          db.table.update({
+            where: { id },
+            data: { isActive: false },
+          }),
+        ]);
 
         const withCounts = await getTableWithCounts(store.id, id);
         if (!withCounts) {
