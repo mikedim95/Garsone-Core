@@ -4,7 +4,7 @@ import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { kitchenServiceRoles, staffServiceRoles } from "../lib/roles.js";
-import { ensureStore } from "../lib/store.js";
+import { ensureStore, invalidateStoreCache } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { invalidateMenuCache } from "./menu.js";
 import { createHmac, createHash } from "node:crypto";
@@ -146,6 +146,44 @@ const deriveR2PublicBase = (imageUrl?: string | null, storeSlug?: string | null)
 
 export async function managerRoutes(fastify: FastifyInstance) {
   const managerOnly = [authMiddleware, requireRole(["manager", "architect"])];
+
+  fastify.patch(
+    "/manager/store/print-on-arrival",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = z.object({ enabled: z.boolean() }).parse(request.body);
+        const store = await ensureStore(request);
+        const settingsJson = {
+          ...(store.settingsJson && typeof store.settingsJson === "object"
+            ? store.settingsJson
+            : {}),
+          printOnArrival: body.enabled,
+        };
+        const updated = await db.store.update({
+          where: { id: store.id },
+          data: { settingsJson },
+          select: { id: true, slug: true, name: true, settingsJson: true },
+        });
+        invalidateStoreCache(store.slug);
+        return reply.send({
+          store: {
+            id: updated.id,
+            slug: updated.slug,
+            name: updated.name,
+            printOnArrival: body.enabled,
+            settings: updated.settingsJson,
+          },
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Failed to update print-on-arrival setting", error);
+        return reply.status(500).send({ error: "Failed to update printer setting" });
+      }
+    }
+  );
 
   fastify.get("/uploads/*", async (request, reply) => {
     try {

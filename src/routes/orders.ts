@@ -8,6 +8,7 @@ import { publishMessage, PublishOptions } from "../lib/mqtt.js";
 import {
   ensureStore,
   STORE_SLUG,
+  getPrintOnArrival,
   getRequestedStoreSlug,
 } from "../lib/store.js";
 import {
@@ -658,12 +659,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
           roles: ["cook"],
         });
-        publishPrinterTopicsForOrder(
-          topicSlug,
-          createdOrder as OrderWithRelations,
-          OrderStatus.PLACED,
-          { roles: ["cook"] }
-        );
+        if (getPrintOnArrival(store)) {
+          publishPrinterTopicsForOrder(
+            topicSlug,
+            createdOrder as OrderWithRelations,
+            OrderStatus.PLACED,
+            { roles: ["cook"] }
+          );
+        }
         notifyWaiters(`${topicSlug}/orders/placed`, placedPayload, waiterIds, {
           skipMqtt: true,
         });
@@ -1155,13 +1158,15 @@ export async function orderRoutes(fastify: FastifyInstance) {
               cookPublishOptions
             );
           }
-          publishPrinterTopicsForOrder(
-            topicBase,
-            updatedOrder as OrderWithRelations,
-            OrderStatus.PREPARING,
-            cookPublishOptions,
-            cookPrinterTopic
-          );
+          if (!getPrintOnArrival(store)) {
+            publishPrinterTopicsForOrder(
+              topicBase,
+              updatedOrder as OrderWithRelations,
+              OrderStatus.PREPARING,
+              cookPublishOptions,
+              cookPrinterTopic
+            );
+          }
           notifyWaiters(
             `${topicBase}/orders/preparing`,
             payload,
@@ -1920,12 +1925,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
           roles: ["cook"],
         });
-        publishPrinterTopicsForOrder(
-          topicBase,
-          updated as OrderWithRelations,
-          OrderStatus.PLACED,
-          { roles: ["cook"] }
-        );
+        if (getPrintOnArrival(store)) {
+          publishPrinterTopicsForOrder(
+            topicBase,
+            updated as OrderWithRelations,
+            OrderStatus.PLACED,
+            { roles: ["cook"] }
+          );
+        }
         notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
           skipMqtt: true,
         });
@@ -2190,12 +2197,14 @@ export async function orderRoutes(fastify: FastifyInstance) {
         publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
           roles: ["cook"],
         });
-        publishPrinterTopicsForOrder(
-          topicBase,
-          updated as OrderWithRelations,
-          OrderStatus.PLACED,
-          { roles: ["cook"] }
-        );
+        if (getPrintOnArrival(store)) {
+          publishPrinterTopicsForOrder(
+            topicBase,
+            updated as OrderWithRelations,
+            OrderStatus.PLACED,
+            { roles: ["cook"] }
+          );
+        }
         notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
           skipMqtt: true,
         });
