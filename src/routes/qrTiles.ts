@@ -14,9 +14,25 @@ const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/
 const QR_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const QR_SEGMENT_LEN = 4;
 
-const generateTilesSchema = z.object({
-  count: z.coerce.number().int().min(1).max(500).default(1),
-});
+const manualPublicCodeSchema = z
+  .string()
+  .transform((value) => value.trim().toUpperCase())
+  .refine((value) => QR_CODE_REGEX.test(value), {
+    message: "QR code must use the format GT-XXXX-XXXX",
+  });
+
+const generateTilesSchema = z
+  .object({
+    count: z.coerce.number().int().min(1).max(500).optional(),
+    publicCodes: z.array(manualPublicCodeSchema).min(1).max(500).optional(),
+  })
+  .refine((value) => Boolean(value.count) !== Boolean(value.publicCodes), {
+    message: "Provide either count or publicCodes",
+  })
+  .refine(
+    (value) => !value.publicCodes || new Set(value.publicCodes).size === value.publicCodes.length,
+    { message: "Manual QR codes must be unique" }
+  );
 
 const createStoreSchema = z.object({
   slug: z.string().trim().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -168,9 +184,24 @@ function serializeTile(tile: any) {
 
 async function createTiles(
   storeId: string | null,
-  count: number
+  count?: number,
+  publicCodes?: string[]
 ) {
-  const generatedCodes = await generateUniquePublicCodes(count);
+  const generatedCodes = publicCodes ?? await generateUniquePublicCodes(count ?? 0);
+
+  if (publicCodes) {
+    const existing = await db.qRTile.findFirst({
+      where: { publicCode: { in: publicCodes } },
+      select: { publicCode: true },
+    });
+    if (existing) {
+      const error = new Error(`QR code ${existing.publicCode} already exists`) as Error & {
+        code: string;
+      };
+      error.code = "PUBLIC_CODE_ALREADY_EXISTS";
+      throw error;
+    }
+  }
 
   const created = await db.$transaction(async (tx) => {
     const tiles: any[] = [];
@@ -821,7 +852,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const body = generateTilesSchema.parse(request.body ?? {});
-        const created = await createTiles(null, body.count);
+        const created = await createTiles(null, body.count, body.publicCodes);
         return reply.status(201).send({
           tiles: created.map(serializeTile),
         });
@@ -831,10 +862,10 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
         }
-        if ((error as any)?.code === "P2002") {
+        if (["P2002", "PUBLIC_CODE_ALREADY_EXISTS"].includes((error as any)?.code)) {
           return reply
             .status(409)
-            .send({ error: "FAILED_TO_GENERATE_UNIQUE_CODES" });
+            .send({ error: (error as Error).message || "QR code already exists" });
         }
         fastify.log.error(error, "Failed to generate global QR tiles");
         return reply.status(500).send({ error: "Failed to generate QR tiles" });
@@ -1025,7 +1056,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
-        const hydrated = await createTiles(store.id, body.count);
+        const hydrated = await createTiles(store.id, body.count, body.publicCodes);
 
         return reply
           .status(201)
@@ -1036,10 +1067,10 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
         }
-        if ((error as any)?.code === "P2002") {
+        if (["P2002", "PUBLIC_CODE_ALREADY_EXISTS"].includes((error as any)?.code)) {
           return reply
             .status(409)
-            .send({ error: "FAILED_TO_GENERATE_UNIQUE_CODES" });
+            .send({ error: (error as Error).message || "QR code already exists" });
         }
         fastify.log.error(error, "Failed to generate QR tiles");
         return reply.status(500).send({ error: "Failed to generate QR tiles" });
