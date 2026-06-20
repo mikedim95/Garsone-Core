@@ -309,7 +309,8 @@ function publishPrinterTopicsForOrder(
   order: OrderWithRelations,
   status: OrderStatus,
   options?: PublishOptions,
-  allowedPrinterTopic?: string | null
+  allowedPrinterTopic?: string | null,
+  printReason?: "ITEM_CHANGE"
 ) {
   const grouped = new Map<string, typeof order.orderItems>();
   for (const oi of order.orderItems) {
@@ -339,6 +340,7 @@ function publishPrinterTopicsForOrder(
     ts: new Date().toISOString(),
     note: order.note,
     order: serializeOrder(order),
+    ...(printReason ? { printReason } : {}),
   };
 
   const statusSegment = String(status || OrderStatus.PLACED).toLowerCase();
@@ -1930,7 +1932,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
             topicBase,
             updated as OrderWithRelations,
             OrderStatus.PLACED,
-            { roles: ["cook"] }
+            { roles: ["cook"] },
+            null,
+            "ITEM_CHANGE"
           );
         }
         notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
@@ -2202,7 +2206,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
             topicBase,
             updated as OrderWithRelations,
             OrderStatus.PLACED,
-            { roles: ["cook"] }
+            { roles: ["cook"] },
+            null,
+            "ITEM_CHANGE"
           );
         }
         notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
