@@ -34,11 +34,23 @@ const wifiNetworkSchema = z.object({
   hidden: z.boolean().optional().default(false),
 });
 
+const hostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(63)
+  .refine(
+    (value) => !value || /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
+    "Use only letters, numbers, and hyphens; do not start or end with a hyphen"
+  )
+  .optional()
+  .default("");
+
 const nodeConfigSchema = z.object({
   displayName: z.string().trim().min(1).max(255).default("Venue Pi"),
   nodeSlug: z.string().trim().min(1).max(100).default("main"),
-  tailscaleHostname: z.string().trim().max(255).optional().default(""),
-  localHostname: z.string().trim().max(255).optional().default(""),
+  tailscaleHostname: hostnameSchema,
+  localHostname: hostnameSchema,
   wifiSsid: z.string().trim().max(255).optional().default(""),
   wifiPassword: z.string().max(255).optional().default(""),
   wifiNetworks: z.array(wifiNetworkSchema).max(10).optional().default([]),
@@ -192,6 +204,8 @@ function buildConfigAck(node: any, body: any) {
         ? body.message
         : `OK, got it. Config${version ? ` v${version}` : ""} ${applied ? "applied" : "received"}.`,
     applied,
+    status: body.status,
+    hostnames: meta.hostnames && typeof meta.hostnames === "object" ? meta.hostnames : undefined,
   };
 }
 
