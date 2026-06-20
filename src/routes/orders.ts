@@ -52,6 +52,13 @@ const updateItemStatusSchema = z.object({
   status: z.nativeEnum(OrderItemStatus),
 });
 
+const updateOrderItemSchema = z.object({
+  quantity: z.number().int().min(0).max(999),
+  modifiers: z.union([z.string(), modifierSelectionSchema]).optional(),
+  localityApprovalToken: z.string().trim().min(8).max(128).optional(),
+  localitySessionId: z.string().trim().min(8).max(128).optional(),
+});
+
 const callWaiterSchema = z.object({
   tableId: z.string().uuid(),
   visit: z.string().trim().min(8).max(128).optional(),
@@ -1337,6 +1344,265 @@ export async function orderRoutes(fastify: FastifyInstance) {
         return reply
           .status(500)
           .send({ error: "Failed to update order status" });
+      }
+    }
+  );
+
+  fastify.patch(
+    "/orders/:id/items/:itemId",
+    {
+      preHandler: [ipWhitelistMiddleware, optionalAuthMiddleware],
+    },
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({ id: z.string().uuid(), itemId: z.string().uuid() })
+          .parse(request.params ?? {});
+        const body = updateOrderItemSchema.parse(request.body ?? {});
+        const store = await ensureStore(resolveStoreSlug(request));
+        const actor = (request as any).user;
+        const requiresLocality =
+          !actor?.role && !bypassGuestCheckoutChecks(store.slug);
+        const localityApprovalToken = body.localityApprovalToken?.trim() ?? "";
+        const localitySessionId = body.localitySessionId?.trim() ?? "";
+
+        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
+          return reply.status(403).send({ error: "LOCALITY_APPROVAL_REQUIRED" });
+        }
+
+        const existing = await db.order.findFirst({
+          where: { id: params.id, storeId: store.id },
+          include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
+        });
+        if (!existing) return reply.status(404).send({ error: "Order not found" });
+        if (existing.status !== OrderStatus.PLACED) {
+          return reply.status(409).send({ error: "Order can no longer be edited" });
+        }
+
+        const currentItem = existing.orderItems.find((item) => item.id === params.itemId);
+        if (!currentItem) {
+          return reply.status(404).send({ error: "Order item not found" });
+        }
+        if (currentItem.status !== OrderItemStatus.PLACED) {
+          return reply.status(409).send({ error: "Order item can no longer be edited" });
+        }
+
+        const dbItem = await db.item.findFirst({
+          where: {
+            id: currentItem.itemId,
+            storeId: store.id,
+            ...(body.quantity > 0 ? { isAvailable: true } : {}),
+          },
+          include: {
+            category: { select: { printerTopic: true } },
+            itemModifiers: {
+              include: { modifier: { include: { modifierOptions: true } } },
+            },
+          },
+        });
+        if (!dbItem) return reply.status(400).send({ error: "Item not available" });
+
+        const selections = parseModifiers(body.modifiers);
+        const options: Array<{
+          modifierId: string;
+          modifierOptionId: string;
+          titleSnapshot: string;
+          priceDeltaCents: number;
+        }> = [];
+
+        if (body.quantity > 0) {
+          for (const [modifierId, selectedOptionIds] of Object.entries(selections)) {
+            const link = dbItem.itemModifiers.find(
+              (entry: any) => entry.modifierId === modifierId
+            );
+            const modifier = link?.modifier;
+            if (!modifier) {
+              return reply.status(400).send({ error: "Modifier not allowed for item" });
+            }
+            const optionIds = Array.isArray(selectedOptionIds)
+              ? selectedOptionIds
+              : [selectedOptionIds];
+            const uniqueOptionIds = [...new Set(optionIds.filter(Boolean))];
+            const minSelect = link.isRequired
+              ? Math.max(1, modifier.minSelect)
+              : modifier.minSelect;
+            if (uniqueOptionIds.length < minSelect) {
+              return reply.status(400).send({ error: "Missing required modifiers" });
+            }
+            if (
+              modifier.maxSelect !== null &&
+              uniqueOptionIds.length > modifier.maxSelect
+            ) {
+              return reply.status(400).send({ error: "Too many modifier options selected" });
+            }
+            for (const optionId of uniqueOptionIds) {
+              const option = modifier.modifierOptions.find(
+                (candidate: any) => candidate.id === optionId
+              );
+              if (!option) {
+                return reply.status(400).send({ error: "Modifier option not found" });
+              }
+              options.push({
+                modifierId: modifier.id,
+                modifierOptionId: option.id,
+                titleSnapshot: `${modifier.title}: ${option.title}`,
+                priceDeltaCents: option.priceDeltaCents,
+              });
+            }
+          }
+
+          const requiredMissing = dbItem.itemModifiers.some((link: any) => {
+            const required = link.isRequired || link.modifier.minSelect > 0;
+            if (!required) return false;
+            const selected = selections[link.modifierId];
+            return Array.isArray(selected) ? selected.length === 0 : !selected;
+          });
+          if (requiredMissing) {
+            return reply.status(400).send({ error: "Missing required modifiers" });
+          }
+        }
+
+        const describe = (quantity: number, modifiers: string[]) =>
+          `${quantity}x ${currentItem.titleSnapshot}${
+            modifiers.length ? ` (${modifiers.join(", ")})` : ""
+          }`;
+        const before = describe(
+          currentItem.quantity,
+          currentItem.orderItemOptions.map((option) => option.titleSnapshot)
+        );
+        const after =
+          body.quantity === 0
+            ? `REMOVED ${currentItem.titleSnapshot}`
+            : describe(body.quantity, options.map((option) => option.titleSnapshot));
+        const unitPriceCents =
+          dbItem.priceCents + options.reduce((sum, option) => sum + option.priceDeltaCents, 0);
+        const otherTotal = existing.orderItems
+          .filter((item) => item.id !== currentItem.id)
+          .reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0);
+        const totalCents = otherTotal + unitPriceCents * body.quantity;
+        const cancelsOrder = body.quantity === 0 && existing.orderItems.length === 1;
+        const now = new Date();
+
+        const updated = await db.$transaction(async (tx) => {
+          if (body.quantity === 0) {
+            await tx.orderItem.delete({ where: { id: currentItem.id } });
+          } else {
+            await tx.orderItemOption.deleteMany({ where: { orderItemId: currentItem.id } });
+            await tx.orderItem.update({
+              where: { id: currentItem.id },
+              data: {
+                quantity: body.quantity,
+                unitPriceCents,
+                orderItemOptions: { create: options },
+              },
+            });
+          }
+
+          await tx.order.update({
+            where: { id: existing.id },
+            data: {
+              totalCents,
+              updatedAt: now,
+              ...(cancelsOrder
+                ? {
+                    status: OrderStatus.CANCELLED,
+                    cancelledAt: now,
+                    cancelReason: "Last item withdrawn",
+                  }
+                : {}),
+            },
+          });
+
+          if (requiresLocality) {
+            const consumed = await tx.localityApproval.updateMany({
+              where: {
+                approvalToken: localityApprovalToken,
+                storeId: store.id,
+                tableId: existing.tableId,
+                purpose: LOCALITY_PURPOSE,
+                sessionId: localitySessionId,
+                consumedAt: null,
+                expiresAt: { gt: now },
+              },
+              data: { consumedAt: now, consumedOrderId: existing.id },
+            });
+            if (consumed.count !== 1) throw new Error("LOCALITY_APPROVAL_INVALID");
+          }
+
+          return tx.order.findUniqueOrThrow({
+            where: { id: existing.id },
+            include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
+          });
+        });
+
+        const orderPayload = serializeOrder(updated as OrderWithRelations);
+        const eventPayload = {
+          orderId: updated.id,
+          tableId: updated.tableId,
+          tableLabel: updated.table?.label ?? "",
+          ticketNumber: (updated as any).ticketNumber ?? undefined,
+          status: updated.status,
+          createdAt: updated.createdAt,
+          totalCents: updated.totalCents,
+          note: updated.note,
+          items: orderPayload.items,
+          order: orderPayload,
+          change: { from: before, to: after },
+          ts: now.toISOString(),
+        };
+        const topic = cancelsOrder ? "canceled" : "placed";
+        publishMessage(`${store.slug}/orders/${topic}`, eventPayload, { roles: ["cook"] });
+        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+        notifyWaiters(`${store.slug}/orders/${topic}`, eventPayload, waiterIds, {
+          skipMqtt: true,
+        });
+        publishMessage(`${store.slug}/orders/${topic}`, eventPayload, {
+          anonymousOnly: true,
+          skipMqtt: true,
+        });
+
+        const printerTopic = normalizePrinterTopic(
+          dbItem.printerTopic,
+          dbItem.category?.printerTopic
+        );
+        const printStatus = getPrintOnArrival(store)
+          ? OrderStatus.PLACED
+          : OrderStatus.PREPARING;
+        publishMessage(
+          `${store.slug}/orders/${printStatus.toLowerCase()}/${printerTopic}`,
+          {
+            ...eventPayload,
+            status: printStatus,
+            printReason: "ITEM_CHANGE",
+            printerTopic,
+            items: [
+              {
+                id: currentItem.id,
+                itemId: currentItem.itemId,
+                title: currentItem.titleSnapshot,
+                quantity: body.quantity,
+                unitPriceCents: body.quantity > 0 ? unitPriceCents : 0,
+                modifiers: options,
+                printerTopic,
+              },
+            ],
+          }
+        );
+
+        return reply.send({
+          order: orderPayload,
+          change: { from: before, to: after },
+          removed: body.quantity === 0,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
+          return reply.status(403).send({ error: "LOCALITY_APPROVAL_INVALID" });
+        }
+        console.error("Update order item error:", error);
+        return reply.status(500).send({ error: "Failed to update order item" });
       }
     }
   );
