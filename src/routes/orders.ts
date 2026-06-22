@@ -1020,7 +1020,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         // Role-based status transitions
         // - PREPARING, READY: cook or manager
         // - SERVED: waiter or manager
-        // - CANCELLED: manager or cook
+        // - CANCELLED: waiter, cook, hybrid, or manager
         const next = body.status;
         const allowByRole = (role?: string) => {
           if (!role) return false;
@@ -1030,7 +1030,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
             return role === "cook" || role === "hybrid" || isManager;
           if (next === OrderStatus.CANCELLED)
-            return isManager || role === "cook" || role === "hybrid";
+            return (
+              isManager ||
+              role === "waiter" ||
+              role === "cook" ||
+              role === "hybrid"
+            );
           return isManager;
         };
 
