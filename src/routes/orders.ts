@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { Prisma, OrderItemStatus, OrderStatus, ShiftStatus } from "@prisma/client";
+import { Prisma, OrderItemStatus, OrderStatus, Role, ShiftStatus } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
@@ -17,6 +17,7 @@ import {
 } from "../lib/tableVisits.js";
 import { createVivaPaymentOrder } from "../lib/viva.js";
 import { notifyCustomerOrderStatus } from "../lib/customerPush.js";
+import { notifyStaffPush } from "../lib/staffPush.js";
 
 const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string())]));
 
@@ -308,6 +309,75 @@ function notifyWaiters(
     publishMessage(topic, payload, { ...baseOptions, userIds: waiterIds });
   } else {
     publishMessage(topic, payload, { ...baseOptions, roles: ["waiter"] });
+  }
+}
+
+function readStorePrinters(store: { settingsJson?: Prisma.JsonValue | null }) {
+  const settings =
+    store.settingsJson && typeof store.settingsJson === "object"
+      ? (store.settingsJson as Record<string, unknown>)
+      : {};
+  const printers = Array.isArray(settings.printers) ? settings.printers : [];
+  return printers
+    .map((printer) =>
+      typeof printer === "string" ? normalizePrinterTopic(printer) : ""
+    )
+    .filter(Boolean);
+}
+
+async function getResponsibleKitchenStaffIds(
+  storeId: string,
+  printerTopics: string[]
+) {
+  const normalizedTopics = Array.from(
+    new Set(printerTopics.map((topic) => normalizePrinterTopic(topic)))
+  ).filter(Boolean);
+  const topicFilter =
+    normalizedTopics.length > 0
+      ? [
+          { printerTopic: { in: normalizedTopics } },
+          { cookType: { printerTopic: { in: normalizedTopics } } },
+        ]
+      : undefined;
+
+  const staff = await db.profile.findMany({
+    where: {
+      storeId,
+      role: { in: [Role.COOK, Role.HYBRID] },
+      ...(topicFilter ? { OR: topicFilter } : {}),
+    },
+    select: { id: true },
+  });
+
+  return staff.map((profile) => profile.id);
+}
+
+function publishWaiterCallPrints(params: {
+  storeSlug: string;
+  tableId: string;
+  tableLabel: string;
+  printerTopics: string[];
+  ts: string;
+}) {
+  const tableText = params.tableLabel || params.tableId;
+  for (const printerTopic of params.printerTopics) {
+    publishMessage(
+      `${params.storeSlug}/orders/preparing/${printerTopic}`,
+      {
+        eventType: "WAITER_CALL",
+        printReason: "WAITER_CALL",
+        printerTopic,
+        tableId: params.tableId,
+        tableLabel: params.tableLabel,
+        title: `Table ${tableText}`,
+        status: "WAITER_CALL",
+        message: `Table ${tableText} needs assistance.`,
+        note: `Table ${tableText} needs assistance.`,
+        ts: params.ts,
+        items: [],
+      },
+      { roles: ["cook"] }
+    );
   }
 }
 
@@ -2610,17 +2680,78 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Table not found" });
         }
 
-        // New waiter call topic: {slug}/waiter/call
-        const waiterIds = await getWaiterIdsForTable(store.id, table.id);
+        const ts = new Date().toISOString();
+        const assignments = await db.waiterTable.findMany({
+          where: { storeId: store.id, tableId: table.id },
+          include: {
+            waiter: {
+              include: {
+                waiterType: true,
+              },
+            },
+          },
+        });
+        const waiterIds = assignments.map((assignment) => assignment.waiterId);
+        const printerTopics = Array.from(
+          new Set(
+            assignments
+              .map((assignment) =>
+                normalizePrinterTopic(
+                  assignment.waiter.printerTopic,
+                  assignment.waiter.waiterType?.printerTopic
+                )
+              )
+              .filter(Boolean)
+          )
+        );
+        const fallbackPrinterTopics =
+          printerTopics.length > 0 ? printerTopics : readStorePrinters(store);
+        const targetPrinterTopics =
+          fallbackPrinterTopics.length > 0 ? fallbackPrinterTopics : ["printer_1"];
+        const tableLabel = table.label ?? "";
+        const tableText = tableLabel || table.id;
+        const payload = {
+          tableId: body.tableId,
+          tableLabel,
+          action: "called",
+          message: `Table ${tableText} needs assistance.`,
+          printerTopics: targetPrinterTopics,
+          ts,
+        };
+
         notifyWaiters(
           `${store.slug}/waiter/call`,
-          {
-            tableId: body.tableId,
-            action: "called",
-            ts: new Date().toISOString(),
-          },
+          payload,
           waiterIds
         );
+        publishWaiterCallPrints({
+          storeSlug: store.slug,
+          tableId: body.tableId,
+          tableLabel,
+          printerTopics: targetPrinterTopics,
+          ts,
+        });
+
+        const kitchenStaffIds = await getResponsibleKitchenStaffIds(
+          store.id,
+          targetPrinterTopics
+        );
+        if (kitchenStaffIds.length > 0) {
+          publishMessage(`${store.slug}/waiter/call`, payload, {
+            userIds: kitchenStaffIds,
+            skipMqtt: true,
+          });
+          notifyStaffPush({
+            storeId: store.id,
+            profileIds: kitchenStaffIds,
+            title: "Bell ring",
+            body: `Table ${tableText} needs assistance.`,
+            tag: `waiter-call-${body.tableId}`,
+            url: "/cook",
+          }).catch((pushError) => {
+            console.warn("Staff push notification failed:", pushError);
+          });
+        }
 
         return reply.send({ success: true });
       } catch (error) {
