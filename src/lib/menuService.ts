@@ -12,6 +12,7 @@ type MenuPayload = {
     title: string;
     titleEn?: string | null;
     titleEl?: string | null;
+    imageUrl?: string | null;
     sortOrder?: number | null;
     printerTopic?: string | null;
   }>;
@@ -20,6 +21,9 @@ type MenuPayload = {
     name: string;
     titleEn?: string | null;
     titleEl?: string | null;
+    subcategory?: string | null;
+    subcategoryEn?: string | null;
+    subcategoryEl?: string | null;
     description?: string | null;
     descriptionEn?: string | null;
     descriptionEl?: string | null;
@@ -111,6 +115,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
         title: true,
         titleEn: true,
         titleEl: true,
+        imageUrl: true,
         printerTopic: true,
         sortOrder: true,
         updatedAt: true,
@@ -181,9 +186,18 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       : item.category?.titleEn || item.category?.title || "Uncategorized";
     const titleEn = item.titleEn || item.title;
     const titleEl = item.titleEl || item.title;
+    const subcategoryEn = item.subcategoryEn || "";
+    const subcategoryEl = item.subcategoryEl || "";
     const descriptionEn = item.descriptionEn || item.description || "";
     const descriptionEl = item.descriptionEl || item.description || "";
     const name = localize(preferGreek, titleEn, titleEl, item.title);
+    const subcategory =
+      localize(
+        preferGreek,
+        subcategoryEn,
+        subcategoryEl,
+        item.subcategoryEn || item.subcategoryEl || null
+      ) || null;
     const modifiersForItem = [] as Array<{
       id: string;
       name: string;
@@ -213,6 +227,9 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       name,
       titleEn,
       titleEl,
+      subcategory,
+      subcategoryEn: subcategoryEn || null,
+      subcategoryEl: subcategoryEl || null,
       description: preferGreek ? descriptionEl || descriptionEn : descriptionEn || descriptionEl,
       descriptionEn,
       descriptionEl,
@@ -247,6 +264,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       title: localize(preferGreek, category.titleEn, category.titleEl, category.title),
       titleEn: category.titleEn || category.title,
       titleEl: category.titleEl || category.title,
+      imageUrl: category.imageUrl ?? null,
       sortOrder: category.sortOrder ?? undefined,
       printerTopic: category.printerTopic ?? null,
     })),

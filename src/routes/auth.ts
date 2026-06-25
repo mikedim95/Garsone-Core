@@ -3,11 +3,18 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { signToken } from "../lib/jwt.js";
+import { serializeRole } from "../lib/roles.js";
 import { ensureStore, getRequestedStoreSlug, getOrderingMode } from "../lib/store.js";
+import { authMiddleware } from "../middleware/auth.js";
 
 const signinSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6).max(200),
 });
 
 export async function authRoutes(fastify: FastifyInstance) {
@@ -62,14 +69,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
 
-      const role =
-        user.role === "MANAGER"
-          ? "manager"
-          : user.role === "COOK"
-          ? "cook"
-          : user.role === "ARCHITECT"
-          ? "architect"
-          : "waiter";
+      const role = serializeRole(user.role);
 
       const token = signToken({
         userId: user.id,
@@ -79,7 +79,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         storeSlug: store.slug,
         cookTypeId: user.cookTypeId ?? null,
         waiterTypeId: user.waiterTypeId ?? null,
-        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        printerTopic: user.printerTopic ?? null,
+        cookTypePrinterTopic: user.printerTopic ?? user.cookType?.printerTopic ?? null,
         waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
@@ -94,6 +95,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           storeSlug: store.slug,
           cookTypeId: user.cookTypeId ?? null,
           waiterTypeId: user.waiterTypeId ?? null,
+          printerTopic: user.printerTopic ?? null,
           cookType: user.cookType
             ? {
                 id: user.cookType.id,
@@ -110,6 +112,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                 printerTopic: user.waiterType.printerTopic,
               }
             : null,
+          mustChangePassword: body.password === "1234",
         },
       });
     } catch (error) {
@@ -122,6 +125,36 @@ export async function authRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({ error: "Internal server error" });
     }
   });
+
+  fastify.post(
+    "/auth/change-password",
+    { preHandler: authMiddleware },
+    async (request, reply) => {
+      try {
+        const body = changePasswordSchema.parse(request.body ?? {});
+        const authUser = (request as any).user as { userId?: string } | undefined;
+        const userId = authUser?.userId;
+        if (!userId) return reply.status(401).send({ error: "Unauthorized" });
+        const user = await db.profile.findUnique({ where: { id: userId } });
+        if (!user) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+        const validPassword = await bcrypt.compare(body.currentPassword, user.passwordHash);
+        if (!validPassword) {
+          return reply.status(401).send({ error: "Invalid current password" });
+        }
+        await db.profile.update({
+          where: { id: user.id },
+          data: { passwordHash: await bcrypt.hash(body.newPassword, 10) },
+        });
+        return reply.send({ ok: true });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Change password error:", error);
+        return reply.status(500).send({ error: "Internal server error" });
+      }
+    }
+  );
 
   // Developer convenience: URL that mints a token for a known seed user
   // and redirects to the frontend with ?token=... .
@@ -158,14 +191,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "USER_NOT_FOUND_FOR_STORE" });
       }
 
-      const role =
-        user.role === "MANAGER"
-          ? "manager"
-          : user.role === "COOK"
-          ? "cook"
-          : user.role === "ARCHITECT"
-          ? "architect"
-          : "waiter";
+      const role = serializeRole(user.role);
 
       const token = signToken({
         userId: user.id,
@@ -175,7 +201,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         storeSlug: store.slug,
         cookTypeId: user.cookTypeId ?? null,
         waiterTypeId: user.waiterTypeId ?? null,
-        cookTypePrinterTopic: user.cookType?.printerTopic ?? null,
+        printerTopic: user.printerTopic ?? null,
+        cookTypePrinterTopic: user.printerTopic ?? user.cookType?.printerTopic ?? null,
         waiterTypePrinterTopic: user.waiterType?.printerTopic ?? null,
       });
 
@@ -193,6 +220,7 @@ export async function authRoutes(fastify: FastifyInstance) {
             storeSlug: store.slug,
             cookTypeId: user.cookTypeId ?? null,
             waiterTypeId: user.waiterTypeId ?? null,
+            printerTopic: user.printerTopic ?? null,
             cookType: user.cookType
               ? {
                   id: user.cookType.id,

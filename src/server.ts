@@ -13,9 +13,14 @@ import { qrTileRoutes } from "./routes/qrTiles.js";
 import { localityRoutes } from "./routes/locality.js";
 import { publicMenuBootstrapRoutes } from "./routes/publicMenuBootstrap.js";
 import { nodeAgentRoutes } from "./routes/nodeAgents.js";
+import { customerPushRoutes } from "./routes/customerPush.js";
+import { staffPushRoutes } from "./routes/staffPush.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
 import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
+import { ensureProfilePrinterTopic } from "./db/ensureProfilePrinterTopic.js";
+import { ensureStaffSchema } from "./db/ensureStaffSchema.js";
+import { ensureStaffPushSchema } from "./lib/staffPush.js";
 
 // Load local .env only for non-production environments.
 // In online deployments, rely solely on platform-provided env vars.
@@ -46,7 +51,10 @@ fastify.get("/health", async (request, reply) => {
 
 setupRealtimeGateway(fastify);
 getMqttClient();
+await ensureStaffSchema();
+await ensureProfilePrinterTopic();
 await ensureOrderPaymentColumns();
+await ensureStaffPushSchema();
 
 // Register routes
 await fastify.register(authRoutes);
@@ -61,6 +69,8 @@ await fastify.register(qrTileRoutes);
 await fastify.register(localityRoutes);
 await fastify.register(publicMenuBootstrapRoutes);
 await fastify.register(nodeAgentRoutes);
+await fastify.register(customerPushRoutes);
+await fastify.register(staffPushRoutes);
 
 // Start server
 try {

@@ -96,3 +96,6 @@ export async function ensureStore(slugOrRequest?: string | any) {
 
 export const getOrderingMode = (store?: { settingsJson?: any; orderingMode?: OrderingMode }) =>
   normalizeOrderingMode((store as any)?.orderingMode || (store as any)?.settingsJson?.orderingMode);
+
+export const getPrintOnArrival = (store?: { settingsJson?: any }) =>
+  (store as any)?.settingsJson?.printOnArrival === true;

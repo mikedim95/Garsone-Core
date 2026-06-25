@@ -3,15 +3,268 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
-import { ensureStore } from "../lib/store.js";
+import { kitchenServiceRoles, staffServiceRoles } from "../lib/roles.js";
+import { ensureStore, invalidateStoreCache } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { invalidateMenuCache } from "./menu.js";
 import { createHmac, createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+const LOCAL_UPLOAD_ROOT = process.env.LOCAL_UPLOAD_DIR || path.join(process.cwd(), "uploads");
+
+const guessMimeType = (filePath: string) => {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".svg") return "image/svg+xml";
+  return "application/octet-stream";
+};
+
+const pickFirstEnv = (...values: Array<string | undefined>) =>
+  values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim() || "";
+
+const getR2Config = () => {
+  const endpoint = pickFirstEnv(
+    process.env.R2_S3_ENDPOINT,
+    process.env.S3_ENDPOINT,
+    process.env.AWS_ENDPOINT_URL_S3,
+    process.env.AWS_S3_ENDPOINT,
+    process.env.CLOUDFLARE_R2_ENDPOINT
+  );
+  const bucket = pickFirstEnv(
+    process.env.R2_BUCKET,
+    process.env.S3_BUCKET,
+    process.env.AWS_S3_BUCKET,
+    process.env.CLOUDFLARE_R2_BUCKET
+  );
+  const accessKeyId = pickFirstEnv(
+    process.env.R2_ACCESS_KEY_ID,
+    process.env.R2_ACCESS_KEY,
+    process.env.AWS_ACCESS_KEY_ID,
+    process.env.S3_ACCESS_KEY_ID
+  );
+  const secretAccessKey = pickFirstEnv(
+    process.env.R2_SECRET_ACCESS_KEY,
+    process.env.R2_SECRET_KEY,
+    process.env.AWS_SECRET_ACCESS_KEY,
+    process.env.S3_SECRET_ACCESS_KEY
+  );
+  return {
+    endpoint,
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    publicBaseUrl: pickFirstEnv(
+      process.env.R2_PUBLIC_BASE_URL,
+      process.env.R2_PUBLIC_URL,
+      process.env.CLOUDFLARE_R2_PUBLIC_URL
+    ),
+    region: process.env.R2_REGION || "auto",
+  };
+};
+
+const signR2Request = (
+  method: string,
+  endpoint: string,
+  bucket: string,
+  key: string,
+  body: Buffer,
+  accessKeyId: string,
+  secretAccessKey: string,
+  region: string,
+  extraHeaders: Record<string, string> = {}
+) => {
+  const normalizedEndpoint = endpoint.replace(/\/$/, "");
+  const host = new URL(normalizedEndpoint).host;
+  const encodedKey = key.split("/").map(encodeURIComponent).join("/");
+  const path = `/${encodeURIComponent(bucket)}${encodedKey ? `/${encodedKey}` : ""}`;
+  const now = new Date();
+  const iso = now.toISOString();
+  const amzDate = iso.replace(/[:-]/g, "").replace(/\.\d{3}Z$/, "Z");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+  const signedHeaderValues: Record<string, string> = {
+    host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...extraHeaders,
+  };
+  const sortedHeaderNames = Object.keys(signedHeaderValues).sort();
+  const canonicalHeaders = sortedHeaderNames
+    .map((headerName) => `${headerName.toLowerCase()}:${signedHeaderValues[headerName]}\n`)
+    .join("");
+  const signedHeaders = sortedHeaderNames.map((headerName) => headerName.toLowerCase()).join(";");
+  const canonicalRequest = [
+    method,
+    path,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const algorithm = "AWS4-HMAC-SHA256";
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = [
+    algorithm,
+    amzDate,
+    credentialScope,
+    createHash("sha256").update(canonicalRequest).digest("hex"),
+  ].join("\n");
+  const kDate = createHmac("sha256", Buffer.from(`AWS4${secretAccessKey}`)).update(dateStamp).digest();
+  const kRegion = createHmac("sha256", kDate).update(region).digest();
+  const kService = createHmac("sha256", kRegion).update("s3").digest();
+  const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
+  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+  return {
+    url: `${normalizedEndpoint}${path}`,
+    headers: {
+      ...signedHeaderValues,
+      Authorization: `${algorithm} Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    },
+  };
+};
+
+const deriveR2PublicBase = (imageUrl?: string | null, storeSlug?: string | null) => {
+  const raw = String(imageUrl || "").trim();
+  const slug = String(storeSlug || "").trim();
+  if (!raw || !slug) return "";
+  const marker = `/${slug}/`;
+  const idx = raw.indexOf(marker);
+  if (idx > 0) {
+    return raw.slice(0, idx);
+  }
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "";
+  }
+};
 
 export async function managerRoutes(fastify: FastifyInstance) {
   const managerOnly = [authMiddleware, requireRole(["manager", "architect"])];
 
-  // Image upload to R2 (S3 API) if configured, otherwise fallback to Supabase. Body: { fileName, mimeType, base64, itemId? }
+  fastify.patch(
+    "/manager/store/print-on-arrival",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = z.object({ enabled: z.boolean() }).parse(request.body);
+        const store = await ensureStore(request);
+        const settingsJson = {
+          ...(store.settingsJson && typeof store.settingsJson === "object"
+            ? store.settingsJson
+            : {}),
+          printOnArrival: body.enabled,
+        };
+        const updated = await db.store.update({
+          where: { id: store.id },
+          data: { settingsJson },
+          select: { id: true, slug: true, name: true, settingsJson: true },
+        });
+        invalidateStoreCache(store.slug);
+        return reply.send({
+          store: {
+            id: updated.id,
+            slug: updated.slug,
+            name: updated.name,
+            printOnArrival: body.enabled,
+            settings: updated.settingsJson,
+          },
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Failed to update print-on-arrival setting", error);
+        return reply.status(500).send({ error: "Failed to update printer setting" });
+      }
+    }
+  );
+
+  fastify.get("/uploads/*", async (request, reply) => {
+    try {
+      const raw = String((request.params as any)?.["*"] || "").trim();
+      if (!raw) {
+        return reply.status(404).send({ error: "File not found" });
+      }
+      const normalized = raw
+        .split("/")
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+      if (!normalized.length || normalized.some((segment) => segment === "." || segment === "..")) {
+        return reply.status(400).send({ error: "Invalid upload path" });
+      }
+      const filePath = path.join(LOCAL_UPLOAD_ROOT, ...normalized);
+      const data = await fs.readFile(filePath);
+      return reply.type(guessMimeType(filePath)).send(data);
+    } catch {
+      return reply.status(404).send({ error: "File not found" });
+    }
+  });
+
+  fastify.get("/media/:bucket/*", async (request, reply) => {
+    try {
+      const params = request.params as any;
+      const bucket = String(params?.bucket || "").trim();
+      const key = String(params?.["*"] || "").trim();
+      const normalized = key
+        .split("/")
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+      if (
+        !bucket ||
+        !normalized.length ||
+        normalized.some((segment) => segment === "." || segment === "..")
+      ) {
+        return reply.status(400).send({ error: "Invalid media path" });
+      }
+
+      const config = getR2Config();
+      if (
+        !config.endpoint ||
+        !config.bucket ||
+        !config.accessKeyId ||
+        !config.secretAccessKey ||
+        bucket !== config.bucket
+      ) {
+        return reply.status(404).send({ error: "Media not found" });
+      }
+
+      const requestedKey = normalized.join("/");
+      const signed = signR2Request(
+        "GET",
+        config.endpoint,
+        bucket,
+        requestedKey,
+        Buffer.alloc(0),
+        config.accessKeyId,
+        config.secretAccessKey,
+        config.region
+      );
+      const res = await fetch(signed.url, {
+        method: "GET",
+        headers: signed.headers as any,
+      } as any);
+      if (!res.ok) {
+        return reply.status(res.status === 404 ? 404 : 502).send({ error: "Media not found" });
+      }
+
+      const contentType = res.headers.get("content-type") || guessMimeType(requestedKey);
+      const cacheControl = "public, max-age=31536000, immutable";
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return reply.header("Cache-Control", cacheControl).type(contentType).send(buffer);
+    } catch (error) {
+      fastify.log.error(error, "R2 media fetch error");
+      return reply.status(500).send({ error: "Media fetch failed" });
+    }
+  });
+
+  // Image upload to R2 (S3 API) if configured, otherwise fallback to legacy storage.
+  // Body: { fileName, mimeType, base64, itemId? }
   fastify.post(
     "/manager/uploads/image",
     { preHandler: managerOnly },
@@ -46,13 +299,30 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ""), "base64");
         const storeSlug = slugSegment(store.slug || "store") || "store";
 
+        const existingStoreImage = await db.item.findFirst({
+          where: {
+            storeId: store.id,
+            imageUrl: {
+              not: null,
+            },
+          },
+          select: { imageUrl: true },
+          orderBy: { updatedAt: "desc" },
+        });
+
         // R2 config (S3-compatible)
-        const R2_ENDPOINT = process.env.R2_S3_ENDPOINT || ""; // e.g. https://<accountid>.r2.cloudflarestorage.com
-        const R2_BUCKET = process.env.R2_BUCKET || "";
-        const R2_ACCESS = process.env.R2_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY || "";
-        const R2_SECRET = process.env.R2_SECRET_ACCESS_KEY || process.env.R2_SECRET_KEY || "";
-        const R2_PUBLIC = process.env.R2_PUBLIC_BASE_URL || ""; // e.g. https://pub-xxxx.r2.dev
-        const R2_REGION = process.env.R2_REGION || "auto";
+        const r2Config = getR2Config();
+        const R2_ENDPOINT = r2Config.endpoint; // e.g. https://<accountid>.r2.cloudflarestorage.com
+        const R2_BUCKET = r2Config.bucket;
+        const R2_ACCESS = r2Config.accessKeyId;
+        const R2_SECRET = r2Config.secretAccessKey;
+        const R2_PUBLIC = pickFirstEnv(
+          r2Config.publicBaseUrl,
+          deriveR2PublicBase(existingStoreImage?.imageUrl, storeSlug)
+        ); // e.g. https://pub-xxxx.r2.dev
+        const R2_REGION = r2Config.region;
+        const requireR2Uploads =
+          String(process.env.REQUIRE_R2_UPLOADS || "").toLowerCase() === "true";
 
         const extFrom = (name: string, mt: string) => {
           const dot = name.lastIndexOf(".");
@@ -71,20 +341,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
               include: { category: true },
             });
             if (item) {
-              const categoryName = slugSegment(
-                (item.category as any)?.titleEn || (item.category as any)?.titleEl || (item.category as any)?.title || "Uncategorized"
-              );
               const itemTitle = slugSegment(item.titleEn || item.title || "Item");
               const ext = extFrom(fileName, mimeType);
               const objectName = `${itemTitle}.${ext}`;
               // Desired public URL example when bucket == store slug:
-              //   https://pub-xxx.r2.dev/<storeSlug>/<Category>/<Item>.jpg
+              //   https://pub-xxx.r2.dev/<storeSlug>/Menu/<Item>.jpg
               // If bucket equals store slug, omit the store slug from the key to avoid duplication.
               if (R2_BUCKET && slugSegment(R2_BUCKET) === storeSlug) {
-                return `${categoryName}/${objectName}`;
+                return `Menu/${objectName}`;
               }
               // Otherwise include store slug in the key under a shared bucket.
-              return `${storeSlug}/${categoryName}/${objectName}`;
+              return `${storeSlug}/Menu/${objectName}`;
             }
           }
           const safeName = `${Date.now()}-${slugSegment(fileName.replace(/\.[^.]+$/, "")) || "upload"}.${extFrom(fileName, mimeType)}`;
@@ -96,48 +363,22 @@ export async function managerRoutes(fastify: FastifyInstance) {
 
           const key = await buildKey();
           const endpoint = R2_ENDPOINT.replace(/\/$/, "");
-          const url = `${endpoint}/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
 
-          const now = new Date();
-          // AWS SigV4 timestamps: 20250101T120000Z
-          const iso = now.toISOString(); // e.g. 2025-12-22T12:34:56.789Z
-          const amzDate = iso.replace(/[:-]/g, "").replace(/\.\d{3}Z$/, "Z"); // 20251222T123456Z
-          const dateStamp = amzDate.slice(0, 8);
-          const host = new URL(endpoint).host;
-          const payloadHash = createHash("sha256").update(buffer).digest("hex");
+          const signed = signR2Request(
+            "PUT",
+            endpoint,
+            R2_BUCKET,
+            key,
+            buffer,
+            R2_ACCESS,
+            R2_SECRET,
+            R2_REGION,
+            { "Content-Type": mimeType }
+          );
 
-          const canonicalUri = `/${encodeURIComponent(R2_BUCKET)}/${key.split("/").map(encodeURIComponent).join("/")}`;
-          const canonicalQueryString = "";
-          const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
-          const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-          const canonicalRequest = ["PUT", canonicalUri, canonicalQueryString, canonicalHeaders, signedHeaders, payloadHash].join("\n");
-
-          const algorithm = "AWS4-HMAC-SHA256";
-          const credentialScope = `${dateStamp}/${R2_REGION}/s3/aws4_request`;
-          const stringToSign = [
-            algorithm,
-            amzDate,
-            credentialScope,
-            createHash("sha256").update(canonicalRequest).digest("hex"),
-          ].join("\n");
-
-          const kDate = createHmac("sha256", Buffer.from("AWS4" + R2_SECRET)).update(dateStamp).digest();
-          const kRegion = createHmac("sha256", kDate).update(R2_REGION).digest();
-          const kService = createHmac("sha256", kRegion).update("s3").digest();
-          const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
-          const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
-
-          const authorization = `${algorithm} Credential=${R2_ACCESS}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-          const res = await fetch(url, {
+          const res = await fetch(signed.url, {
             method: "PUT",
-            headers: {
-              host,
-              "x-amz-content-sha256": payloadHash,
-              "x-amz-date": amzDate,
-              Authorization: authorization,
-              "Content-Type": mimeType,
-            } as any,
+            headers: signed.headers as any,
             body: buffer,
           } as any);
 
@@ -147,14 +388,21 @@ export async function managerRoutes(fastify: FastifyInstance) {
             return null;
           }
 
-          // If R2_PUBLIC points to https://pub-xxxx.r2.dev (no bucket), append /<bucket>/<key>.
-          // If it already includes the bucket path, we won't duplicate it.
           const base = R2_PUBLIC.replace(/\/$/, "");
-          const needsBucket = !base.endsWith(`/${R2_BUCKET}`) && !base.includes(`/${R2_BUCKET}/`);
-          const publicUrl = `${base}${needsBucket ? `/${encodeURIComponent(R2_BUCKET)}` : ""}/${key
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`;
+          const publicHost = (() => {
+            try {
+              return new URL(base).host;
+            } catch {
+              return "";
+            }
+          })();
+          const isR2DevPublicHost = /\.r2\.dev$/i.test(publicHost);
+          const pathSegments = key.split("/").map(encodeURIComponent).join("/");
+          const needsBucket =
+            !isR2DevPublicHost &&
+            !base.endsWith(`/${R2_BUCKET}`) &&
+            !base.includes(`/${R2_BUCKET}/`);
+          const publicUrl = `${base}${needsBucket ? `/${encodeURIComponent(R2_BUCKET)}` : ""}/${pathSegments}`;
           return { publicUrl, path: key };
         };
 
@@ -162,37 +410,79 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (r2Result) {
           return reply.send(r2Result);
         }
+        if (requireR2Uploads) {
+          const missing = [
+            ["R2_S3_ENDPOINT", R2_ENDPOINT],
+            ["R2_BUCKET", R2_BUCKET],
+            ["R2_ACCESS_KEY_ID", R2_ACCESS],
+            ["R2_SECRET_ACCESS_KEY", R2_SECRET],
+            ["R2_PUBLIC_BASE_URL", R2_PUBLIC],
+          ]
+            .filter(([, value]) => !value)
+            .map(([name]) => name);
+          const detail = missing.length
+            ? `Missing R2 config: ${missing.join(", ")}`
+            : "R2 upload failed";
+          fastify.log.error({ missing }, "R2 upload required but unavailable");
+          return reply.status(500).send({ error: detail });
+        }
 
-        // Fallback: Supabase storage
         const SUPA_URL = process.env.SUPABASE_URL;
         const SUPA_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
         const BUCKET = process.env.SUPABASE_BUCKET || "assets";
-        if (!SUPA_URL || !SUPA_KEY) {
-          return reply.status(500).send({ error: "Upload failed: storage not configured" });
+        if (SUPA_URL && SUPA_KEY) {
+          const safeName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9_\.\-]/g, "-")}`;
+          const supaPath = `${storeSlug}/${itemId || "temp"}/${safeName}`;
+          const supaUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/${BUCKET}/${supaPath}`;
+
+          const supaRes = await fetch(supaUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${SUPA_KEY}`,
+              "Content-Type": mimeType,
+              "x-upsert": "true",
+            } as any,
+            body: buffer,
+          } as any);
+
+          if (!supaRes.ok) {
+            const txt = await supaRes.text();
+            fastify.log.error({ status: supaRes.status, txt }, "Supabase upload failed");
+          } else {
+            const publicUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/public/${BUCKET}/${supaPath}`;
+            return reply.send({ publicUrl, path: supaPath });
+          }
         }
 
-        const safeName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9_\.\-]/g, "-")}`;
-        const supaPath = `${storeSlug}/${itemId || "temp"}/${safeName}`;
-        const supaUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/${BUCKET}/${supaPath}`;
-
-        const supaRes = await fetch(supaUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SUPA_KEY}`,
-            "Content-Type": mimeType,
-            "x-upsert": "true",
-          } as any,
-          body: buffer,
-        } as any);
-
-        if (!supaRes.ok) {
-          const txt = await supaRes.text();
-          fastify.log.error({ status: supaRes.status, txt }, "Supabase upload failed");
-          return reply.status(400).send({ error: "Upload failed", detail: txt });
+        const localKey = await buildKey();
+        const localFilePath = path.join(
+          LOCAL_UPLOAD_ROOT,
+          ...localKey.split("/").filter(Boolean)
+        );
+        await fs.mkdir(path.dirname(localFilePath), { recursive: true });
+        await fs.writeFile(localFilePath, buffer);
+        const proto = String(
+          (request.headers["x-forwarded-proto"] as string) ||
+            (request.protocol as string) ||
+            "https"
+        )
+          .split(",")[0]
+          .trim();
+        const host = String(
+          (request.headers["x-forwarded-host"] as string) ||
+            (request.headers.host as string) ||
+            ""
+        )
+          .split(",")[0]
+          .trim();
+        if (host) {
+          const publicUrl = `${proto}://${host}/uploads/${localKey
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`;
+          return reply.send({ publicUrl, path: localKey });
         }
-
-        const publicUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/public/${BUCKET}/${supaPath}`;
-        return reply.send({ publicUrl, path: supaPath });
+        return reply.status(500).send({ error: "Upload failed: storage not configured" });
       } catch (e: any) {
         fastify.log.error(e, "Manager image upload error");
         return reply.status(500).send({ error: "Upload failed" });
@@ -390,14 +680,26 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Table not found" });
         }
 
-        await db.waiterTable.deleteMany({
-          where: { storeId: store.id, tableId: id },
-        });
+        if (!table.isActive) {
+          await db.$transaction([
+            db.qRTile.updateMany({
+              where: { storeId: store.id, tableId: id },
+              data: { tableId: null },
+            }),
+            db.table.delete({ where: { id } }),
+          ]);
+          return reply.send({ deleted: true, id });
+        }
 
-        await db.table.update({
-          where: { id },
-          data: { isActive: false },
-        });
+        await db.$transaction([
+          db.waiterTable.deleteMany({
+            where: { storeId: store.id, tableId: id },
+          }),
+          db.table.update({
+            where: { id },
+            data: { isActive: false },
+          }),
+        ]);
 
         const withCounts = await getTableWithCounts(store.id, id);
         if (!withCounts) {
@@ -410,16 +712,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
       }
     }
   );
-
-  const normalizeSlug = (value: string) => {
-    const raw = (value || "").trim().toLowerCase();
-    if (!raw) return "";
-    return raw
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 100);
-  };
 
   const normalizePrinterTopic = (value?: string | null) => {
     const raw = (value || "").trim().toLowerCase();
@@ -458,222 +750,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
     return normalized;
   };
 
-  // Cook types CRUD
-  fastify.get(
-    "/manager/cook-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      const store = await ensureStore(request);
-      const types = await db.cookType.findMany({
-        where: { storeId: store.id },
-        orderBy: { title: "asc" },
-      });
-      return reply.send({ types });
-    }
-  );
-
-  const cookTypeCreate = z.object({
-    title: z.string().min(1),
-    printerTopic: z.string().trim().min(1).max(255).optional(),
-  });
-  fastify.post(
-    "/manager/cook-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const body = cookTypeCreate.parse(request.body);
-        const store = await ensureStore(request);
-        const slugBase = normalizeSlug(body.title);
-        const slug =
-          slugBase || `cook-${Math.random().toString(16).slice(2, 6)}`;
-        let printerTopic: string | null = null;
-        try {
-          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
-        } catch (error: any) {
-          return reply
-            .status(400)
-            .send({ error: error?.message || "Invalid printer topic" });
-        }
-        const created = await db.cookType.create({
-          data: { storeId: store.id, slug, title: body.title, printerTopic },
-        });
-        return reply.status(201).send({ type: created });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply.status(500).send({ error: "Failed to create cook type" });
-      }
-    }
-  );
-
-  const cookTypeUpdate = z.object({
-    title: z.string().min(1).optional(),
-    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
-  });
-  fastify.patch(
-    "/manager/cook-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        const body = cookTypeUpdate.parse(request.body);
-        const store = await ensureStore(request);
-        const data: any = {};
-        if (body.title) data.title = body.title;
-        if (body.printerTopic !== undefined) {
-          if (body.printerTopic === null) {
-            data.printerTopic = null;
-          } else {
-            try {
-              data.printerTopic = ensurePrinterTopicAllowed(
-                store,
-                body.printerTopic
-              );
-            } catch (error: any) {
-              return reply
-                .status(400)
-                .send({ error: error?.message || "Invalid printer topic" });
-            }
-          }
-        }
-        const updated = await db.cookType.update({ where: { id }, data });
-        return reply.send({ type: updated });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply.status(500).send({ error: "Failed to update cook type" });
-      }
-    }
-  );
-
-  fastify.delete(
-    "/manager/cook-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        await db.cookType.delete({ where: { id } });
-        return reply.send({ success: true });
-      } catch {
-        return reply.status(500).send({ error: "Failed to delete cook type" });
-      }
-    }
-  );
-
-  // Waiter types CRUD
-  fastify.get(
-    "/manager/waiter-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      const store = await ensureStore(request);
-      const types = await db.waiterType.findMany({
-        where: { storeId: store.id },
-        orderBy: { title: "asc" },
-      });
-      return reply.send({ types });
-    }
-  );
-
-  const waiterTypeCreate = z.object({
-    title: z.string().min(1),
-    printerTopic: z.string().trim().min(1).max(255).optional(),
-  });
-  fastify.post(
-    "/manager/waiter-types",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const body = waiterTypeCreate.parse(request.body);
-        const store = await ensureStore(request);
-        const slugBase = normalizeSlug(body.title);
-        const slug =
-          slugBase || `waiter-${Math.random().toString(16).slice(2, 6)}`;
-        let printerTopic: string | null = null;
-        try {
-          printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
-        } catch (error: any) {
-          return reply
-            .status(400)
-            .send({ error: error?.message || "Invalid printer topic" });
-        }
-        const created = await db.waiterType.create({
-          data: { storeId: store.id, slug, title: body.title, printerTopic },
-        });
-        return reply.status(201).send({ type: created });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply
-          .status(500)
-          .send({ error: "Failed to create waiter type" });
-      }
-    }
-  );
-
-  const waiterTypeUpdate = z.object({
-    title: z.string().min(1).optional(),
-    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
-  });
-  fastify.patch(
-    "/manager/waiter-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        const body = waiterTypeUpdate.parse(request.body);
-        const store = await ensureStore(request);
-        const data: any = {};
-        if (body.title) data.title = body.title;
-        if (body.printerTopic !== undefined) {
-          if (body.printerTopic === null) {
-            data.printerTopic = null;
-          } else {
-            try {
-              data.printerTopic = ensurePrinterTopicAllowed(
-                store,
-                body.printerTopic
-              );
-            } catch (error: any) {
-              return reply
-                .status(400)
-                .send({ error: error?.message || "Invalid printer topic" });
-            }
-          }
-        }
-        const updated = await db.waiterType.update({ where: { id }, data });
-        return reply.send({ type: updated });
-      } catch (e) {
-        if (e instanceof z.ZodError)
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: e.errors });
-        return reply
-          .status(500)
-          .send({ error: "Failed to update waiter type" });
-      }
-    }
-  );
-
-  fastify.delete(
-    "/manager/waiter-types/:id",
-    { preHandler: managerOnly },
-    async (request, reply) => {
-      try {
-        const { id } = request.params as { id: string };
-        await db.waiterType.delete({ where: { id } });
-        return reply.send({ success: true });
-      } catch {
-        return reply.status(500).send({ error: "Failed to delete waiter type" });
-      }
-    }
-  );
-
   // Waiters CRUD
   fastify.get(
     "/manager/waiters",
@@ -681,24 +757,15 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const store = await ensureStore(request);
       const waiters = await db.profile.findMany({
-        where: { storeId: store.id, role: "WAITER" },
+        where: { storeId: store.id, role: { in: staffServiceRoles } },
         orderBy: { displayName: "asc" },
-        include: { waiterType: true },
       });
       return reply.send({
         waiters: waiters.map((w) => ({
           id: w.id,
           email: w.email,
           displayName: w.displayName,
-          waiterTypeId: w.waiterTypeId,
-          waiterType: w.waiterType
-            ? {
-                id: w.waiterType.id,
-                slug: w.waiterType.slug,
-                title: w.waiterType.title,
-                printerTopic: w.waiterType.printerTopic,
-              }
-            : null,
+          role: w.role,
         })),
       });
     }
@@ -708,7 +775,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email(),
     password: z.string().min(6),
     displayName: z.string().min(1),
-    waiterTypeId: z.string().uuid().optional(),
+    hybrid: z.boolean().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.post(
     "/manager/waiters",
@@ -717,13 +785,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const body = waiterCreateSchema.parse(request.body);
         const store = await ensureStore(request);
-        const waiterType = body.waiterTypeId
-          ? await db.waiterType.findFirst({
-              where: { id: body.waiterTypeId, storeId: store.id },
-            })
-          : null;
-        if (body.waiterTypeId && !waiterType) {
-          return reply.status(404).send({ error: "Waiter type not found" });
+        let printerTopic: string | null = null;
+        if (body.hybrid && body.printerTopic) {
+          try {
+            printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+          } catch (error: any) {
+            return reply.status(400).send({ error: error.message });
+          }
         }
         const passwordHash = await bcrypt.hash(body.password, 10);
         const waiter = await db.profile.create({
@@ -731,26 +799,20 @@ export async function managerRoutes(fastify: FastifyInstance) {
             storeId: store.id,
             email: body.email.toLowerCase(),
             passwordHash,
-            role: "WAITER",
+            role: body.hybrid ? "HYBRID" : "WAITER",
             displayName: body.displayName,
-            waiterTypeId: waiterType?.id ?? null,
+            printerTopic,
+            waiterTypeId: null,
+            cookTypeId: null,
           },
-          include: { waiterType: true },
         });
         return reply.status(201).send({
           waiter: {
             id: waiter.id,
             email: waiter.email,
             displayName: waiter.displayName,
-            waiterTypeId: waiter.waiterTypeId,
-            waiterType: waiter.waiterType
-              ? {
-                  id: waiter.waiterType.id,
-                  slug: waiter.waiterType.slug,
-                  title: waiter.waiterType.title,
-                  printerTopic: waiter.waiterType.printerTopic,
-                }
-              : null,
+            role: waiter.role,
+            printerTopic: waiter.printerTopic,
           },
         });
       } catch (e) {
@@ -758,6 +820,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        request.log.error(e, "Failed to create waiter");
         return reply.status(500).send({ error: "Failed to create waiter" });
       }
     }
@@ -767,7 +830,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email().optional(),
     password: z.string().min(6).optional(),
     displayName: z.string().min(1).optional(),
-    waiterTypeId: z.string().uuid().nullable().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.patch(
     "/manager/waiters/:id",
@@ -782,40 +845,31 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (body.displayName) data.displayName = body.displayName;
         if (body.password)
           data.passwordHash = await bcrypt.hash(body.password, 10);
-        if (body.waiterTypeId !== undefined) {
-          if (body.waiterTypeId === null) {
-            data.waiterTypeId = null;
+        if (body.printerTopic !== undefined) {
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
           } else {
-            const waiterType = await db.waiterType.findFirst({
-              where: { id: body.waiterTypeId, storeId: store.id },
-            });
-            if (!waiterType) {
-              return reply
-                .status(404)
-                .send({ error: "Waiter type not found" });
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply.status(400).send({ error: error.message });
             }
-            data.waiterTypeId = waiterType.id;
           }
         }
         const updated = await db.profile.update({
           where: { id },
           data,
-          include: { waiterType: true },
         });
         return reply.send({
           waiter: {
             id: updated.id,
             email: updated.email,
             displayName: updated.displayName,
-            waiterTypeId: updated.waiterTypeId,
-            waiterType: updated.waiterType
-              ? {
-                  id: updated.waiterType.id,
-                  slug: updated.waiterType.slug,
-                  title: updated.waiterType.title,
-                  printerTopic: updated.waiterType.printerTopic,
-                }
-              : null,
+            role: updated.role,
+            printerTopic: updated.printerTopic,
           },
         });
       } catch (e) {
@@ -834,9 +888,41 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        await db.profile.delete({ where: { id } });
+        const store = await ensureStore(request);
+        const waiter = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: { in: staffServiceRoles } },
+          select: { id: true, role: true },
+        });
+        if (!waiter) {
+          return reply.status(404).send({ error: "Waiter not found" });
+        }
+
+        const cleanup = [
+          db.waiterTable.deleteMany({
+            where: { storeId: store.id, waiterId: id },
+          }),
+          db.waiterShift.deleteMany({
+            where: { storeId: store.id, waiterId: id },
+          }),
+          db.auditLog.updateMany({
+            where: { storeId: store.id, actorProfileId: id },
+            data: { actorProfileId: null },
+          }),
+        ];
+        await db.$transaction(
+          waiter.role === "HYBRID"
+            ? [
+                ...cleanup,
+                db.profile.update({
+                  where: { id },
+                  data: { role: "COOK", waiterTypeId: null },
+                }),
+              ]
+            : [...cleanup, db.profile.delete({ where: { id } })]
+        );
         return reply.send({ success: true });
-      } catch {
+      } catch (e) {
+        request.log.error(e, "Failed to delete waiter");
         return reply.status(500).send({ error: "Failed to delete waiter" });
       }
     }
@@ -849,24 +935,16 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const store = await ensureStore(request);
       const cooks = await db.profile.findMany({
-        where: { storeId: store.id, role: "COOK" },
+        where: { storeId: store.id, role: { in: kitchenServiceRoles } },
         orderBy: { displayName: "asc" },
-        include: { cookType: true },
       });
       return reply.send({
         cooks: cooks.map((c) => ({
           id: c.id,
           email: c.email,
           displayName: c.displayName,
-          cookTypeId: c.cookTypeId,
-          cookType: c.cookType
-            ? {
-                id: c.cookType.id,
-                slug: c.cookType.slug,
-                title: c.cookType.title,
-                printerTopic: c.cookType.printerTopic,
-              }
-            : null,
+          role: c.role,
+          printerTopic: c.printerTopic,
         })),
       });
     }
@@ -876,7 +954,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email(),
     password: z.string().min(6),
     displayName: z.string().min(1),
-    cookTypeId: z.string().uuid().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.post(
     "/manager/cooks",
@@ -885,13 +963,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const body = cookCreateSchema.parse(request.body);
         const store = await ensureStore(request);
-        const cookType = body.cookTypeId
-          ? await db.cookType.findFirst({
-              where: { id: body.cookTypeId, storeId: store.id },
-            })
-          : null;
-        if (body.cookTypeId && !cookType) {
-          return reply.status(404).send({ error: "Cook type not found" });
+        let printerTopic: string | null = null;
+        if (body.printerTopic) {
+          try {
+            printerTopic = ensurePrinterTopicAllowed(store, body.printerTopic);
+          } catch (error: any) {
+            return reply.status(400).send({ error: error.message });
+          }
         }
         const passwordHash = await bcrypt.hash(body.password, 10);
         const cook = await db.profile.create({
@@ -901,24 +979,18 @@ export async function managerRoutes(fastify: FastifyInstance) {
             passwordHash,
             role: "COOK",
             displayName: body.displayName,
-            cookTypeId: cookType?.id ?? null,
+            printerTopic,
+            cookTypeId: null,
+            waiterTypeId: null,
           },
-          include: { cookType: true },
         });
         return reply.status(201).send({
           cook: {
             id: cook.id,
             email: cook.email,
             displayName: cook.displayName,
-            cookTypeId: cook.cookTypeId,
-            cookType: cook.cookType
-              ? {
-                  id: cook.cookType.id,
-                  slug: cook.cookType.slug,
-                  title: cook.cookType.title,
-                  printerTopic: cook.cookType.printerTopic,
-                }
-              : null,
+            role: cook.role,
+            printerTopic: cook.printerTopic,
           },
         });
       } catch (e) {
@@ -926,6 +998,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        request.log.error(e, "Failed to create cook");
         return reply.status(500).send({ error: "Failed to create cook" });
       }
     }
@@ -935,7 +1008,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     email: z.string().email().optional(),
     password: z.string().min(6).optional(),
     displayName: z.string().min(1).optional(),
-    cookTypeId: z.string().uuid().nullable().optional(),
+    printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
   fastify.patch(
     "/manager/cooks/:id",
@@ -950,40 +1023,38 @@ export async function managerRoutes(fastify: FastifyInstance) {
         if (body.displayName) data.displayName = body.displayName;
         if (body.password)
           data.passwordHash = await bcrypt.hash(body.password, 10);
-        if (body.cookTypeId !== undefined) {
-          if (body.cookTypeId === null) {
-            data.cookTypeId = null;
+        if (body.printerTopic !== undefined) {
+          if (body.printerTopic === null) {
+            data.printerTopic = null;
           } else {
-            const cookType = await db.cookType.findFirst({
-              where: { id: body.cookTypeId, storeId: store.id },
-            });
-            if (!cookType) {
-              return reply
-                .status(404)
-                .send({ error: "Cook type not found" });
+            try {
+              data.printerTopic = ensurePrinterTopicAllowed(
+                store,
+                body.printerTopic
+              );
+            } catch (error: any) {
+              return reply.status(400).send({ error: error.message });
             }
-            data.cookTypeId = cookType.id;
           }
+        }
+        const cook = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
+          select: { id: true },
+        });
+        if (!cook) {
+          return reply.status(404).send({ error: "Cook not found" });
         }
         const updated = await db.profile.update({
           where: { id },
           data,
-          include: { cookType: true },
         });
         return reply.send({
           cook: {
             id: updated.id,
             email: updated.email,
             displayName: updated.displayName,
-            cookTypeId: updated.cookTypeId,
-            cookType: updated.cookType
-              ? {
-                  id: updated.cookType.id,
-                  slug: updated.cookType.slug,
-                  title: updated.cookType.title,
-                  printerTopic: updated.cookType.printerTopic,
-                }
-              : null,
+            role: updated.role,
+            printerTopic: updated.printerTopic,
           },
         });
       } catch (e) {
@@ -1002,7 +1073,22 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        await db.profile.delete({ where: { id } });
+        const store = await ensureStore(request);
+        const cook = await db.profile.findFirst({
+          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
+          select: { id: true, role: true },
+        });
+        if (!cook) {
+          return reply.status(404).send({ error: "Cook not found" });
+        }
+        if (cook.role === "HYBRID") {
+          await db.profile.update({
+            where: { id },
+            data: { role: "WAITER", cookTypeId: null, printerTopic: null },
+          });
+        } else {
+          await db.profile.delete({ where: { id } });
+        }
         return reply.send({ success: true });
       } catch {
         return reply.status(500).send({ error: "Failed to delete cook" });
@@ -1027,6 +1113,9 @@ export async function managerRoutes(fastify: FastifyInstance) {
           title: i.title,
           titleEn: i.titleEn || i.title,
           titleEl: i.titleEl || i.title,
+          subcategory: i.subcategoryEn ?? i.subcategoryEl ?? null,
+          subcategoryEn: i.subcategoryEn ?? null,
+          subcategoryEl: i.subcategoryEl ?? null,
           description: i.description,
           descriptionEn: i.descriptionEn ?? i.description,
           descriptionEl: i.descriptionEl ?? i.description,
@@ -1042,9 +1131,17 @@ export async function managerRoutes(fastify: FastifyInstance) {
     }
   );
 
+  const normalizeOptionalItemText = (value?: string | null) => {
+    if (value == null) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
   const itemCreateSchema = z.object({
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
+    subcategoryEn: z.string().trim().max(255).nullable().optional(),
+    subcategoryEl: z.string().trim().max(255).nullable().optional(),
     descriptionEn: z.string().optional(),
     descriptionEl: z.string().optional(),
     imageUrl: z.string().url().max(2048).optional(),
@@ -1083,6 +1180,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             title: body.titleEn,
             titleEn: body.titleEn,
             titleEl: body.titleEl,
+            subcategoryEn: normalizeOptionalItemText(body.subcategoryEn),
+            subcategoryEl: normalizeOptionalItemText(body.subcategoryEl),
             description: body.descriptionEn,
             descriptionEn: body.descriptionEn,
             descriptionEl: body.descriptionEl,
@@ -1117,6 +1216,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
+    subcategoryEn: z.string().trim().max(255).nullable().optional(),
+    subcategoryEl: z.string().trim().max(255).nullable().optional(),
     description: z.string().optional(),
     descriptionEn: z.string().optional().nullable(),
     descriptionEl: z.string().optional().nullable(),
@@ -1156,6 +1257,12 @@ export async function managerRoutes(fastify: FastifyInstance) {
         } else if (body.title) {
           data.title = body.title;
           data.titleEn = body.title;
+        }
+        if (body.subcategoryEn !== undefined) {
+          data.subcategoryEn = normalizeOptionalItemText(body.subcategoryEn);
+        }
+        if (body.subcategoryEl !== undefined) {
+          data.subcategoryEl = normalizeOptionalItemText(body.subcategoryEl);
         }
         const updated = await db.item.update({ where: { id }, data });
         invalidateMenuCache();
@@ -1589,6 +1696,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   const categoryCreate = z.object({
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
+    imageUrl: z.string().url().max(2048).nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).optional(),
   });
@@ -1615,11 +1723,13 @@ export async function managerRoutes(fastify: FastifyInstance) {
             title: body.titleEn,
             titleEn: body.titleEn,
             titleEl: body.titleEl,
+            imageUrl: body.imageUrl ?? null,
             slug,
             sortOrder: body.sortOrder ?? 0,
             printerTopic,
           },
         });
+        invalidateMenuCache();
         return reply.status(201).send({ category: cat });
       } catch (e) {
         if (e instanceof z.ZodError)
@@ -1635,6 +1745,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
+    imageUrl: z.string().url().max(2048).nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });
@@ -1661,6 +1772,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           data.printerTopic = normalizedPrinterTopic;
         }
         const updated = await db.category.update({ where: { id }, data });
+        invalidateMenuCache();
         return reply.send({ category: updated });
       } catch (e) {
         if (e instanceof z.ZodError)
@@ -1679,6 +1791,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         await db.category.delete({ where: { id } });
+        invalidateMenuCache();
         return reply.send({ success: true });
       } catch (e) {
         return reply.status(500).send({ error: "Failed to delete category" });

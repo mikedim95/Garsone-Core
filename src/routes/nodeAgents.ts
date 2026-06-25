@@ -1,29 +1,59 @@
 import { FastifyInstance } from "fastify";
+import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { invalidateStoreCache } from "../lib/store.js";
+import { publishMessage } from "../lib/mqtt.js";
 
 const adminOnly = [authMiddleware, requireRole(["architect"])];
+
+function isMissingNodeAgentTable(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2021" || error.code === "P2022")
+  );
+}
 
 const printerSchema = z.object({
   id: z.string().trim().max(80).optional(),
   type: z.enum(["58", "80"]),
   ordinal: z.coerce.number().int().min(1).max(99),
-  mac: z.string().trim().min(1).max(64),
+  mac: z.string().trim().max(64).optional().default(""),
   topicSuffix: z.string().trim().min(1).max(100),
   interface: z.string().trim().min(1).max(80).optional(),
   label: z.string().trim().max(120).optional(),
 });
 
+const wifiNetworkSchema = z.object({
+  id: z.string().trim().max(80).optional(),
+  ssid: z.string().trim().min(1).max(255),
+  password: z.string().max(255).optional().default(""),
+  priority: z.coerce.number().int().min(1).max(20).optional().default(1),
+  hidden: z.boolean().optional().default(false),
+});
+
+const hostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(63)
+  .refine(
+    (value) => !value || /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value),
+    "Use only letters, numbers, and hyphens; do not start or end with a hyphen"
+  )
+  .optional()
+  .default("");
+
 const nodeConfigSchema = z.object({
   displayName: z.string().trim().min(1).max(255).default("Venue Pi"),
   nodeSlug: z.string().trim().min(1).max(100).default("main"),
-  tailscaleHostname: z.string().trim().max(255).optional().default(""),
-  localHostname: z.string().trim().max(255).optional().default(""),
+  tailscaleHostname: hostnameSchema,
+  localHostname: hostnameSchema,
   wifiSsid: z.string().trim().max(255).optional().default(""),
   wifiPassword: z.string().max(255).optional().default(""),
+  wifiNetworks: z.array(wifiNetworkSchema).max(10).optional().default([]),
   mqttHost: z.string().trim().min(1).max(255),
   mqttPort: z.coerce.number().int().min(1).max(65535).default(8883),
   mqttTls: z.boolean().default(true),
@@ -40,11 +70,45 @@ const nodeConfigSchema = z.object({
   supportWhatsapp: z.string().trim().max(100).optional().default(""),
   supportUrl: z.string().trim().max(255).optional().default(""),
   notes: z.string().trim().max(2000).optional().default(""),
-  printers: z.array(printerSchema).min(1).max(99),
+  printers: z.array(printerSchema).max(99),
+});
+
+const claimConfigSchema = nodeConfigSchema.extend({
+  mqttHost: z.string().trim().max(255).optional().default(""),
+  printers: z.array(printerSchema.extend({
+    mac: z.string().trim().max(64).optional().default(""),
+  })).max(99).optional().default([]),
+});
+
+const bootstrapRegisterSchema = z.object({
+  nodeKey: z.string().trim().min(8).max(128),
+  pairingSecret: z.string().min(16).max(255),
+  displayName: z.string().trim().min(1).max(255).default("Unclaimed Pi"),
+  localHostname: z.string().trim().max(255).optional().default(""),
+  tailscaleHostname: z.string().trim().max(255).optional().default(""),
+  macAddresses: z.array(z.string().trim().min(1).max(64)).max(20).optional().default([]),
+  ipAddresses: z.array(z.string().trim().min(1).max(64)).max(20).optional().default([]),
+  bootstrap: z.record(z.unknown()).optional().default({}),
+});
+
+const claimPendingNodeSchema = z.object({
+  storeId: z.string().uuid(),
+  config: claimConfigSchema.optional(),
+});
+
+const testPrinterSchema = z.object({
+  topicSuffix: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/),
+  mac: z.string().trim().max(64).optional().default(""),
+  label: z.string().trim().max(120).optional().default(""),
+  type: z.enum(["58", "80"]).optional().default("58"),
 });
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function bootstrapTopic(nodeKey: string, event: "claim" | "config") {
+  return `garsone/nodes/${nodeKey}/${event}`;
 }
 
 function normalizeSlug(value: string) {
@@ -58,14 +122,34 @@ function normalizeSlug(value: string) {
   return slug || "main";
 }
 
+function testPrintPayload(storeSlug: string, storeName: string, printer: z.infer<typeof testPrinterSchema>) {
+  const now = new Date().toISOString();
+  return {
+    type: "PRINTER_TEST",
+    ts: now,
+    printerTopic: printer.topicSuffix,
+    printerName: printer.label || printer.topicSuffix,
+    printerWidth: printer.type,
+    venueName: storeName || storeSlug,
+  };
+}
+
 function serializeNode(node: any, includeSensitive = false) {
   const config = node.configJson && typeof node.configJson === "object" ? node.configJson : {};
   const safeConfig = { ...config };
   if (!includeSensitive) {
     if ("wifiPassword" in safeConfig) safeConfig.wifiPasswordSet = Boolean(safeConfig.wifiPassword);
     if ("mqttPass" in safeConfig) safeConfig.mqttPassSet = Boolean(safeConfig.mqttPass);
+    if (Array.isArray(safeConfig.wifiNetworks)) {
+      safeConfig.wifiNetworks = safeConfig.wifiNetworks.map((wifi: any) => ({
+        ...wifi,
+        passwordSet: Boolean(wifi?.password),
+        password: "",
+      }));
+    }
     delete safeConfig.wifiPassword;
     delete safeConfig.mqttPass;
+    delete safeConfig.mqttConfigToken;
   }
   return {
     id: node.id,
@@ -81,6 +165,47 @@ function serializeNode(node: any, includeSensitive = false) {
     createdAt: node.createdAt,
     updatedAt: node.updatedAt,
     config: safeConfig,
+  };
+}
+
+function serializePendingNode(row: any) {
+  return {
+    id: row.id,
+    nodeKey: row.nodeKey,
+    displayName: row.displayName,
+    localHostname: row.localHostname ?? "",
+    tailscaleHostname: row.tailscaleHostname ?? "",
+    macAddresses: Array.isArray(row.macAddresses) ? row.macAddresses : [],
+    ipAddresses: Array.isArray(row.ipAddresses) ? row.ipAddresses : [],
+    status: row.status,
+    storeId: row.storeId ?? null,
+    claimedNodeId: row.claimedNodeId ?? null,
+    lastSeenAt: row.lastSeenAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function buildConfigAck(node: any, body: any) {
+  const meta = body.meta && typeof body.meta === "object" ? body.meta as any : {};
+  const isLegacyConfigAck = /^MQTT config (applied|received)$/i.test(String(body.message || ""));
+  if (meta.type !== "config_ack" && !isLegacyConfigAck) return null;
+  const receivedAt =
+    typeof meta.receivedAt === "string" && meta.receivedAt.trim()
+      ? meta.receivedAt.trim()
+      : new Date().toISOString();
+  const version = body.version ?? node.lastAppliedVersion ?? null;
+  const applied = Boolean(meta.applied) || /applied/i.test(String(body.message || ""));
+  return {
+    version,
+    receivedAt,
+    message:
+      body.message && /^OK, got it/i.test(body.message)
+        ? body.message
+        : `OK, got it. Config${version ? ` v${version}` : ""} ${applied ? "applied" : "received"}.`,
+    applied,
+    status: body.status,
+    hostnames: meta.hostnames && typeof meta.hostnames === "object" ? meta.hostnames : undefined,
   };
 }
 
@@ -102,6 +227,163 @@ async function syncStorePrinterTopics(storeId: string, config: any) {
     data: { settingsJson: nextSettings },
   });
   invalidateStoreCache(store.slug);
+}
+
+async function recoverBootstrapNodeKeys(body: z.infer<typeof nodeConfigSchema>) {
+  const names = [body.localHostname, body.tailscaleHostname, body.displayName]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (names.length === 0) return [];
+  const rows = await db.$queryRaw<any[]>`
+    SELECT "nodeKey"
+    FROM "pending_node_agents"
+    WHERE "status" = 'CLAIMED'
+      AND (
+        "localHostname" IN (${Prisma.join(names)})
+        OR "tailscaleHostname" IN (${Prisma.join(names)})
+        OR "displayName" IN (${Prisma.join(names)})
+    )
+    ORDER BY "lastSeenAt" DESC
+    LIMIT 5
+  `;
+  return rows.map((row) => String(row?.nodeKey || "").trim()).filter(Boolean);
+}
+
+function mergeNodeConfig(body: z.infer<typeof nodeConfigSchema>, previousConfig: any = {}) {
+  const slug = normalizeSlug(body.nodeSlug);
+  const previousWifiById = new Map<string, any>(
+    Array.isArray(previousConfig.wifiNetworks)
+      ? previousConfig.wifiNetworks
+          .filter((wifi: any) => wifi?.id)
+          .map((wifi: any) => [String(wifi.id), wifi])
+      : []
+  );
+  const previousWifiBySsid = new Map<string, any>(
+    Array.isArray(previousConfig.wifiNetworks)
+      ? previousConfig.wifiNetworks
+          .filter((wifi: any) => wifi?.ssid)
+          .map((wifi: any) => [String(wifi.ssid), wifi])
+      : []
+  );
+  const wifiNetworks =
+    body.wifiNetworks.length > 0
+      ? body.wifiNetworks.map((wifi, index) => {
+          const previous =
+            previousWifiById.get(String(wifi.id || "")) ??
+            previousWifiBySsid.get(wifi.ssid);
+          return {
+            ...wifi,
+            id: wifi.id?.trim() || `wifi-${index + 1}`,
+            password: wifi.password || previous?.password || "",
+            priority: wifi.priority || index + 1,
+            hidden: Boolean(wifi.hidden),
+          };
+        })
+      : body.wifiSsid
+      ? [
+          {
+            id: "wifi-1",
+            ssid: body.wifiSsid,
+            password: body.wifiPassword || previousConfig.wifiPassword || "",
+            priority: 1,
+            hidden: false,
+          },
+        ]
+      : [];
+
+  return {
+    slug,
+    config: {
+      ...body,
+      nodeSlug: slug,
+      wifiNetworks,
+      wifiPassword: body.wifiPassword || previousConfig.wifiPassword || "",
+      mqttPass: body.mqttPass || previousConfig.mqttPass || "",
+      printers: body.printers.map((printer, index) => ({
+        id: printer.id?.trim() || `printer-${index + 1}`,
+        type: printer.type,
+        ordinal: printer.ordinal,
+        mac: printer.mac.trim(),
+        topicSuffix: printer.topicSuffix.trim(),
+        interface: printer.interface?.trim() || `/dev/rfcomm${index}`,
+        label: printer.label?.trim() || printer.topicSuffix.trim(),
+      })),
+    },
+  };
+}
+
+function mqttDefaultsFromEnv() {
+  const rawUrl =
+    process.env.EMQX_URL ||
+    process.env.MQTT_URL ||
+    process.env.MQTT_BROKER_URL ||
+    "";
+  let host = "";
+  let port = 8883;
+  let tls = true;
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      host = parsed.hostname;
+      port = parsed.port ? Number(parsed.port) : parsed.protocol === "mqtt:" ? 1883 : 8883;
+      tls = parsed.protocol === "mqtts:" || parsed.protocol === "wss:";
+    } catch {
+      host = rawUrl.replace(/^mqtts?:\/\//i, "").replace(/:\d+.*$/, "").replace(/\/.*$/, "");
+    }
+  }
+  return {
+    host,
+    port,
+    tls,
+    insecure: String(process.env.MQTT_REJECT_UNAUTHORIZED || "true").toLowerCase() === "false",
+    user: process.env.EMQX_USERNAME || process.env.MQTT_USERNAME || "",
+    pass: process.env.EMQX_PASSWORD || process.env.MQTT_PASSWORD || "",
+  };
+}
+
+function claimConfigFromPending(
+  input: z.infer<typeof claimConfigSchema> | undefined,
+  pending: any
+): z.infer<typeof nodeConfigSchema> {
+  const mqtt = mqttDefaultsFromEnv();
+  const localHostname = String(pending.localHostname || "").trim();
+  const displayName = String(pending.displayName || localHostname || "Venue Pi").trim();
+  const nodeSlug = normalizeSlug(input?.nodeSlug || localHostname || displayName || "main");
+  const printers = (input?.printers || [])
+    .map((printer, index) => ({
+      ...printer,
+      id: printer.id || `printer-${index + 1}`,
+      mac: String(printer.mac || "").trim(),
+      topicSuffix: printer.topicSuffix || `printer_${index + 1}`,
+      label: printer.label || printer.topicSuffix || `Printer ${index + 1}`,
+    }));
+
+  return nodeConfigSchema.parse({
+    displayName: input?.displayName || displayName,
+    nodeSlug,
+    tailscaleHostname: input?.tailscaleHostname || pending.tailscaleHostname || "",
+    localHostname: input?.localHostname || localHostname,
+    wifiSsid: input?.wifiSsid || "",
+    wifiPassword: input?.wifiPassword || "",
+    wifiNetworks: input?.wifiNetworks || [],
+    mqttHost: input?.mqttHost || mqtt.host,
+    mqttPort: input?.mqttPort || mqtt.port,
+    mqttTls: typeof input?.mqttTls === "boolean" ? input.mqttTls : mqtt.tls,
+    mqttInsecure: typeof input?.mqttInsecure === "boolean" ? input.mqttInsecure : mqtt.insecure,
+    mqttUser: input?.mqttUser || mqtt.user,
+    mqttPass: input?.mqttPass || mqtt.pass,
+    dockerImage: input?.dockerImage || "mikedim95/mqtt-printer:latest",
+    encoding: input?.encoding || "cp1253",
+    codepage: input?.codepage || "7",
+    feedLines: input?.feedLines || 3,
+    pollSeconds: input?.pollSeconds || 30,
+    timezone: input?.timezone || "Europe/Athens",
+    supportPhone: input?.supportPhone || "",
+    supportWhatsapp: input?.supportWhatsapp || "",
+    supportUrl: input?.supportUrl || "",
+    notes: input?.notes || "",
+    printers,
+  });
 }
 
 function buildAgentConfig(node: any, store: any) {
@@ -138,9 +420,49 @@ function buildAgentConfig(node: any, store: any) {
       tailscaleHostname: config.tailscaleHostname ?? "",
       wifiSsid: config.wifiSsid ?? "",
       wifiPassword: config.wifiPassword ?? "",
+      wifiNetworks: Array.isArray(config.wifiNetworks)
+        ? config.wifiNetworks
+        : config.wifiSsid
+        ? [
+            {
+              id: "wifi-1",
+              ssid: config.wifiSsid,
+              password: config.wifiPassword ?? "",
+              priority: 1,
+              hidden: false,
+            },
+          ]
+        : [],
     },
     printers: Array.isArray(config.printers) ? config.printers : [],
   };
+}
+
+async function publishNodeConfigIfAddressable(
+  node: any,
+  store: any,
+  nodeToken: string | null = null,
+  extraNodeKeys: string[] = []
+) {
+  const config = node.configJson && typeof node.configJson === "object" ? node.configJson as any : {};
+  const nodeKey = String(config.bootstrapNodeKey || "").trim();
+  const configToken = String(config.mqttConfigToken || "").trim();
+  if (!nodeKey) return;
+  const topicNodeKeys = Array.from(new Set([nodeKey, ...extraNodeKeys].map((key) => key.trim()).filter(Boolean)));
+  for (const topicNodeKey of topicNodeKeys) {
+    publishMessage(
+      bootstrapTopic(topicNodeKey, nodeToken ? "claim" : "config"),
+      {
+      type: nodeToken ? "CLAIMED" : "CONFIG_UPDATED",
+      nodeId: node.id,
+      nodeToken,
+      configToken,
+      config: buildAgentConfig(node, store),
+      ts: new Date().toISOString(),
+      },
+      { skipMqtt: false }
+    );
+  }
 }
 
 async function authenticateNode(request: any) {
@@ -156,16 +478,177 @@ async function authenticateNode(request: any) {
 }
 
 export async function nodeAgentRoutes(fastify: FastifyInstance) {
+  fastify.post("/node-agent/bootstrap/register", async (request, reply) => {
+    try {
+      const body = bootstrapRegisterSchema.parse(request.body ?? {});
+      const pairingHash = tokenHash(body.pairingSecret);
+      const rows = await db.$queryRaw<any[]>`
+        INSERT INTO "pending_node_agents"
+          ("nodeKey", "pairingHash", "displayName", "localHostname", "tailscaleHostname",
+           "macAddresses", "ipAddresses", "bootstrapJson", "status", "lastSeenAt", "updatedAt")
+        VALUES
+          (${body.nodeKey}, ${pairingHash}, ${body.displayName}, ${body.localHostname || null},
+           ${body.tailscaleHostname || null}, ${JSON.stringify(body.macAddresses)}::jsonb,
+           ${JSON.stringify(body.ipAddresses)}::jsonb, ${JSON.stringify(body.bootstrap)}::jsonb,
+           'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT ("nodeKey") DO UPDATE SET
+          "pairingHash" = EXCLUDED."pairingHash",
+          "displayName" = EXCLUDED."displayName",
+          "localHostname" = EXCLUDED."localHostname",
+          "tailscaleHostname" = EXCLUDED."tailscaleHostname",
+          "macAddresses" = EXCLUDED."macAddresses",
+          "ipAddresses" = EXCLUDED."ipAddresses",
+          "bootstrapJson" = EXCLUDED."bootstrapJson",
+          "lastSeenAt" = CURRENT_TIMESTAMP,
+          "updatedAt" = CURRENT_TIMESTAMP
+        RETURNING *
+      `;
+      const row = rows[0];
+      return reply.send({
+        pendingNode: serializePendingNode(row),
+        claimTopic: bootstrapTopic(body.nodeKey, "claim"),
+        configTopic: bootstrapTopic(body.nodeKey, "config"),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return reply.status(400).send({ error: "Invalid request", details: error.errors });
+      }
+      fastify.log.error(error, "Failed to register pending node");
+      return reply.status(500).send({ error: "Failed to register pending node" });
+    }
+  });
+
+  fastify.get(
+    "/admin/pending-nodes",
+    { preHandler: adminOnly },
+    async (_request, reply) => {
+      const rows = await db.$queryRaw<any[]>`
+        SELECT * FROM "pending_node_agents"
+        ORDER BY
+          CASE WHEN "status" = 'PENDING' THEN 0 ELSE 1 END,
+          "lastSeenAt" DESC
+        LIMIT 100
+      `;
+      return reply.send({ pendingNodes: rows.map(serializePendingNode) });
+    }
+  );
+
+  fastify.post(
+    "/admin/pending-nodes/:pendingNodeId/claim",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      try {
+        const { pendingNodeId } = request.params as { pendingNodeId: string };
+        const body = claimPendingNodeSchema.parse(request.body ?? {});
+        const pendingRows = await db.$queryRaw<any[]>`
+          SELECT * FROM "pending_node_agents"
+          WHERE "id" = ${pendingNodeId}::uuid
+          LIMIT 1
+        `;
+        const pending = pendingRows[0];
+        if (!pending) return reply.status(404).send({ error: "PENDING_NODE_NOT_FOUND" });
+        if (pending.status === "CLAIMED" && pending.claimedNodeId) {
+          return reply.status(409).send({ error: "PENDING_NODE_ALREADY_CLAIMED" });
+        }
+
+        const store = await db.store.findUnique({ where: { id: body.storeId } });
+        if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+
+        const claimConfig = claimConfigFromPending(body.config, pending);
+        const claimSlug = normalizeSlug(claimConfig.nodeSlug);
+        const existing = await db.nodeAgent.findUnique({
+          where: { storeId_slug: { storeId: body.storeId, slug: claimSlug } },
+        });
+        const previousConfig =
+          existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
+        const { slug, config } = mergeNodeConfig(claimConfig, previousConfig);
+        const configWithBootstrap = {
+          ...config,
+          bootstrapNodeKey: pending.nodeKey,
+          bootstrapMacAddresses: Array.isArray(pending.macAddresses) ? pending.macAddresses : [],
+          mqttConfigToken:
+            previousConfig.mqttConfigToken ||
+            `gcfg_${randomBytes(32).toString("base64url")}`,
+        };
+        const token = `gnode_${randomBytes(32).toString("base64url")}`;
+        const node = await db.nodeAgent.upsert({
+          where: { storeId_slug: { storeId: body.storeId, slug } },
+          update: {
+            displayName: claimConfig.displayName,
+            tokenHash: tokenHash(token),
+            configJson: configWithBootstrap,
+            desiredConfigVersion: { increment: 1 },
+            statusMessage: "Claimed from pending Pi",
+          },
+          create: {
+            storeId: body.storeId,
+            slug,
+            displayName: claimConfig.displayName,
+            tokenHash: tokenHash(token),
+            configJson: configWithBootstrap,
+            desiredConfigVersion: 1,
+            statusMessage: "Claimed from pending Pi",
+          },
+        });
+
+        await db.$executeRaw`
+          UPDATE "pending_node_agents"
+          SET "status" = 'CLAIMED',
+              "storeId" = ${body.storeId}::uuid,
+              "claimedNodeId" = ${node.id}::uuid,
+              "updatedAt" = CURRENT_TIMESTAMP
+          WHERE "id" = ${pendingNodeId}::uuid
+        `;
+        await syncStorePrinterTopics(body.storeId, configWithBootstrap);
+
+        const agentConfig = buildAgentConfig(node, store);
+        publishMessage(
+          bootstrapTopic(pending.nodeKey, "claim"),
+          {
+            type: "CLAIMED",
+            nodeId: node.id,
+            nodeToken: token,
+            configToken: configWithBootstrap.mqttConfigToken,
+            config: agentConfig,
+            ts: new Date().toISOString(),
+          },
+          { skipMqtt: false }
+        );
+
+        return reply.send({
+          node: serializeNode(node),
+          token: null,
+          tokenOnlyShownOnce: false,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to claim pending node");
+        return reply.status(500).send({ error: "Failed to claim pending node" });
+      }
+    }
+  );
+
   fastify.get(
     "/admin/stores/:storeId/nodes",
     { preHandler: adminOnly },
     async (request, reply) => {
       const { storeId } = request.params as { storeId: string };
-      const nodes = await db.nodeAgent.findMany({
-        where: { storeId },
-        orderBy: { createdAt: "asc" },
-      });
-      return reply.send({ nodes: nodes.map((node) => serializeNode(node)) });
+      try {
+        const nodes = await db.nodeAgent.findMany({
+          where: { storeId },
+          orderBy: { createdAt: "asc" },
+        });
+        return reply.send({ nodes: nodes.map((node) => serializeNode(node)) });
+      } catch (error) {
+        if (isMissingNodeAgentTable(error)) {
+          fastify.log.warn(error, "Node agent tables are not migrated yet");
+          return reply.send({ nodes: [], migrationRequired: true });
+        }
+        fastify.log.error(error, "Failed to list nodes");
+        return reply.status(500).send({ error: "Failed to list nodes" });
+      }
     }
   );
 
@@ -180,59 +663,120 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
 
         const body = nodeConfigSchema.parse(request.body ?? {});
         const slug = normalizeSlug(body.nodeSlug);
-        const existing = await db.nodeAgent.findUnique({
+        const existingBySlug = await db.nodeAgent.findUnique({
           where: { storeId_slug: { storeId, slug } },
         });
+        const existing =
+          existingBySlug ||
+          (await db.nodeAgent.findFirst({
+            where: { storeId },
+            orderBy: { createdAt: "asc" },
+          }));
         const secret = existing ? null : `gnode_${randomBytes(32).toString("base64url")}`;
         const previousConfig =
           existing?.configJson && typeof existing.configJson === "object" ? (existing.configJson as any) : {};
-        const config = {
-          ...body,
-          nodeSlug: slug,
-          wifiPassword: body.wifiPassword || previousConfig.wifiPassword || "",
-          mqttPass: body.mqttPass || previousConfig.mqttPass || "",
-          printers: body.printers.map((printer, index) => ({
-            id: printer.id?.trim() || `printer-${index + 1}`,
-            type: printer.type,
-            ordinal: printer.ordinal,
-            mac: printer.mac.trim(),
-            topicSuffix: printer.topicSuffix.trim(),
-            interface: printer.interface?.trim() || `/dev/rfcomm${index}`,
-            label: printer.label?.trim() || printer.topicSuffix.trim(),
-          })),
+        const { config } = mergeNodeConfig(body, previousConfig);
+        const recoveredBootstrapNodeKeys = Array.from(
+          new Set(
+            [
+              String(previousConfig.bootstrapNodeKey || "").trim(),
+              ...(await recoverBootstrapNodeKeys(body)),
+            ].filter(Boolean)
+          )
+        );
+        const recoveredBootstrapNodeKey = recoveredBootstrapNodeKeys[0] || "";
+        const recoveredConfigToken =
+          previousConfig.mqttConfigToken || `gcfg_${randomBytes(32).toString("base64url")}`;
+        const recoveredNodeToken =
+          existing &&
+          recoveredBootstrapNodeKey &&
+          (!previousConfig.mqttConfigToken || (existing.status === "PENDING" && !existing.lastSeenAt))
+            ? `gnode_${randomBytes(32).toString("base64url")}`
+            : null;
+        const configWithSecret = {
+          ...config,
+          bootstrapNodeKey: recoveredBootstrapNodeKey,
+          bootstrapMacAddresses: previousConfig.bootstrapMacAddresses,
+          mqttConfigToken: recoveredConfigToken,
         };
 
-        const node = await db.nodeAgent.upsert({
-          where: { storeId_slug: { storeId, slug } },
-          update: {
-            displayName: body.displayName,
-            configJson: config,
-            desiredConfigVersion: { increment: 1 },
-            statusMessage: "Configuration updated from Architect",
-          },
-          create: {
-            storeId,
-            slug,
-            displayName: body.displayName,
-            tokenHash: tokenHash(secret as string),
-            configJson: config,
-            desiredConfigVersion: 1,
-          },
-        });
+        const node = existing
+          ? await db.nodeAgent.update({
+              where: { id: existing.id },
+              data: {
+                slug,
+                displayName: body.displayName,
+                ...(recoveredNodeToken ? { tokenHash: tokenHash(recoveredNodeToken) } : {}),
+                configJson: configWithSecret,
+                desiredConfigVersion: { increment: 1 },
+                statusMessage: "Configuration updated from Architect",
+              },
+            })
+          : await db.nodeAgent.create({
+              data: {
+                storeId,
+                slug,
+                displayName: body.displayName,
+                tokenHash: tokenHash(secret as string),
+                configJson: configWithSecret,
+                desiredConfigVersion: 1,
+              },
+            });
 
-        await syncStorePrinterTopics(storeId, config);
+        await syncStorePrinterTopics(storeId, configWithSecret);
+        await publishNodeConfigIfAddressable(
+          node,
+          store,
+          recoveredNodeToken,
+          recoveredNodeToken ? recoveredBootstrapNodeKeys : []
+        );
 
         return reply.send({
           node: serializeNode(node),
-          token: secret,
-          tokenOnlyShownOnce: Boolean(secret),
+          token: null,
+          tokenOnlyShownOnce: false,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({ error: "Invalid request", details: error.errors });
         }
+        if (isMissingNodeAgentTable(error)) {
+          return reply.status(503).send({ error: "NODE_AGENT_MIGRATION_REQUIRED" });
+        }
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          return reply.status(409).send({ error: "NODE_SLUG_ALREADY_EXISTS" });
+        }
         fastify.log.error(error, "Failed to save node");
         return reply.status(500).send({ error: "Failed to save node" });
+      }
+    }
+  );
+
+  fastify.post(
+    "/admin/stores/:storeId/nodes/main/printers/test",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
+        const printer = testPrinterSchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, slug: true, name: true },
+        });
+        if (!store) {
+          return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        }
+
+        const topic = `${store.slug}/orders/preparing/${printer.topicSuffix}`;
+        const payload = testPrintPayload(store.slug, store.name, printer);
+        publishMessage(topic, payload, { roles: ["cook"] });
+        return reply.send({ ok: true, topic, payload });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to publish printer test");
+        return reply.status(500).send({ error: "Failed to publish printer test" });
       }
     }
   );
@@ -250,8 +794,26 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           desiredConfigVersion: { increment: 1 },
           statusMessage: "Node token rotated",
         },
+        include: { store: { select: { id: true, slug: true, name: true } } },
       });
-      return reply.send({ node: serializeNode(node), token, tokenOnlyShownOnce: true });
+      const config = node.configJson && typeof node.configJson === "object" ? node.configJson as any : {};
+      const nodeKey = String(config.bootstrapNodeKey || "").trim();
+      const configToken = String(config.mqttConfigToken || "").trim();
+      if (nodeKey && configToken) {
+        publishMessage(
+          bootstrapTopic(nodeKey, "config"),
+          {
+            type: "CONFIG_UPDATED",
+            nodeId: node.id,
+            nodeToken: token,
+            configToken,
+            config: buildAgentConfig(node, node.store),
+            ts: new Date().toISOString(),
+          },
+          { skipMqtt: false }
+        );
+      }
+      return reply.send({ node: serializeNode(node), token: null, tokenOnlyShownOnce: false });
     }
   );
 
@@ -280,6 +842,9 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     const node = await authenticateNode(request);
     if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
     const body = statusSchema.parse(request.body ?? {});
+    const ack = buildConfigAck(node, body);
+    const existingConfig =
+      node.configJson && typeof node.configJson === "object" ? (node.configJson as any) : {};
     const updated = await db.nodeAgent.update({
       where: { id: node.id },
       data: {
@@ -288,6 +853,14 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         status: body.status,
         statusMessage: body.message || null,
         lastLog: body.log || null,
+        ...(ack
+          ? {
+              configJson: {
+                ...existingConfig,
+                lastConfigAck: ack,
+              },
+            }
+          : {}),
       },
     });
     if (body.message || body.log) {

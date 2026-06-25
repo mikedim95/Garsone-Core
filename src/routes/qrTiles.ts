@@ -1,34 +1,101 @@
 import { FastifyInstance } from "fastify";
+import { Role } from "@prisma/client";
 import { z } from "zod";
+import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
+import { serializeRole } from "../lib/roles.js";
 
 const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
+const architectOnly = [authMiddleware, requireRole(["architect"])];
 
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
 const QR_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const QR_SEGMENT_LEN = 4;
 
-const generateTilesSchema = z.object({
-  count: z.coerce.number().int().min(1).max(500).default(1),
+const manualPublicCodeSchema = z
+  .string()
+  .transform((value) => value.trim().toUpperCase())
+  .refine((value) => QR_CODE_REGEX.test(value), {
+    message: "QR code must use the format GT-XXXX-XXXX",
+  });
+
+const generateTilesSchema = z
+  .object({
+    count: z.coerce.number().int().min(1).max(500).optional(),
+    publicCodes: z.array(manualPublicCodeSchema).min(1).max(500).optional(),
+  })
+  .refine((value) => Boolean(value.count) !== Boolean(value.publicCodes), {
+    message: "Provide either count or publicCodes",
+  })
+  .refine(
+    (value) => !value.publicCodes || new Set(value.publicCodes).size === value.publicCodes.length,
+    { message: "Manual QR codes must be unique" }
+  );
+
+const createStoreSchema = z.object({
+  slug: z.string().trim().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().trim().min(1).max(255),
+  defaultPassword: z.string().min(8).max(200),
+  currencyCode: z.string().trim().min(1).max(8).default("EUR"),
+  locale: z.string().trim().min(1).max(16).default("el"),
+  printerTopic: z.string().trim().min(1).max(255).default("printer_1"),
+  tableCount: z.coerce.number().int().min(1).max(200).default(10),
+  managerEmail: z.string().email().optional(),
+  waiterEmail: z.string().email().optional(),
+  cookEmail: z.string().email().optional(),
+});
+
+const storeUserRoleSchema = z.enum(["MANAGER", "WAITER", "COOK", "HYBRID"]);
+
+const storeUserCreateSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(4).max(200),
+  displayName: z.string().trim().min(1).max(255),
+  role: storeUserRoleSchema.default("WAITER"),
+});
+
+const storeUserUpdateSchema = z.object({
+  email: z.string().email().optional(),
+  password: z.string().min(4).max(200).optional(),
+  displayName: z.string().trim().min(1).max(255).optional(),
+  role: storeUserRoleSchema.optional(),
 });
 
 const updateSchema = z
   .object({
+    storeId: z.string().uuid().nullable().optional(),
     tableId: z.string().uuid().nullable().optional(),
     isActive: z.boolean().optional(),
-    label: z.string().trim().max(255).optional(),
+    label: z.string().trim().max(255).nullable().optional(),
   })
   .refine(
     (val) =>
+      typeof val.storeId !== "undefined" ||
       typeof val.tableId !== "undefined" ||
       typeof val.isActive !== "undefined" ||
       typeof val.label !== "undefined",
     { message: "No fields provided" }
   );
 
+const purgeStoreHistorySchema = z.object({
+  confirmation: z.string().trim().min(1).max(255),
+});
+
 const normalizePublicCode = (value: string) => (value || "").trim().toUpperCase();
+
+function serializeStoreUser(profile: any) {
+  return {
+    id: profile.id,
+    storeId: profile.storeId,
+    email: profile.email,
+    displayName: profile.displayName ?? "",
+    role: serializeRole(profile.role),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
 
 function randomQrSegment(length = QR_SEGMENT_LEN) {
   let out = "";
@@ -102,16 +169,68 @@ function wantsJsonResponse(request: any) {
 function serializeTile(tile: any) {
   return {
     id: tile.id,
-    storeId: tile.storeId,
-    storeSlug: tile.store?.slug,
+    storeId: tile.storeId ?? null,
+    storeSlug: tile.store?.slug ?? null,
+    storeName: tile.store?.name ?? null,
     publicCode: tile.publicCode,
-    label: null,
+    label: tile.label ?? null,
     isActive: tile.isActive,
-    tableId: tile.tableId,
+    tableId: tile.tableId ?? null,
     tableLabel: tile.table?.label ?? null,
     createdAt: tile.createdAt,
     updatedAt: tile.updatedAt,
   };
+}
+
+async function createTiles(
+  storeId: string | null,
+  count?: number,
+  publicCodes?: string[]
+) {
+  const generatedCodes = publicCodes ?? await generateUniquePublicCodes(count ?? 0);
+
+  if (publicCodes) {
+    const existing = await db.qRTile.findFirst({
+      where: { publicCode: { in: publicCodes } },
+      select: { publicCode: true },
+    });
+    if (existing) {
+      const error = new Error(`QR code ${existing.publicCode} already exists`) as Error & {
+        code: string;
+      };
+      error.code = "PUBLIC_CODE_ALREADY_EXISTS";
+      throw error;
+    }
+  }
+
+  const created = await db.$transaction(async (tx) => {
+    const tiles: any[] = [];
+    for (const publicCode of generatedCodes) {
+      const tile = await tx.qRTile.create({
+        data: storeId
+          ? {
+              storeId,
+              publicCode,
+              label: null,
+            }
+          : {
+              publicCode,
+              label: null,
+            },
+      });
+      tiles.push(tile);
+    }
+    return tiles;
+  });
+
+  return db.qRTile.findMany({
+    where: { id: { in: created.map((tile) => tile.id) } },
+    include: {
+      store: { select: { slug: true, name: true } },
+      table: { select: { id: true, label: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 const PUBLIC_APP_BASE_URL = (process.env.PUBLIC_APP_BASE_URL || "").trim();
@@ -185,6 +304,209 @@ function buildPublicRedirectUrl(
 }
 
 export async function qrTileRoutes(fastify: FastifyInstance) {
+  fastify.post(
+    "/admin/stores",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      const body = createStoreSchema.parse(request.body ?? {});
+      const existing = await db.store.findUnique({ where: { slug: body.slug } });
+      if (existing) {
+        return reply.status(409).send({ error: "STORE_ALREADY_EXISTS", id: existing.id });
+      }
+
+      const passwordHash = await bcrypt.hash(body.defaultPassword, 10);
+      const store = await db.$transaction(async (tx) => {
+        const createdStore = await tx.store.create({
+          data: {
+            slug: body.slug,
+            name: body.name,
+            settingsJson: { orderingMode: "hybrid", printers: [body.printerTopic] },
+          },
+        });
+        await tx.storeMeta.create({
+          data: {
+            storeId: createdStore.id,
+            currencyCode: body.currencyCode,
+            locale: body.locale,
+          },
+        });
+        const manager = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.managerEmail ?? `manager@${body.slug}.local`,
+            passwordHash,
+            role: Role.MANAGER,
+            displayName: `${body.name} Manager`,
+            isVerified: true,
+          },
+        });
+        const waiter = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.waiterEmail ?? `waiter@${body.slug}.local`,
+            passwordHash,
+            role: Role.WAITER,
+            displayName: `${body.name} Waiter`,
+            isVerified: true,
+          },
+        });
+        const cook = await tx.profile.create({
+          data: {
+            storeId: createdStore.id,
+            email: body.cookEmail ?? `cook@${body.slug}.local`,
+            passwordHash,
+            role: Role.COOK,
+            displayName: `${body.name} Cook`,
+            printerTopic: body.printerTopic,
+            isVerified: true,
+          },
+        });
+
+        for (let i = 1; i <= body.tableCount; i += 1) {
+          const table = await tx.table.create({
+            data: { storeId: createdStore.id, label: `T${i}`, isActive: true },
+          });
+          await tx.waiterTable.create({
+            data: {
+              storeId: createdStore.id,
+              waiterId: waiter.id,
+              tableId: table.id,
+            },
+          });
+        }
+
+        return { createdStore, manager, waiter, cook };
+      });
+      invalidateStoreCache(body.slug);
+
+      return reply.status(201).send({
+        store: {
+          id: store.createdStore.id,
+          slug: store.createdStore.slug,
+          name: store.createdStore.name,
+        },
+        profiles: {
+          manager: store.manager.email,
+          waiter: store.waiter.email,
+          cook: store.cook.email,
+        },
+        tableCount: body.tableCount,
+      });
+    }
+  );
+
+  fastify.get(
+    "/admin/stores/:storeId/users",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      const { storeId } = request.params as { storeId: string };
+      const store = await db.store.findUnique({ where: { id: storeId } });
+      if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+      const users = await db.profile.findMany({
+        where: {
+          storeId,
+          role: { in: [Role.MANAGER, Role.WAITER, Role.COOK, Role.HYBRID] },
+        },
+        orderBy: [{ role: "asc" }, { displayName: "asc" }],
+      });
+      return reply.send({ users: users.map(serializeStoreUser) });
+    }
+  );
+
+  fastify.post(
+    "/admin/stores/:storeId/users",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = request.params as { storeId: string };
+        const body = storeUserCreateSchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({ where: { id: storeId } });
+        if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        const user = await db.profile.create({
+          data: {
+            storeId,
+            email: body.email.toLowerCase(),
+            passwordHash: await bcrypt.hash(body.password, 10),
+            role: body.role as Role,
+            displayName: body.displayName,
+            isVerified: true,
+          },
+        });
+        return reply.status(201).send({ user: serializeStoreUser(user) });
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if (error?.code === "P2002") {
+          return reply.status(409).send({ error: "USER_ALREADY_EXISTS" });
+        }
+        fastify.log.error(error, "Failed to create store user");
+        return reply.status(500).send({ error: "Failed to create store user" });
+      }
+    }
+  );
+
+  fastify.patch(
+    "/admin/stores/:storeId/users/:userId",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId, userId } = request.params as { storeId: string; userId: string };
+        const body = storeUserUpdateSchema.parse(request.body ?? {});
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+        const data: any = {};
+        if (body.email) data.email = body.email.toLowerCase();
+        if (body.displayName) data.displayName = body.displayName;
+        if (body.password) data.passwordHash = await bcrypt.hash(body.password, 10);
+        if (body.role) {
+          data.role = body.role as Role;
+          if (body.role !== "WAITER" && body.role !== "HYBRID") data.waiterTypeId = null;
+          if (body.role !== "COOK" && body.role !== "HYBRID") {
+            data.cookTypeId = null;
+            data.printerTopic = null;
+          }
+        }
+        const user = await db.profile.update({ where: { id: userId }, data });
+        return reply.send({ user: serializeStoreUser(user) });
+      } catch (error: any) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        if (error?.code === "P2002") {
+          return reply.status(409).send({ error: "USER_ALREADY_EXISTS" });
+        }
+        fastify.log.error(error, "Failed to update store user");
+        return reply.status(500).send({ error: "Failed to update store user" });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/admin/stores/:storeId/users/:userId",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId, userId } = request.params as { storeId: string; userId: string };
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
+        await db.$transaction(async (tx) => {
+          await tx.auditLog.updateMany({
+            where: { actorProfileId: userId },
+            data: { actorProfileId: null },
+          });
+          await tx.waiterTable.deleteMany({ where: { waiterId: userId } });
+          await tx.waiterShift.deleteMany({ where: { waiterId: userId } });
+          await tx.profile.delete({ where: { id: userId } });
+        });
+        return reply.send({ success: true });
+      } catch (error) {
+        fastify.log.error(error, "Failed to delete store user");
+        return reply.status(500).send({ error: "Failed to delete store user" });
+      }
+    }
+  );
+
   // Resolve a tableId to its store slug/label for QR redirects that lack storeSlug param
   fastify.get("/public/table/:tableId", async (request, reply) => {
     const { tableId } = request.params as { tableId: string };
@@ -400,6 +722,157 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     }
   );
 
+  fastify.delete(
+    "/admin/stores/:storeId/history",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = request.params as { storeId: string };
+        const body = purgeStoreHistorySchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({
+          where: { id: storeId },
+          select: { id: true, slug: true, name: true },
+        });
+        if (!store) {
+          return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        }
+
+        const expectedConfirmation = `DELETE HISTORY ${store.slug}`;
+        if (body.confirmation !== expectedConfirmation) {
+          return reply.status(400).send({
+            error: "CONFIRMATION_MISMATCH",
+            expected: expectedConfirmation,
+          });
+        }
+
+        const actorId =
+          typeof (request as any)?.user?.userId === "string"
+            ? (request as any).user.userId
+            : null;
+
+        const result = await db.$transaction(async (tx: any) => {
+          const [
+            orders,
+            tableVisits,
+            localityApprovals,
+            waiterShifts,
+            kitchenTicketSeqs,
+            auditLogs,
+            nodeAgentEvents,
+          ] = await Promise.all([
+            tx.order.count({ where: { storeId } }),
+            tx.tableVisit.count({ where: { storeId } }),
+            tx.localityApproval.count({ where: { storeId } }),
+            tx.waiterShift.count({ where: { storeId } }),
+            tx.kitchenTicketSeq.count({ where: { storeId } }),
+            tx.auditLog.count({ where: { storeId } }),
+            tx.nodeAgentEvent.count({ where: { storeId } }),
+          ]);
+
+          await tx.localityApproval.deleteMany({ where: { storeId } });
+          await tx.tableVisit.deleteMany({ where: { storeId } });
+          await tx.waiterShift.deleteMany({ where: { storeId } });
+          await tx.kitchenTicketSeq.deleteMany({ where: { storeId } });
+          await tx.nodeAgentEvent.deleteMany({ where: { storeId } });
+          await tx.auditLog.deleteMany({ where: { storeId } });
+          await tx.order.deleteMany({ where: { storeId } });
+
+          await tx.auditLog.create({
+            data: {
+              storeId,
+              action: "store.history_purged",
+              entityType: "store",
+              entityId: storeId,
+              actorProfileId: actorId,
+              metaJson: {
+                storeSlug: store.slug,
+                storeName: store.name,
+                deleted: {
+                  orders,
+                  tableVisits,
+                  localityApprovals,
+                  waiterShifts,
+                  kitchenTicketSeqs,
+                  auditLogs,
+                  nodeAgentEvents,
+                },
+              },
+            },
+          });
+
+          return {
+            orders,
+            tableVisits,
+            localityApprovals,
+            waiterShifts,
+            kitchenTicketSeqs,
+            auditLogs,
+            nodeAgentEvents,
+          };
+        });
+
+        return reply.send({
+          success: true,
+          store: { id: store.id, slug: store.slug, name: store.name },
+          deleted: result,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to purge store history");
+        return reply.status(500).send({ error: "Failed to purge store history" });
+      }
+    }
+  );
+
+  fastify.get(
+    "/admin/qr-tiles",
+    { preHandler: architectOnly },
+    async (_request, reply) => {
+      const tiles = await db.qRTile.findMany({
+        include: {
+          store: { select: { slug: true, name: true } },
+          table: { select: { id: true, label: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return reply.send({
+        tiles: tiles.map(serializeTile),
+      });
+    }
+  );
+
+  fastify.post(
+    "/admin/qr-tiles/bulk",
+    { preHandler: architectOnly },
+    async (request, reply) => {
+      try {
+        const body = generateTilesSchema.parse(request.body ?? {});
+        const created = await createTiles(null, body.count, body.publicCodes);
+        return reply.status(201).send({
+          tiles: created.map(serializeTile),
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        if (["P2002", "PUBLIC_CODE_ALREADY_EXISTS"].includes((error as any)?.code)) {
+          return reply
+            .status(409)
+            .send({ error: (error as Error).message || "QR code already exists" });
+        }
+        fastify.log.error(error, "Failed to generate global QR tiles");
+        return reply.status(500).send({ error: "Failed to generate QR tiles" });
+      }
+    }
+  );
+
   fastify.patch(
     "/admin/stores/:storeId/ordering-mode",
     { preHandler: adminOnly },
@@ -554,7 +1027,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       const tiles = await db.qRTile.findMany({
         where: { storeId },
         include: {
-          store: { select: { slug: true } },
+          store: { select: { slug: true, name: true } },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -583,31 +1056,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "STORE_NOT_FOUND" });
         }
 
-        const generatedCodes = await generateUniquePublicCodes(body.count);
-
-        const created = await db.$transaction(async (tx) => {
-          const tiles: any[] = [];
-          for (const publicCode of generatedCodes) {
-            const tile = await tx.qRTile.create({
-              data: {
-                storeId: store.id,
-                publicCode,
-                label: null,
-              },
-            });
-            tiles.push(tile);
-          }
-          return tiles;
-        });
-
-        const hydrated = await db.qRTile.findMany({
-          where: { id: { in: created.map((t) => t.id) } },
-          include: {
-            store: { select: { slug: true } },
-            table: { select: { id: true, label: true } },
-          },
-          orderBy: { createdAt: "desc" },
-        });
+        const hydrated = await createTiles(store.id, body.count, body.publicCodes);
 
         return reply
           .status(201)
@@ -618,10 +1067,10 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
         }
-        if ((error as any)?.code === "P2002") {
+        if (["P2002", "PUBLIC_CODE_ALREADY_EXISTS"].includes((error as any)?.code)) {
           return reply
             .status(409)
-            .send({ error: "FAILED_TO_GENERATE_UNIQUE_CODES" });
+            .send({ error: (error as Error).message || "QR code already exists" });
         }
         fastify.log.error(error, "Failed to generate QR tiles");
         return reply.status(500).send({ error: "Failed to generate QR tiles" });
@@ -636,11 +1085,12 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       try {
         const { id } = request.params as { id: string };
         const body = updateSchema.parse(request.body ?? {});
+        const userRole = String((request as any)?.user?.role || "").toLowerCase();
 
         const tile = await db.qRTile.findUnique({
           where: { id },
           include: {
-            store: { select: { id: true, slug: true } },
+            store: { select: { id: true, slug: true, name: true } },
             table: { select: { id: true, label: true } },
           },
         });
@@ -649,26 +1099,66 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "QR_TILE_NOT_FOUND" });
         }
 
+        if (typeof body.storeId !== "undefined" && userRole !== "architect") {
+          return reply
+            .status(403)
+            .send({ error: "Only architects can change venue bindings" });
+        }
+
         const updateData: any = {};
         if (typeof body.isActive !== "undefined") {
           updateData.isActive = body.isActive;
         }
         if (typeof body.label !== "undefined") {
-          updateData.label = null;
+          updateData.label = body.label?.trim() ? body.label.trim() : null;
         }
-        if (typeof body.tableId !== "undefined") {
+
+        let nextStoreId =
+          typeof body.storeId !== "undefined" ? body.storeId : tile.storeId ?? null;
+        const hasStoreChange =
+          typeof body.storeId !== "undefined" && body.storeId !== (tile.storeId ?? null);
+
+        if (typeof body.storeId !== "undefined" && body.storeId) {
+          const store = await db.store.findUnique({
+            where: { id: body.storeId },
+            select: { id: true },
+          });
+          if (!store) {
+            return reply.status(400).send({ error: "STORE_NOT_FOUND" });
+          }
+        }
+
+        if (body.storeId === null) {
+          nextStoreId = null;
+          updateData.storeId = null;
+          updateData.tableId = null;
+        } else if (typeof body.tableId !== "undefined") {
           if (body.tableId === null) {
             updateData.tableId = null;
+            if (typeof body.storeId !== "undefined") {
+              updateData.storeId = nextStoreId;
+            }
           } else {
-            const table = await db.table.findFirst({
-              where: { id: body.tableId, storeId: tile.storeId },
+            const table = await db.table.findUnique({
+              where: { id: body.tableId },
+              select: { id: true, storeId: true },
             });
             if (!table) {
+              return reply.status(400).send({ error: "TABLE_NOT_FOUND" });
+            }
+            if (nextStoreId && table.storeId !== nextStoreId) {
               return reply
                 .status(400)
                 .send({ error: "TABLE_NOT_FOUND_FOR_STORE" });
             }
+            updateData.storeId = table.storeId;
             updateData.tableId = table.id;
+            nextStoreId = table.storeId;
+          }
+        } else if (typeof body.storeId !== "undefined") {
+          updateData.storeId = nextStoreId;
+          if (hasStoreChange) {
+            updateData.tableId = null;
           }
         }
 
@@ -676,7 +1166,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           where: { id },
           data: updateData,
           include: {
-            store: { select: { slug: true } },
+            store: { select: { slug: true, name: true } },
             table: { select: { id: true, label: true } },
           },
         });

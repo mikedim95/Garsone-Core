@@ -1,9 +1,7 @@
 // prisma/store_onboard_seed.ts
 //
 // Usage:
-//   1. Adjust NEW_STORE_CONFIG below.
-//   2. Run: npx ts-node prisma/store_onboard_seed.ts
-//      (or add npm script: "onboard:store": "ts-node prisma/store_onboard_seed.ts")
+//   STORE_SLUG=noor STORE_NAME=Noor DEFAULT_PASSWORD=... npm run onboard:store
 //
 // What it does:
 //   - Creates 1 Store + StoreMeta
@@ -11,10 +9,11 @@
 //   - Creates 10 tables (T1..T10)
 //   - Assigns waiter to all tables
 //   - Does NOT create QR tiles (architect dashboard generates them)
-//   - Optionally seeds a demo menu + N days of orders using all OrderStatus values
+//   - Optionally seeds demo menu + orders when CREATE_DEMO_MENU_AND_ORDERS=true
 
 import { PrismaClient, Role, OrderStatus } from "@prisma/client";
 import bcrypt from "bcrypt";
+import "dotenv/config";
 import { applyDbConnection } from "../src/db/config";
 
 const { target: dbTarget, databaseUrl } = applyDbConnection();
@@ -33,45 +32,50 @@ try {
 
 const prisma = new PrismaClient();
 
+function env(name: string, fallback = ""): string {
+  return (process.env[name] ?? fallback).trim();
+}
+
 // =====================
 // CONFIG – FILL THESE
 // =====================
 
 const NEW_STORE_CONFIG = {
-  slug: "random-test-store-from-seed", // MUST be unique
-  name: "Random Test Store",
-  currencyCode: "EUR",
-  locale: "el",
+  slug: env("STORE_SLUG", "noor"), // MUST be unique
+  name: env("STORE_NAME", "Noor"),
+  currencyCode: env("STORE_CURRENCY", "EUR"),
+  locale: env("STORE_LOCALE", "el"),
 
   manager: {
-    email: "manager@random-test-store.local",
-    displayName: "Store Manager",
+    email: env("MANAGER_EMAIL", "manager@noor.local"),
+    displayName: env("MANAGER_NAME", "Noor Manager"),
   },
   waiter: {
-    email: "waiter@random-test-store.local",
-    displayName: "Main Waiter",
+    email: env("WAITER_EMAIL", "waiter@noor.local"),
+    displayName: env("WAITER_NAME", "Noor Waiter"),
   },
   cook: {
-    email: "cook@random-test-store.local",
-    displayName: "Head Cook",
+    email: env("COOK_EMAIL", "cook@noor.local"),
+    displayName: env("COOK_NAME", "Noor Cook"),
   },
   cookType: {
-    slug: "kitchen",
-    title: "Kitchen",
-    printerTopic: "printer_1",
+    slug: env("COOK_TYPE_SLUG", "kitchen"),
+    title: env("COOK_TYPE_TITLE", "Kitchen"),
+    printerTopic: env("PRINTER_TOPIC", "printer_1"),
   },
   waiterType: {
-    slug: "floor",
-    title: "Floor",
-    printerTopic: "printer_1",
+    slug: env("WAITER_TYPE_SLUG", "floor"),
+    title: env("WAITER_TYPE_TITLE", "Floor"),
+    printerTopic: env("PRINTER_TOPIC", "printer_1"),
   },
 
   // All 3 profiles will use this password.
-  defaultPassword: "changeme",
+  defaultPassword: env("DEFAULT_PASSWORD"),
 };
 
 // Toggle this to also create demo menu + orders
-const CREATE_DEMO_MENU_AND_ORDERS = true;
+const CREATE_DEMO_MENU_AND_ORDERS =
+  env("CREATE_DEMO_MENU_AND_ORDERS", "false").toLowerCase() === "true";
 
 // How many days back to create sample orders (if enabled)
 const DAYS_BACK = 60;
@@ -90,6 +94,8 @@ const DEMO_MENU: {
     title: string;
     titleEl: string;
     titleEn: string;
+    subcategoryEn?: string | null;
+    subcategoryEl?: string | null;
     description?: string | null;
     descriptionEl?: string | null;
     descriptionEn?: string | null;
@@ -99,110 +105,218 @@ const DEMO_MENU: {
   }[];
 }[] = [
   {
-    slug: "coffee",
-    title: "Coffee",
-    titleEl: "Καφές",
-    titleEn: "Coffee",
+    slug: "souvlaki",
+    title: "Souvlaki",
+    titleEl: "Σουβλάκι",
+    titleEn: "Souvlaki",
+    printerTopic: "printer_1",
     items: [
       {
-        slug: "espresso-single",
-        title: "Espresso Single",
-        titleEl: "Εσπρέσο Μονός",
-        titleEn: "Espresso Single",
-        description: "Single espresso shot",
-        descriptionEl: "Μονός εσπρέσο",
-        descriptionEn: "Single espresso shot",
-        priceCents: 250,
-        costCents: 70,
-        imageUrl: null,
-      },
-      {
-        slug: "espresso-double",
-        title: "Espresso Double",
-        titleEl: "Εσπρέσο Διπλός",
-        titleEn: "Espresso Double",
-        description: "Double espresso shot",
-        descriptionEl: "Διπλός εσπρέσο",
-        descriptionEn: "Double espresso shot",
-        priceCents: 300,
-        costCents: 90,
-        imageUrl: null,
-      },
-      {
-        slug: "freddo-espresso",
-        title: "Freddo Espresso",
-        titleEl: "Φρέντο Εσπρέσο",
-        titleEn: "Freddo Espresso",
-        description: "Iced espresso over ice",
-        descriptionEl: "Κρύος εσπρέσο με πάγο",
-        descriptionEn: "Iced espresso over ice",
-        priceCents: 350,
-        costCents: 100,
-        imageUrl: null,
-      },
-    ],
-  },
-  {
-    slug: "cold-drinks",
-    title: "Cold Drinks",
-    titleEl: "Κρύα Ροφήματα",
-    titleEn: "Cold Drinks",
-    items: [
-      {
-        slug: "cola-330",
-        title: "Cola 330ml",
-        titleEl: "Κόλα 330ml",
-        titleEn: "Cola 330ml",
-        description: "Soft drink 330ml",
-        descriptionEl: "Αναψυκτικό 330ml",
-        descriptionEn: "Soft drink 330ml",
-        priceCents: 250,
-        costCents: 80,
-        imageUrl: null,
-      },
-      {
-        slug: "orange-juice",
-        title: "Orange Juice",
-        titleEl: "Χυμός Πορτοκάλι",
-        titleEn: "Orange Juice",
-        description: "Fresh orange juice (glass)",
-        descriptionEl: "Φρεσκοστυμμένος χυμός πορτοκάλι",
-        descriptionEn: "Fresh orange juice",
-        priceCents: 400,
-        costCents: 150,
-        imageUrl: null,
-      },
-    ],
-  },
-  {
-    slug: "snacks",
-    title: "Snacks",
-    titleEl: "Σνακ",
-    titleEn: "Snacks",
-    items: [
-      {
-        slug: "toast-ham-cheese",
-        title: "Ham & Cheese Toast",
-        titleEl: "Τοστ Ζαμπόν Τυρί",
-        titleEn: "Ham & Cheese Toast",
-        description: "Classic toast with ham and cheese",
-        descriptionEl: "Κλασικό τοστ με ζαμπόν και τυρί",
-        descriptionEn: "Classic toast with ham and cheese",
+        slug: "pita-pork",
+        title: "Pita Pork",
+        titleEl: "Πίτα Χοιρινό",
+        titleEn: "Pita Pork",
+        subcategoryEn: "Pita Wraps",
+        subcategoryEl: "Τυλιχτά Πίτας",
+        description: "Pita wrap with pork gyro, fries, onion and tzatziki.",
+        descriptionEl: "Τυλιχτή πίτα με χοιρινό γύρο, πατάτες, κρεμμύδι και τζατζίκι.",
+        descriptionEn: "Pita wrap with pork gyro, fries, onion and tzatziki.",
         priceCents: 350,
         costCents: 120,
-        imageUrl: null,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-pork.jpg",
       },
       {
-        slug: "club-sandwich",
-        title: "Club Sandwich",
-        titleEl: "Κλαμπ Σάντουιτς",
-        titleEn: "Club Sandwich",
-        description: "Triple sandwich with fries",
-        descriptionEl: "Τριπλό σάντουιτς με πατάτες",
-        descriptionEn: "Triple sandwich with fries",
-        priceCents: 750,
-        costCents: 300,
-        imageUrl: null,
+        slug: "pita-chicken",
+        title: "Pita Chicken",
+        titleEl: "Πίτα Κοτόπουλο",
+        titleEn: "Pita Chicken",
+        subcategoryEn: "Pita Wraps",
+        subcategoryEl: "Τυλιχτά Πίτας",
+        description: "Pita wrap with chicken gyro, fries, tomato and tzatziki.",
+        descriptionEl: "Τυλιχτή πίτα με γύρο κοτόπουλο, πατάτες, ντομάτα και τζατζίκι.",
+        descriptionEn: "Pita wrap with chicken gyro, fries, tomato and tzatziki.",
+        priceCents: 380,
+        costCents: 130,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/souvlaki/pita-chicken.jpg",
+      },
+    ],
+  },
+  {
+    slug: "plates",
+    title: "Plates",
+    titleEl: "Μερίδες",
+    titleEn: "Plates",
+    printerTopic: "printer_1",
+    items: [
+      {
+        slug: "gyro-plate",
+        title: "Gyro Plate",
+        titleEl: "Μερίδα Γύρος",
+        titleEn: "Gyro Plate",
+        subcategoryEn: "Grill Plates",
+        subcategoryEl: "Μερίδες Σχάρας",
+        description: "Gyro plate with fries, pita, onion and tzatziki.",
+        descriptionEl: "Μερίδα γύρου με πατάτες, πίτα, κρεμμύδι και τζατζίκι.",
+        descriptionEn: "Gyro plate with fries, pita, onion and tzatziki.",
+        priceCents: 900,
+        costCents: 320,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/gyro-plate.jpg",
+      },
+      {
+        slug: "mixed-grill",
+        title: "Mixed Grill",
+        titleEl: "Ποικιλία Σχάρας",
+        titleEn: "Mixed Grill",
+        subcategoryEn: "Grill Plates",
+        subcategoryEl: "Μερίδες Σχάρας",
+        description: "Mixed grill selection with pita, fries and sauces.",
+        descriptionEl: "Ποικιλία σχάρας με πίτα, πατάτες και σάλτσες.",
+        descriptionEn: "Mixed grill selection with pita, fries and sauces.",
+        priceCents: 1400,
+        costCents: 520,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/plates/mixed-grill.jpg",
+      },
+    ],
+  },
+  {
+    slug: "drinks",
+    title: "Drinks",
+    titleEl: "Ποτά",
+    titleEn: "Drinks",
+    printerTopic: "printer_1",
+    items: [
+      {
+        slug: "cola",
+        title: "Cola",
+        titleEl: "Κόλα",
+        titleEn: "Cola",
+        subcategoryEn: "Cold Drinks",
+        subcategoryEl: "Κρύα Ροφήματα",
+        description: "Soft drink served cold.",
+        descriptionEl: "Αναψυκτικό σερβιρισμένο παγωμένο.",
+        descriptionEn: "Soft drink served cold.",
+        priceCents: 200,
+        costCents: 70,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/cola.jpg",
+      },
+      {
+        slug: "beer",
+        title: "Beer",
+        titleEl: "Μπίρα",
+        titleEn: "Beer",
+        subcategoryEn: "Cold Drinks",
+        subcategoryEl: "Κρύα Ροφήματα",
+        description: "Draft beer served chilled.",
+        descriptionEl: "Μπύρα βαρελίσια παγωμένη.",
+        descriptionEn: "Draft beer served chilled.",
+        priceCents: 450,
+        costCents: 160,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/drinks/beer.jpg",
+      },
+    ],
+  },
+  {
+    slug: "shisha",
+    title: "Shisha",
+    titleEl: "Ναργιλές",
+    titleEn: "Shisha",
+    printerTopic: "printer_1",
+    items: [
+      {
+        slug: "shisha-double-apple",
+        title: "Double Apple Shisha",
+        titleEl: "Ναργιλές Διπλό Μήλο",
+        titleEn: "Double Apple Shisha",
+        subcategoryEn: "Sweet",
+        subcategoryEl: "Γλυκές Γεύσεις",
+        description: "Classic double apple flavor.",
+        descriptionEl: "Κλασική γεύση διπλό μήλο.",
+        descriptionEn: "Classic double apple flavor.",
+        priceCents: 1800,
+        costCents: 650,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Double-apple.webp",
+      },
+      {
+        slug: "shisha-blueberry-mint",
+        title: "Blueberry Mint Shisha",
+        titleEl: "Ναργιλές Μύρτιλο Μέντα",
+        titleEn: "Blueberry Mint Shisha",
+        subcategoryEn: "Sweet",
+        subcategoryEl: "Γλυκές Γεύσεις",
+        description: "Blueberry with a cool mint finish.",
+        descriptionEl: "Μύρτιλο με δροσερή επίγευση μέντας.",
+        descriptionEn: "Blueberry with a cool mint finish.",
+        priceCents: 1900,
+        costCents: 680,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/blueberry%20mint.webp",
+      },
+      {
+        slug: "shisha-lemon-mint",
+        title: "Lemon Mint Shisha",
+        titleEl: "Ναργιλές Λεμόνι Μέντα",
+        titleEn: "Lemon Mint Shisha",
+        subcategoryEn: "Sour",
+        subcategoryEl: "Ξινές Γεύσεις",
+        description: "Fresh lemon balanced with mint.",
+        descriptionEl: "Φρέσκο λεμόνι ισορροπημένο με μέντα.",
+        descriptionEn: "Fresh lemon balanced with mint.",
+        priceCents: 1850,
+        costCents: 660,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/lime-mint.webp",
+      },
+      {
+        slug: "shisha-grapefruit",
+        title: "Grapefruit Shisha",
+        titleEl: "Ναργιλές Γκρέιπφρουτ",
+        titleEn: "Grapefruit Shisha",
+        subcategoryEn: "Sour",
+        subcategoryEl: "Ξινές Γεύσεις",
+        description: "Bright grapefruit citrus blend.",
+        descriptionEl: "Έντονο εσπεριδοειδές χαρμάνι γκρέιπφρουτ.",
+        descriptionEn: "Bright grapefruit citrus blend.",
+        priceCents: 1850,
+        costCents: 660,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/Grapefruit.webp",
+      },
+      {
+        slug: "shisha-watermelon-lemon",
+        title: "Watermelon Lemon Shisha",
+        titleEl: "Ναργιλές Καρπούζι Λεμόνι",
+        titleEn: "Watermelon Lemon Shisha",
+        subcategoryEn: "Sweet-Sour",
+        subcategoryEl: "Γλυκόξινες Γεύσεις",
+        description: "Juicy watermelon with lemon zest.",
+        descriptionEl: "Ζουμερό καρπούζι με ξύσμα λεμονιού.",
+        descriptionEn: "Juicy watermelon with lemon zest.",
+        priceCents: 1950,
+        costCents: 700,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/watermelon-lemon.avif",
+      },
+      {
+        slug: "shisha-passion-lime",
+        title: "Passion Lime Shisha",
+        titleEl: "Ναργιλές Passion Lime",
+        titleEn: "Passion Lime Shisha",
+        subcategoryEn: "Sweet-Sour",
+        subcategoryEl: "Γλυκόξινες Γεύσεις",
+        description: "Passion fruit with lively lime notes.",
+        descriptionEl: "Passion fruit με ζωηρές νότες λάιμ.",
+        descriptionEn: "Passion fruit with lively lime notes.",
+        priceCents: 1950,
+        costCents: 700,
+        imageUrl:
+          "https://pub-c65f0575201a4ce580bfc48dbcc24b12.r2.dev/noor/shisha/passion%20fruit.avif",
       },
     ],
   },
@@ -259,6 +373,9 @@ async function onboardStore() {
     throw new Error(
       "Please fill NEW_STORE_CONFIG.slug and NEW_STORE_CONFIG.name"
     );
+  }
+  if (!cfg.defaultPassword) {
+    throw new Error("Set DEFAULT_PASSWORD before onboarding a real store.");
   }
 
   console.log(`\nOnboarding new store: ${cfg.slug}`);
@@ -448,6 +565,8 @@ async function onboardStore() {
           descriptionEn: item.descriptionEn ?? null,
           titleEl: item.titleEl,
           titleEn: item.titleEn,
+          subcategoryEn: item.subcategoryEn ?? null,
+          subcategoryEl: item.subcategoryEl ?? null,
           printerTopic: categoryPrinterTopic,
         },
       });

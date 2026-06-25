@@ -11,6 +11,9 @@ type BootstrapPayload = {
   menu: Awaited<ReturnType<typeof getMenuPayload>>["payload"];
 };
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const BOOTSTRAP_CACHE = createLruCache<{
   payload: BootstrapPayload;
   etag: string;
@@ -19,6 +22,10 @@ const BOOTSTRAP_CACHE = createLruCache<{
   ttlMs: (process.env.NODE_ENV || "").toLowerCase() === "development" ? 10_000 : 60_000,
   max: 100,
 });
+
+export function invalidateMenuBootstrapCache() {
+  BOOTSTRAP_CACHE.clear();
+}
 
 export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
   fastify.get("/public/menu-bootstrap", async (request, reply) => {
@@ -56,7 +63,9 @@ export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
         ? await db.table.findFirst({
             where: {
               storeId: store.id,
-              OR: [{ id: tableCode }, { label: tableCode }],
+              OR: UUID_RE.test(tableCode)
+                ? [{ id: tableCode }, { label: tableCode }]
+                : [{ label: tableCode }],
             },
             select: { id: true, label: true, updatedAt: true },
           })

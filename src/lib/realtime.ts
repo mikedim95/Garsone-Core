@@ -3,7 +3,7 @@ import { IncomingMessage } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import { verifyToken } from "./jwt.js";
 
-type RoleName = "waiter" | "cook" | "manager" | "architect";
+type RoleName = "waiter" | "cook" | "manager" | "architect" | "hybrid";
 
 interface ClientSession {
   socket: WebSocket;
@@ -34,6 +34,13 @@ function extractAuth(req: IncomingMessage) {
   } catch {
     return {};
   }
+}
+
+function roleMatches(sessionRole: RoleName | undefined, roles: RoleName[]) {
+  if (!sessionRole) return false;
+  if (roles.includes(sessionRole)) return true;
+  if (sessionRole !== "hybrid") return false;
+  return roles.includes("waiter") || roles.includes("cook");
 }
 
 export function setupRealtimeGateway(fastify: FastifyInstance) {
@@ -118,7 +125,7 @@ export function emitRealtime(
     if (anonymousOnly) {
       if (!isAnonymous) continue;
     } else {
-      if (roles && (!session.role || !roles.includes(session.role))) continue;
+      if (roles && !roleMatches(session.role, roles)) continue;
       if (userIds && (!session.userId || !userIds.includes(session.userId)))
         continue;
     }

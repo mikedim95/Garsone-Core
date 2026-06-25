@@ -5,6 +5,7 @@ import { db } from "../db/index.js";
 import { ensureStore } from "../lib/store.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { publishMessage } from "../lib/mqtt.js";
+import { staffServiceRoles } from "../lib/roles.js";
 
 const assignmentSchema = z.object({
   waiterId: z.string().uuid(),
@@ -13,7 +14,7 @@ const assignmentSchema = z.object({
 
 type WaiterTableWithRelations = Prisma.WaiterTableGetPayload<{
   include: {
-    waiter: { include: { waiterType: true } };
+    waiter: true;
     table: { select: { id: true; label: true; isActive: true } };
   };
 }>;
@@ -26,15 +27,6 @@ function serializeAssignment(assignment: WaiterTableWithRelations) {
       id: assignment.waiter.id,
       email: assignment.waiter.email,
       displayName: assignment.waiter.displayName ?? assignment.waiter.email,
-      waiterTypeId: assignment.waiter.waiterTypeId ?? null,
-      waiterType: assignment.waiter.waiterType
-        ? {
-            id: assignment.waiter.waiterType.id,
-            slug: assignment.waiter.waiterType.slug,
-            title: assignment.waiter.waiterType.title,
-            printerTopic: assignment.waiter.waiterType.printerTopic,
-          }
-        : null,
     },
     table: {
       id: assignment.table.id,
@@ -59,16 +51,15 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
         const [assignments, waiters, tables] = await Promise.all([
           db.waiterTable.findMany({
             where: { storeId: store.id },
-            include: { 
-              waiter: { include: { waiterType: true } }, 
+            include: {
+              waiter: true,
               table: { select: { id: true, label: true, isActive: true } },
             },
             orderBy: { createdAt: "asc" },
           }),
           db.profile.findMany({
-            where: { storeId: store.id, role: Role.WAITER },
+            where: { storeId: store.id, role: { in: staffServiceRoles } },
             orderBy: { displayName: "asc" },
-            include: { waiterType: true },
           }),
           db.table.findMany({
             where: { storeId: store.id },
@@ -82,15 +73,6 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
             id: waiter.id,
             email: waiter.email,
             displayName: waiter.displayName ?? waiter.email,
-            waiterTypeId: waiter.waiterTypeId ?? null,
-            waiterType: waiter.waiterType
-              ? {
-                  id: waiter.waiterType.id,
-                  slug: waiter.waiterType.slug,
-                  title: waiter.waiterType.title,
-                  printerTopic: waiter.waiterType.printerTopic,
-                }
-              : null,
           })),
           tables: tables.map((table) => ({
             id: table.id,
@@ -119,7 +101,11 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
 
         const [waiter, table] = await Promise.all([
           db.profile.findFirst({
-            where: { id: body.waiterId, storeId: store.id, role: Role.WAITER },
+            where: {
+              id: body.waiterId,
+              storeId: store.id,
+              role: { in: staffServiceRoles },
+            },
           }),
           db.table.findFirst({
             where: { id: body.tableId, storeId: store.id },
@@ -149,7 +135,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
             tableId: table.id,
           },
           include: {
-            waiter: { include: { waiterType: true } },
+            waiter: true,
             table: { select: { id: true, label: true, isActive: true } },
           },
         });
@@ -246,7 +232,7 @@ export async function waiterTableRoutes(fastify: FastifyInstance) {
         const assignments = await db.waiterTable.findMany({
           where: { storeId: store.id, waiterId },
           include: {
-            waiter: { include: { waiterType: true } },
+            waiter: true,
             table: { select: { id: true, label: true, isActive: true } },
           },
           orderBy: { createdAt: "asc" },

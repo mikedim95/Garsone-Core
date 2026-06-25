@@ -25,6 +25,7 @@ model Store {
   modifierOptions   ModifierOption[]
   modifiers         Modifier[]
   orders            Order[]
+  customerPushSubscriptions CustomerPushSubscription[]
   profiles          Profile[]
   qrTiles           QRTile[]
   storeMeta         StoreMeta?
@@ -58,6 +59,7 @@ model Category {
   title        String   @db.VarChar(255)
   titleEl      String?  @db.VarChar(255)
   titleEn      String?  @db.VarChar(255)
+  imageUrl     String?  @db.VarChar(2000)
   printerTopic String?  @db.VarChar(255)
   sortOrder    Int      @default(0)
   createdAt    DateTime @default(now()) @db.Timestamp(6)
@@ -110,6 +112,8 @@ model Item {
   title         String         @db.VarChar(255)
   titleEl       String?        @db.VarChar(255)
   titleEn       String?        @db.VarChar(255)
+  subcategoryEn String?        @db.VarChar(255)
+  subcategoryEl String?        @db.VarChar(255)
   description   String?        @db.VarChar(2000)
   descriptionEl String?        @db.VarChar(2000)
   descriptionEn String?        @db.VarChar(2000)
@@ -199,6 +203,7 @@ model Table {
   createdAt    DateTime      @default(now()) @db.Timestamp(6)
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
   orders       Order[]
+  customerPushSubscriptions CustomerPushSubscription[]
   qrTiles      QRTile[]
   tableVisits  TableVisit[]
   localityApprovals LocalityApproval[]
@@ -212,14 +217,14 @@ model Table {
 
 model QRTile {
   id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId     String       @db.Uuid
+  storeId     String?      @db.Uuid
   tableId     String?      @db.Uuid
   publicCode  String       @unique @db.VarChar(32)
   label       String?      @db.VarChar(100)
   isActive    Boolean      @default(true)
   createdAt   DateTime     @default(now()) @db.Timestamp(6)
   updatedAt   DateTime     @updatedAt @db.Timestamp(6)
-  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store       Store?       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table       Table?       @relation(fields: [tableId], references: [id], onDelete: Cascade)
   tableVisits TableVisit[]
   localityApprovals LocalityApproval[]
@@ -334,6 +339,7 @@ model Order {
   paymentId       String?       @db.VarChar(255)
   paymentError    String?
   orderItems      OrderItem[]
+  customerPushSubscriptions CustomerPushSubscription[]
   store           Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table           Table         @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
@@ -341,6 +347,26 @@ model Order {
   @@index([tableId, placedAt(sort: Desc)])
   @@index([storeId, paymentStatus])
   @@map("orders")
+}
+
+model CustomerPushSubscription {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  tableId   String   @db.Uuid
+  orderId   String?  @db.Uuid
+  endpoint  String   @unique @db.VarChar(1000)
+  p256dh    String   @db.VarChar(255)
+  auth      String   @db.VarChar(255)
+  userAgent String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, tableId])
+  @@index([orderId])
+  @@map("customer_push_subscriptions")
 }
 
 model OrderItem {
@@ -470,6 +496,7 @@ model Profile {
   updatedAt    DateTime      @updatedAt @db.Timestamp(6)
   ratingAvg    Decimal?      @db.Decimal(4, 2)
   isVerified   Boolean       @default(false)
+  printerTopic String?       @db.VarChar(255)
   cookTypeId   String?       @db.Uuid
   waiterTypeId String?       @db.Uuid
   auditLogs    AuditLog[]
@@ -502,6 +529,7 @@ enum ShiftStatus {
 enum Role {
   GUEST
   WAITER
+  HYBRID
   MANAGER
   COOK
   ARCHITECT

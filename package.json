@@ -5,15 +5,16 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/db/ensureNodeAgentSchema.js && node dist/server.js",
     "db:generate": "prisma generate",
-    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:seed:render_internal": "cross-env DB_CONNECTION=render_internal prisma db seed",
     "db:seed:render_external": "cross-env DB_CONNECTION=render_external prisma db seed",
     "db:studio": "prisma studio",
     "db:push": "prisma db push",
     "db:test": "tsx prisma/test_io.ts",
+    "onboard:store": "tsx prisma/store_onboard.ts",
     "seed": "npm run db:seed",
     "prisma:gen": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
@@ -30,6 +31,7 @@
     "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.14.1",
     "tsx": "^4.21.0",
+    "web-push": "^3.6.7",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
     "@types/node": "^20.14.10",
+    "@types/web-push": "^3.6.4",
     "cross-env": "^7.0.3",
     "prisma": "^6.19.0",
     "typescript": "^5.5.3"
