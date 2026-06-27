@@ -24,15 +24,15 @@ const truncate = (value: string, max: number) =>
   value.length > max ? value.slice(0, max) : value;
 
 export async function staffPushRoutes(fastify: FastifyInstance) {
-  const cookPushOnly = [authMiddleware, requireRole(["cook"])];
+  const staffPushAllowed = [authMiddleware, requireRole(["cook", "waiter"])];
 
-  fastify.get("/staff/push/key", { preHandler: cookPushOnly }, async () =>
+  fastify.get("/staff/push/key", { preHandler: staffPushAllowed }, async () =>
     getStaffPushConfig()
   );
 
   fastify.post(
     "/staff/push/subscriptions",
-    { preHandler: cookPushOnly },
+    { preHandler: staffPushAllowed },
     async (request, reply) => {
       try {
         const body = staffPushSubscriptionSchema.parse(request.body);
@@ -47,13 +47,13 @@ export async function staffPushRoutes(fastify: FastifyInstance) {
           where: {
             id: user.userId,
             storeId: store.id,
-            role: { in: [Role.COOK, Role.HYBRID] },
+            role: { in: [Role.COOK, Role.HYBRID, Role.WAITER] },
           },
-          include: { cookType: true },
+          include: { cookType: true, waiterType: true },
         });
 
         if (!profile) {
-          return reply.status(403).send({ error: "Cook profile not found" });
+          return reply.status(403).send({ error: "Staff profile not found" });
         }
 
         const userAgent = request.headers["user-agent"]?.toString();
@@ -61,7 +61,11 @@ export async function staffPushRoutes(fastify: FastifyInstance) {
           storeId: store.id,
           profileId: profile.id,
           role: user.role,
-          printerTopic: profile.printerTopic ?? profile.cookType?.printerTopic ?? null,
+          printerTopic:
+            profile.printerTopic ??
+            profile.cookType?.printerTopic ??
+            profile.waiterType?.printerTopic ??
+            null,
           endpoint: body.subscription.endpoint,
           p256dh: body.subscription.keys.p256dh,
           auth: body.subscription.keys.auth,
