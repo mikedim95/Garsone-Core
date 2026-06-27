@@ -2686,7 +2686,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const body = callWaiterSchema.parse(request.body);
-        const store = await ensureStore(resolveStoreSlug(request));
+        const storeSlug = resolveStoreSlug(request);
+        const store = await ensureStore(storeSlug);
 
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
@@ -2734,9 +2735,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
           printerTopics: targetPrinterTopics,
           ts,
         };
+        const waiterCallTopic = `${store.slug}/waiter/call`;
 
         notifyWaiters(
-          `${store.slug}/waiter/call`,
+          waiterCallTopic,
           payload,
           waiterIds
         );
@@ -2762,8 +2764,21 @@ export async function orderRoutes(fastify: FastifyInstance) {
           ...kitchenStaffIds,
           ...hybridStaffIds,
         ]);
+        console.log("[call-waiter] publish", {
+          requestedStoreSlug: storeSlug,
+          storeSlug: store.slug,
+          topic: waiterCallTopic,
+          tableId: body.tableId,
+          tableLabel,
+          waiterCount: waiterIds.length,
+          kitchenStaffCount: kitchenStaffIds.length,
+          hybridCount: hybridStaffIds.length,
+          realtimeExtraCount: additionalRealtimeIds.length,
+          pushRecipientCount: staffPushIds.length,
+          printerTopics: targetPrinterTopics,
+        });
         if (additionalRealtimeIds.length > 0) {
-          publishMessage(`${store.slug}/waiter/call`, payload, {
+          publishMessage(waiterCallTopic, payload, {
             userIds: additionalRealtimeIds,
             skipMqtt: true,
           });
