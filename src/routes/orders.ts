@@ -356,6 +356,18 @@ async function getResponsibleKitchenStaffIds(
   return staff.map((profile) => profile.id);
 }
 
+async function getHybridStaffIds(storeId: string) {
+  const hybrids = await db.profile.findMany({
+    where: {
+      storeId,
+      role: Role.HYBRID,
+    },
+    select: { id: true },
+  });
+
+  return hybrids.map((profile) => profile.id);
+}
+
 function publishWaiterCallPrints(params: {
   storeSlug: string;
   tableId: string;
@@ -2740,10 +2752,19 @@ export async function orderRoutes(fastify: FastifyInstance) {
           store.id,
           targetPrinterTopics
         );
-        const staffPushIds = uniqueIds([...waiterIds, ...kitchenStaffIds]);
-        if (kitchenStaffIds.length > 0) {
+        const hybridStaffIds = await getHybridStaffIds(store.id);
+        const additionalRealtimeIds = uniqueIds([
+          ...kitchenStaffIds,
+          ...hybridStaffIds,
+        ]).filter((id) => !waiterIds.includes(id));
+        const staffPushIds = uniqueIds([
+          ...waiterIds,
+          ...kitchenStaffIds,
+          ...hybridStaffIds,
+        ]);
+        if (additionalRealtimeIds.length > 0) {
           publishMessage(`${store.slug}/waiter/call`, payload, {
-            userIds: kitchenStaffIds,
+            userIds: additionalRealtimeIds,
             skipMqtt: true,
           });
         }
