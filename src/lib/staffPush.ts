@@ -108,8 +108,13 @@ export async function notifyStaffPush(params: {
   body: string;
   tag: string;
   url: string;
+  requireInteraction?: boolean;
+  vibrate?: number[];
 }) {
-  if (!pushEnabled) return;
+  if (!pushEnabled) {
+    console.warn("[staff-push] disabled: missing VAPID configuration");
+    return;
+  }
   await ensureStaffPushSchema();
 
   const filters: Prisma.Sql[] = [Prisma.sql`"storeId"::text = ${params.storeId}`];
@@ -129,13 +134,31 @@ export async function notifyStaffPush(params: {
     WHERE ${Prisma.join(filters, " AND ")}
   `);
 
-  if (subscriptions.length === 0) return;
+  if (subscriptions.length === 0) {
+    console.warn("[staff-push] no subscriptions matched", {
+      storeId: params.storeId,
+      profileCount: params.profileIds?.length ?? 0,
+      roles: params.roles ?? [],
+      printerTopics: params.printerTopics ?? [],
+      tag: params.tag,
+    });
+    return;
+  }
+
+  console.log("[staff-push] sending", {
+    storeId: params.storeId,
+    subscriptionCount: subscriptions.length,
+    profileCount: new Set(subscriptions.map((subscription) => subscription.profileId)).size,
+    tag: params.tag,
+  });
 
   const payload = JSON.stringify({
     title: params.title,
     body: params.body,
     tag: params.tag,
     url: params.url,
+    requireInteraction: params.requireInteraction ?? false,
+    vibrate: params.vibrate ?? [250, 100, 250],
   });
 
   await Promise.all(

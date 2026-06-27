@@ -2799,6 +2799,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
             body: `Table ${tableText} needs assistance.`,
             tag: `waiter-call-${body.tableId}`,
             url: "/cook",
+            requireInteraction: true,
+            vibrate: [300, 120, 300, 120, 300],
           }).catch((pushError) => {
             console.warn("Staff push notification failed:", pushError);
           });
