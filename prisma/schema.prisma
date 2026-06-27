@@ -36,6 +36,7 @@ model Store {
   waiterTypes       WaiterType[]
   localityApprovals LocalityApproval[]
   nodeAgents        NodeAgent[]
+  pendingNodeAgents PendingNodeAgent[]
 
   @@index([createdAt(sort: Desc)])
   @@map("stores")
@@ -295,11 +296,35 @@ model NodeAgent {
   updatedAt            DateTime           @updatedAt @db.Timestamp(6)
   store                Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
   events               NodeAgentEvent[]
+  claimedPendingNodes  PendingNodeAgent[]
 
   @@unique([storeId, slug])
   @@index([storeId])
   @@index([lastSeenAt])
   @@map("node_agents")
+}
+
+model PendingNodeAgent {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nodeKey           String     @unique @db.VarChar(128)
+  pairingHash       String     @db.VarChar(128)
+  displayName       String     @db.VarChar(255)
+  localHostname     String?    @db.VarChar(255)
+  tailscaleHostname String?    @db.VarChar(255)
+  macAddresses      Json?
+  ipAddresses       Json?
+  bootstrapJson     Json?
+  status            String     @default("PENDING") @db.VarChar(32)
+  storeId           String?    @db.Uuid
+  claimedNodeId     String?    @db.Uuid
+  lastSeenAt        DateTime   @default(now()) @db.Timestamp(6)
+  createdAt         DateTime   @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime   @default(now()) @db.Timestamp(6)
+  store             Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  claimedNode       NodeAgent? @relation(fields: [claimedNodeId], references: [id], onDelete: SetNull)
+
+  @@index([status, lastSeenAt(sort: Desc)])
+  @@map("pending_node_agents")
 }
 
 model NodeAgentEvent {
