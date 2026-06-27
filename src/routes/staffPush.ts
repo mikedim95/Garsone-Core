@@ -71,6 +71,12 @@ export async function staffPushRoutes(fastify: FastifyInstance) {
           auth: body.subscription.keys.auth,
           userAgent: userAgent ? truncate(userAgent, 500) : null,
         });
+        console.log("[staff-push] subscription saved", {
+          storeSlug: store.slug,
+          profileId: profile.id,
+          role: user.role,
+          endpointHost: new URL(body.subscription.endpoint).host,
+        });
 
         return reply.send({ ok: true, enabled: true });
       } catch (error) {

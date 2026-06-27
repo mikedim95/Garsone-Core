@@ -161,7 +161,7 @@ export async function notifyStaffPush(params: {
     vibrate: params.vibrate ?? [250, 100, 250],
   });
 
-  await Promise.all(
+  const results = await Promise.all(
     subscriptions.map(async (subscription) => {
       const pushSubscription: PushSubscription = {
         endpoint: subscription.endpoint,
@@ -176,18 +176,26 @@ export async function notifyStaffPush(params: {
           TTL: 10 * 60,
           urgency: "high",
         });
+        return { ok: true, statusCode: 201 };
       } catch (error) {
         const statusCode = (error as { statusCode?: number })?.statusCode;
         if (statusCode === 404 || statusCode === 410) {
           await removeStaffPushEndpoint(subscription.endpoint);
-          return;
+          return { ok: false, statusCode, removed: true };
         }
         console.warn("[staff-push] failed to send notification", {
           profileId: subscription.profileId,
           statusCode,
           error,
         });
+        return { ok: false, statusCode };
       }
     })
   );
+  console.log("[staff-push] send result", {
+    tag: params.tag,
+    successCount: results.filter((result) => result.ok).length,
+    failureCount: results.filter((result) => !result.ok).length,
+    removedCount: results.filter((result) => result.removed).length,
+  });
 }
