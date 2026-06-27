@@ -20,14 +20,63 @@ const staffPushSubscriptionSchema = z.object({
   }),
 });
 
+const staffPushDiagnosticSchema = z.object({
+  stage: z.string().trim().min(1).max(80),
+  ok: z.boolean().optional(),
+  message: z.string().trim().max(1000).optional(),
+  permission: z.string().trim().max(40).optional(),
+  swUrl: z.string().trim().max(200).optional(),
+  hasServiceWorker: z.boolean().optional(),
+  hasPushManager: z.boolean().optional(),
+  hasNotification: z.boolean().optional(),
+  secureContext: z.boolean().optional(),
+  hasSubscription: z.boolean().optional(),
+  endpointHost: z.string().trim().max(255).nullable().optional(),
+});
+
 const truncate = (value: string, max: number) =>
   value.length > max ? value.slice(0, max) : value;
 
 export async function staffPushRoutes(fastify: FastifyInstance) {
   const staffPushAllowed = [authMiddleware, requireRole(["cook", "waiter"])];
 
-  fastify.get("/staff/push/key", { preHandler: staffPushAllowed }, async () =>
-    getStaffPushConfig()
+  fastify.get("/staff/push/key", { preHandler: staffPushAllowed }, async (request) => {
+    const config = getStaffPushConfig();
+    const user = (request as any).user;
+    console.log("[staff-push] key requested", {
+      enabled: config.enabled,
+      role: user?.role,
+      storeSlug: (request as any).storeSlug,
+    });
+    return config;
+  });
+
+  fastify.post(
+    "/staff/push/diagnostics",
+    { preHandler: staffPushAllowed },
+    async (request, reply) => {
+      try {
+        const body = staffPushDiagnosticSchema.parse(request.body);
+        const user = (request as any).user;
+        console.log("[staff-push] client diagnostic", {
+          ...body,
+          role: user?.role,
+          profileId: user?.userId,
+          storeSlug: (request as any).storeSlug,
+        });
+        return reply.send({ ok: true });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply
+            .status(400)
+            .send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Staff push diagnostic error:", error);
+        return reply
+          .status(500)
+          .send({ error: "Failed to save staff push diagnostic" });
+      }
+    }
   );
 
   fastify.post(
