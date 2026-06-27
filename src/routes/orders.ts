@@ -368,6 +368,18 @@ async function getHybridStaffIds(storeId: string) {
   return hybrids.map((profile) => profile.id);
 }
 
+async function getServiceStaffIds(storeId: string) {
+  const staff = await db.profile.findMany({
+    where: {
+      storeId,
+      role: { in: [Role.WAITER, Role.HYBRID] },
+    },
+    select: { id: true },
+  });
+
+  return staff.map((profile) => profile.id);
+}
+
 function publishWaiterCallPrints(params: {
   storeSlug: string;
   tableId: string;
@@ -2737,11 +2749,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         };
         const waiterCallTopic = `${store.slug}/waiter/call`;
 
-        notifyWaiters(
-          waiterCallTopic,
-          payload,
-          waiterIds
-        );
+        publishMessage(waiterCallTopic, payload, { roles: ["waiter"] });
         publishWaiterCallPrints({
           storeSlug: store.slug,
           tableId: body.tableId,
@@ -2755,14 +2763,13 @@ export async function orderRoutes(fastify: FastifyInstance) {
           targetPrinterTopics
         );
         const hybridStaffIds = await getHybridStaffIds(store.id);
+        const serviceStaffIds = await getServiceStaffIds(store.id);
         const additionalRealtimeIds = uniqueIds([
           ...kitchenStaffIds,
-          ...hybridStaffIds,
-        ]).filter((id) => !waiterIds.includes(id));
+        ]).filter((id) => !serviceStaffIds.includes(id));
         const staffPushIds = uniqueIds([
-          ...waiterIds,
+          ...serviceStaffIds,
           ...kitchenStaffIds,
-          ...hybridStaffIds,
         ]);
         console.log("[call-waiter] publish", {
           requestedStoreSlug: storeSlug,
@@ -2771,6 +2778,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           tableId: body.tableId,
           tableLabel,
           waiterCount: waiterIds.length,
+          serviceStaffCount: serviceStaffIds.length,
           kitchenStaffCount: kitchenStaffIds.length,
           hybridCount: hybridStaffIds.length,
           realtimeExtraCount: additionalRealtimeIds.length,
