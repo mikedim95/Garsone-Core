@@ -312,6 +312,10 @@ function notifyWaiters(
   }
 }
 
+function uniqueIds(ids: Array<string | null | undefined>) {
+  return Array.from(new Set(ids.filter((id): id is string => Boolean(id))));
+}
+
 function readStorePrinters(store: { settingsJson?: Prisma.JsonValue | null }) {
   const settings =
     store.settingsJson && typeof store.settingsJson === "object"
@@ -2736,14 +2740,17 @@ export async function orderRoutes(fastify: FastifyInstance) {
           store.id,
           targetPrinterTopics
         );
+        const staffPushIds = uniqueIds([...waiterIds, ...kitchenStaffIds]);
         if (kitchenStaffIds.length > 0) {
           publishMessage(`${store.slug}/waiter/call`, payload, {
             userIds: kitchenStaffIds,
             skipMqtt: true,
           });
+        }
+        if (staffPushIds.length > 0) {
           notifyStaffPush({
             storeId: store.id,
-            profileIds: kitchenStaffIds,
+            profileIds: staffPushIds,
             title: "Bell ring",
             body: `Table ${tableText} needs assistance.`,
             tag: `waiter-call-${body.tableId}`,
