@@ -19,6 +19,10 @@ import { applyDbConnection } from "../src/db/config";
 
 const { target: dbTarget, databaseUrl } = applyDbConnection();
 const prisma = new PrismaClient();
+const IS_HOSTED_DB =
+  dbTarget === "render_internal" ||
+  dbTarget === "render_external" ||
+  (process.env.NODE_ENV || "").toLowerCase() === "production";
 
 try {
   const { hostname, pathname } = new URL(databaseUrl);
@@ -41,6 +45,16 @@ const PUBLIC_APP_URL = (
   process.env.PUBLIC_APP_URL ?? "https://www.garsone.gr"
 ).replace(/\/+$/, "");
 const QR_PATH_PREFIX = "/q";
+const ARCHITECT_EMAIL = (
+  process.env.ARCHITECT_EMAIL ?? (IS_HOSTED_DB ? "" : "architect@demo.local")
+)
+  .trim()
+  .toLowerCase();
+const ARCHITECT_PASSWORD =
+  process.env.ARCHITECT_PASSWORD ?? (IS_HOSTED_DB ? "" : "changeme");
+const ARCHITECT_DISPLAY_NAME =
+  (process.env.ARCHITECT_DISPLAY_NAME || "Central Architect").trim() ||
+  "Central Architect";
 
 // ===== progress bars =====
 function bar(label: string, current: number, total: number, width = 28) {
@@ -1277,8 +1291,18 @@ async function seedStoresAndData(qrAssignments: QrAssignment[]) {
 async function seedArchitectForStore(storeId: string) {
   section("Seeding architect");
 
-  const email = "architect@demo.local";
-  const passwordHash = await hashPassword("changeme");
+  if (!ARCHITECT_EMAIL || !ARCHITECT_PASSWORD) {
+    if (IS_HOSTED_DB) {
+      console.log(
+        "Skipping architect seed. Set ARCHITECT_EMAIL and ARCHITECT_PASSWORD to create a production architect."
+      );
+      return;
+    }
+    throw new Error("ARCHITECT_EMAIL and ARCHITECT_PASSWORD are required.");
+  }
+
+  const email = ARCHITECT_EMAIL;
+  const passwordHash = await hashPassword(ARCHITECT_PASSWORD);
 
   await prisma.profile.upsert({
     where: { globalKey: email },
@@ -1287,7 +1311,7 @@ async function seedArchitectForStore(storeId: string) {
       email,
       globalKey: email,
       role: Role.ARCHITECT,
-      displayName: "Central Architect",
+      displayName: ARCHITECT_DISPLAY_NAME,
       passwordHash,
       isVerified: true,
     },
@@ -1296,7 +1320,7 @@ async function seedArchitectForStore(storeId: string) {
       email,
       globalKey: email,
       role: Role.ARCHITECT,
-      displayName: "Central Architect",
+      displayName: ARCHITECT_DISPLAY_NAME,
       passwordHash,
       isVerified: true,
     },

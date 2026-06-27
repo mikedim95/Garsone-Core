@@ -85,6 +85,8 @@ environment variables via the host platform.
 - `DB_CONNECTION` (`primary` | `default` | `render_internal` | `render_external`)
 - `DATABASE_URL_RENDER_INTERNAL`, `DATABASE_URL_RENDER_EXTERNAL`
 - `PRISMA_LOG_QUERIES` (`1` to log queries)
+- `ARCHITECT_EMAIL`, `ARCHITECT_PASSWORD` (required to seed a production architect account)
+- `ARCHITECT_DISPLAY_NAME` (optional, defaults to `Central Architect`)
 
 ### MQTT / Realtime
 

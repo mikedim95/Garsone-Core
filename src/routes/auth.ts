@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bcrypt from "bcrypt";
+import { Role } from "@prisma/client";
 import { db } from "../db/index.js";
 import { signToken } from "../lib/jwt.js";
 import { serializeRole } from "../lib/roles.js";
@@ -56,7 +57,18 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
       }
 
-      if (!user || !user.storeId || !store || user.storeId !== store.id) {
+      if (!user) {
+        return reply.status(401).send({ error: "Invalid credentials" });
+      }
+
+      const role = serializeRole(user.role);
+      if (user.storeId) {
+        if (!store || user.storeId !== store.id) {
+          return reply.status(401).send({ error: "Invalid credentials" });
+        }
+      } else if (role === "architect") {
+        store = store || (await ensureStore(requestedSlug));
+      } else {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
 
@@ -68,8 +80,6 @@ export async function authRoutes(fastify: FastifyInstance) {
       if (!validPassword) {
         return reply.status(401).send({ error: "Invalid credentials" });
       }
-
-      const role = serializeRole(user.role);
 
       const token = signToken({
         userId: user.id,
@@ -182,16 +192,29 @@ export async function authRoutes(fastify: FastifyInstance) {
         : `${userKey}@${storeSlug}.local`;
       const email = emailRaw.toLowerCase();
 
-      const user = await db.profile.findFirst({
+      let user = await db.profile.findFirst({
         where: { storeId: store.id, email },
         include: { cookType: true, waiterType: true },
       });
+
+      if (!user && userKey.includes("@")) {
+        user = await db.profile.findFirst({
+          where: {
+            email,
+            role: Role.ARCHITECT,
+          },
+          include: { cookType: true, waiterType: true },
+        });
+      }
 
       if (!user) {
         return reply.status(404).send({ error: "USER_NOT_FOUND_FOR_STORE" });
       }
 
       const role = serializeRole(user.role);
+      if (role !== "architect" && user.storeId !== store.id) {
+        return reply.status(404).send({ error: "USER_NOT_FOUND_FOR_STORE" });
+      }
 
       const token = signToken({
         userId: user.id,
