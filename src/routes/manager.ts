@@ -7,6 +7,7 @@ import { kitchenServiceRoles, staffServiceRoles } from "../lib/roles.js";
 import { ensureStore, invalidateStoreCache } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
 import { invalidateMenuCache } from "./menu.js";
+import { invalidateMenuBootstrapCache } from "./publicMenuBootstrap.js";
 import { createHmac, createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -181,6 +182,45 @@ export async function managerRoutes(fastify: FastifyInstance) {
         }
         console.error("Failed to update print-on-arrival setting", error);
         return reply.status(500).send({ error: "Failed to update printer setting" });
+      }
+    }
+  );
+
+  fastify.patch(
+    "/manager/store/customer-order-recall",
+    { preHandler: managerOnly },
+    async (request, reply) => {
+      try {
+        const body = z.object({ enabled: z.boolean() }).parse(request.body);
+        const store = await ensureStore(request);
+        const settingsJson = {
+          ...(store.settingsJson && typeof store.settingsJson === "object"
+            ? store.settingsJson
+            : {}),
+          customerOrderRecallEnabled: body.enabled,
+        };
+        const updated = await db.store.update({
+          where: { id: store.id },
+          data: { settingsJson },
+          select: { id: true, slug: true, name: true, settingsJson: true },
+        });
+        invalidateStoreCache(store.slug);
+        invalidateMenuBootstrapCache();
+        return reply.send({
+          store: {
+            id: updated.id,
+            slug: updated.slug,
+            name: updated.name,
+            customerOrderRecallEnabled: body.enabled,
+            settings: updated.settingsJson,
+          },
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        console.error("Failed to update customer order recall setting", error);
+        return reply.status(500).send({ error: "Failed to update customer order setting" });
       }
     }
   );
