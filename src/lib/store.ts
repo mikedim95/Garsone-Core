@@ -99,3 +99,6 @@ export const getOrderingMode = (store?: { settingsJson?: any; orderingMode?: Ord
 
 export const getPrintOnArrival = (store?: { settingsJson?: any }) =>
   (store as any)?.settingsJson?.printOnArrival === true;
+
+export const getCustomerOrderRecallEnabled = (store?: { settingsJson?: any }) =>
+  (store as any)?.settingsJson?.customerOrderRecallEnabled !== false;

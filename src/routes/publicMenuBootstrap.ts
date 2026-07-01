@@ -1,12 +1,18 @@
 import { FastifyInstance } from "fastify";
-import { ensureStore, OrderingMode } from "../lib/store.js";
+import { ensureStore, getCustomerOrderRecallEnabled, OrderingMode } from "../lib/store.js";
 import { db } from "../db/index.js";
 import { getMenuPayload } from "../lib/menuService.js";
 import { applyCacheHeaders, buildEtag, isNotModified } from "../lib/httpCache.js";
 import { createLruCache } from "../lib/lru.js";
 
 type BootstrapPayload = {
-  store: { id: string; slug: string; name: string; orderingMode: OrderingMode };
+  store: {
+    id: string;
+    slug: string;
+    name: string;
+    orderingMode: OrderingMode;
+    customerOrderRecallEnabled: boolean;
+  };
   table: { id: string; label: string } | null;
   menu: Awaited<ReturnType<typeof getMenuPayload>>["payload"];
 };
@@ -84,6 +90,7 @@ export async function publicMenuBootstrapRoutes(fastify: FastifyInstance) {
           slug: store.slug,
           name: store.name,
           orderingMode: (store as any).orderingMode,
+          customerOrderRecallEnabled: getCustomerOrderRecallEnabled(store),
         },
         table: table ? { id: table.id, label: table.label } : null,
         menu: menuResult.payload,
