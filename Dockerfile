@@ -38,6 +38,7 @@ COPY tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY prisma ./prisma
+COPY qr_codes.txt ./qr_codes.txt
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
