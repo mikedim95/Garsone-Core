@@ -1,9 +1,11 @@
-name: garsone-pi
+name: ${COMPOSE_PROJECT_NAME:-garsone-local}
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-garsone}
       POSTGRES_USER: ${POSTGRES_USER:-garsone}
@@ -19,6 +21,8 @@ services:
   core:
     image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in .env}/garsone-core:${IMAGE_TAG:-pi}
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       db:
         condition: service_healthy
@@ -71,6 +75,8 @@ services:
   front:
     image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in .env}/garsone-front:${IMAGE_TAG:-pi}
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       core:
         condition: service_healthy
@@ -80,6 +86,8 @@ services:
   seed:
     image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in .env}/garsone-core:${IMAGE_TAG:-pi}
     profiles: ["seed"]
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     depends_on:
       db:
         condition: service_healthy

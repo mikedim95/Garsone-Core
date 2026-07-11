@@ -25,32 +25,53 @@ rerun with `-Platform linux/arm/v7`.
 
 ## Run On The Pi
 
-Copy `compose.yml` and `.env.example` to the Pi, then create the real `.env`:
+### One-Command Install
+
+From your laptop, run this for each new Pi:
 
 ```bash
-cp .env.example .env
-nano .env
+ssh -t piadmin@<pi-ip> "curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/stage/deploy/pi/install.sh | bash -s -- --host <pi-ip>"
 ```
 
-Set at minimum:
-
-- `DOCKERHUB_NAMESPACE`
-- `POSTGRES_PASSWORD`
-- `JWT_SECRET`
-- the `FRONTEND_*` / `PUBLIC_APP_*` URLs to the Pi hostname or LAN IP
-
-Then start:
+Or from the Pi itself:
 
 ```bash
-docker login
-docker compose --env-file .env -f compose.yml pull
-docker compose --env-file .env -f compose.yml up -d
+curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/stage/deploy/pi/install.sh | bash
 ```
 
-`docker login` is only required when the Docker Hub repositories are private.
+The installer:
+
+- installs Docker if needed
+- creates `~/garsone-local`
+- generates `.env` with local database and JWT secrets
+- pulls `mikedim95/garsone-front:pi` and `mikedim95/garsone-core:pi`
+- starts `front`, `core`, and `db` under the isolated `garsone-local` compose project
+- seeds demo/architect data only when the local database is empty
+
+The Docker Hub repositories are public, so the Pi does not need `docker login`.
 
 Open the app at `http://<pi-host>:8080`; the API health endpoint is
 `http://<pi-host>:8787/health`.
+
+### Windows Helper
+
+From this repo on Windows:
+
+```powershell
+.\deploy\pi\deploy-remote.ps1 -PiHost <pi-ip> -User piadmin
+```
+
+The SSH password prompt is normal on a fresh Pi unless you have keys set up.
+
+### Manual Install
+
+Manual deployment is still supported. Copy `compose.yml` and `.env.example` to
+the Pi, create `.env`, then start:
+
+```bash
+docker compose --env-file .env -f compose.yml pull
+docker compose --env-file .env -f compose.yml up -d
+```
 
 ## Database Bootstrap
 
