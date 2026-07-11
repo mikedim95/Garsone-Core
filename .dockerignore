@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+*.env
+node_modules
+dist
+logs
+*.log
+npm-debug.log*
+Dockerfile
+docker-compose*.yml
+deploy/pi/.env
+uploads
+*.local
