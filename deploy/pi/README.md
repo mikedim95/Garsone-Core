@@ -10,6 +10,18 @@ For nodes associated through Architect, the preferred path is the per-store **Ve
 
 ## Build And Push Images
 
+Pushes to `main` automatically build the ARM64 Core image through
+`.github/workflows/docker-publish.yml`. Configure these GitHub Actions secrets
+in the repository before running it:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission)
+
+The workflow publishes `mikedim95/garsone-core:pi` and an immutable
+`pi-<git-sha>` tag. It can also be run manually with **Run workflow**.
+
+The local helper below remains available when a manual build is needed.
+
 From the current two-repo workspace on your build machine:
 
 ```powershell

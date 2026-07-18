@@ -1,0 +1,55 @@
+name: Build and push Pi image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/docker-publish.yml"
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "prisma/**"
+      - "qr_codes.txt"
+      - "src/**"
+      - "tsconfig.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garsone-core-pi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push ARM64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            mikedim95/garsone-core:pi
+            mikedim95/garsone-core:pi-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
