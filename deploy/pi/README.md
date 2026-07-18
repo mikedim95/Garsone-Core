@@ -6,6 +6,8 @@ This bundle runs Garsone locally on a Raspberry Pi with three services:
 - `core`: Fastify API, realtime WebSocket gateway, Prisma
 - `db`: local PostgreSQL with a persistent volume
 
+For nodes associated through Architect, the preferred path is the per-store **Venue Deployment** tab. Architect sends a versioned deployment command to the node agent, which starts the same three-service topology, imports the selected venue, and reports its health. This manual bundle remains useful for standalone installations and recovery.
+
 ## Build And Push Images
 
 From the current two-repo workspace on your build machine:

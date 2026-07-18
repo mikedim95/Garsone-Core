@@ -96,6 +96,14 @@ const claimPendingNodeSchema = z.object({
   config: claimConfigSchema.optional(),
 });
 
+const deploymentCommandSchema = z.object({
+  action: z.enum(["DEPLOY", "STOP"]),
+  frontendPort: z.coerce.number().int().min(1).max(65535).default(8080),
+  corePort: z.coerce.number().int().min(1).max(65535).default(8787),
+  imageNamespace: z.string().trim().min(1).max(255).default("mikedim95"),
+  imageTag: z.string().trim().min(1).max(100).default("pi"),
+});
+
 const testPrinterSchema = z.object({
   topicSuffix: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/),
   mac: z.string().trim().max(64).optional().default(""),
@@ -109,6 +117,30 @@ function tokenHash(token: string) {
 
 function bootstrapTopic(nodeKey: string, event: "claim" | "config") {
   return `garsone/nodes/${nodeKey}/${event}`;
+}
+
+function deploymentFromStore(store: any) {
+  const settings = store?.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
+  const deployment = settings.venueDeployment && typeof settings.venueDeployment === "object"
+    ? settings.venueDeployment
+    : {};
+  return {
+    target: deployment.target === "PI" ? "PI" : "ONLINE",
+    desiredState: deployment.desiredState === "RUNNING" ? "RUNNING" : "STOPPED",
+    version: Number(deployment.version || 0),
+    frontendPort: Number(deployment.frontendPort || 8080),
+    corePort: Number(deployment.corePort || 8787),
+    imageNamespace: String(deployment.imageNamespace || "mikedim95"),
+    imageTag: String(deployment.imageTag || "pi"),
+    status: String(deployment.status || "ONLINE_ONLY"),
+    message: String(deployment.message || ""),
+    localUrl: String(deployment.localUrl || ""),
+    apiUrl: String(deployment.apiUrl || ""),
+    appliedVersion: Number(deployment.appliedVersion || 0),
+    requestedAt: deployment.requestedAt || null,
+    lastReportedAt: deployment.lastReportedAt || null,
+    services: deployment.services && typeof deployment.services === "object" ? deployment.services : {},
+  };
 }
 
 function normalizeSlug(value: string) {
@@ -434,6 +466,7 @@ function buildAgentConfig(node: any, store: any) {
           ]
         : [],
     },
+    deployment: deploymentFromStore(store),
     printers: Array.isArray(config.printers) ? config.printers : [],
   };
 }
@@ -473,8 +506,45 @@ async function authenticateNode(request: any) {
   const hash = tokenHash(token);
   return db.nodeAgent.findFirst({
     where: { tokenHash: hash },
-    include: { store: { select: { id: true, slug: true, name: true } } },
+    include: { store: { select: { id: true, slug: true, name: true, settingsJson: true } } },
   });
+}
+
+async function buildStoreDeploymentSnapshot(storeId: string) {
+  const store = await db.store.findUnique({ where: { id: storeId } });
+  if (!store) throw new Error("STORE_NOT_FOUND");
+  const [storeMeta, categories, cookTypes, waiterTypes, items, modifiers, modifierOptions,
+    itemModifiers, tables, profiles, waiterTables, qrTiles] = await Promise.all([
+    db.storeMeta.findUnique({ where: { storeId } }),
+    db.category.findMany({ where: { storeId } }),
+    db.cookType.findMany({ where: { storeId } }),
+    db.waiterType.findMany({ where: { storeId } }),
+    db.item.findMany({ where: { storeId } }),
+    db.modifier.findMany({ where: { storeId } }),
+    db.modifierOption.findMany({ where: { storeId } }),
+    db.itemModifier.findMany({ where: { storeId } }),
+    db.table.findMany({ where: { storeId } }),
+    db.profile.findMany({ where: { storeId } }),
+    db.waiterTable.findMany({ where: { storeId } }),
+    db.qRTile.findMany({ where: { storeId } }),
+  ]);
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    store,
+    storeMeta,
+    categories,
+    cookTypes,
+    waiterTypes,
+    items,
+    modifiers,
+    modifierOptions,
+    itemModifiers,
+    tables,
+    profiles,
+    waiterTables,
+    qrTiles,
+  };
 }
 
 export async function nodeAgentRoutes(fastify: FastifyInstance) {
@@ -648,6 +718,76 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         }
         fastify.log.error(error, "Failed to list nodes");
         return reply.status(500).send({ error: "Failed to list nodes" });
+      }
+    }
+  );
+
+  fastify.get(
+    "/admin/stores/:storeId/deployment",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
+      const store = await db.store.findUnique({ where: { id: storeId } });
+      if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+      const node = await db.nodeAgent.findFirst({
+        where: { storeId },
+        orderBy: { createdAt: "asc" },
+      });
+      return reply.send({ deployment: deploymentFromStore(store), node: node ? serializeNode(node) : null });
+    }
+  );
+
+  fastify.post(
+    "/admin/stores/:storeId/deployment",
+    { preHandler: adminOnly },
+    async (request, reply) => {
+      try {
+        const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
+        const body = deploymentCommandSchema.parse(request.body ?? {});
+        const store = await db.store.findUnique({ where: { id: storeId } });
+        if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        const node = await db.nodeAgent.findFirst({
+          where: { storeId },
+          orderBy: { createdAt: "asc" },
+        });
+        if (!node) return reply.status(409).send({ error: "STORE_NODE_REQUIRED" });
+
+        const previous = deploymentFromStore(store);
+        const version = previous.version + 1;
+        const requestedAt = new Date().toISOString();
+        const nextDeployment = {
+          ...previous,
+          target: body.action === "DEPLOY" ? "PI" : "ONLINE",
+          desiredState: body.action === "DEPLOY" ? "RUNNING" : "STOPPED",
+          version,
+          frontendPort: body.frontendPort,
+          corePort: body.corePort,
+          imageNamespace: body.imageNamespace,
+          imageTag: body.imageTag,
+          status: body.action === "DEPLOY" ? "PENDING" : "STOPPING",
+          message: body.action === "DEPLOY" ? "Deployment requested from Architect" : "Stop requested from Architect",
+          requestedAt,
+        };
+        const settings = store.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
+        const updatedStore = await db.store.update({
+          where: { id: storeId },
+          data: { settingsJson: { ...settings, venueDeployment: nextDeployment } },
+        });
+        const updatedNode = await db.nodeAgent.update({
+          where: { id: node.id },
+          data: {
+            desiredConfigVersion: { increment: 1 },
+            statusMessage: body.action === "DEPLOY" ? "Local venue deployment requested" : "Local venue stop requested",
+          },
+        });
+        await publishNodeConfigIfAddressable(updatedNode, updatedStore);
+        return reply.send({ deployment: deploymentFromStore(updatedStore), node: serializeNode(updatedNode) });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.status(400).send({ error: "Invalid request", details: error.errors });
+        }
+        fastify.log.error(error, "Failed to manage venue deployment");
+        return reply.status(500).send({ error: "Failed to manage venue deployment" });
       }
     }
   );
@@ -830,6 +970,12 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     return reply.send(buildAgentConfig(node, node.store));
   });
 
+  fastify.get("/node-agent/deployment-snapshot", async (request, reply) => {
+    const node = await authenticateNode(request);
+    if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
+    return reply.send(await buildStoreDeploymentSnapshot(node.storeId));
+  });
+
   const statusSchema = z.object({
     version: z.coerce.number().int().optional(),
     status: z.enum(["ONLINE", "APPLYING", "DEGRADED", "ERROR"]).default("ONLINE"),
@@ -863,6 +1009,35 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           : {}),
       },
     });
+    const deploymentReport = body.meta?.deployment;
+    if (deploymentReport && typeof deploymentReport === "object") {
+      const store = await db.store.findUnique({ where: { id: node.storeId } });
+      if (store) {
+        const settings = store.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
+        const current = deploymentFromStore(store);
+        const reportedVersion = Number((deploymentReport as any).version || 0);
+        if (reportedVersion >= current.appliedVersion) {
+          await db.store.update({
+            where: { id: node.storeId },
+            data: {
+              settingsJson: {
+                ...settings,
+                venueDeployment: {
+                  ...current,
+                  appliedVersion: reportedVersion,
+                  status: String((deploymentReport as any).status || current.status),
+                  message: String((deploymentReport as any).message || ""),
+                  localUrl: String((deploymentReport as any).localUrl || ""),
+                  apiUrl: String((deploymentReport as any).apiUrl || ""),
+                  services: (deploymentReport as any).services || {},
+                  lastReportedAt: new Date().toISOString(),
+                },
+              },
+            },
+          });
+        }
+      }
+    }
     if (body.message || body.log) {
       await db.nodeAgentEvent.create({
         data: {
