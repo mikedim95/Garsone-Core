@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_BRANCH="${GARS0NE_REPO_BRANCH:-stage}"
+REPO_BRANCH="${GARS0NE_REPO_BRANCH:-main}"
 BASE_URL="${GARS0NE_BASE_URL:-https://raw.githubusercontent.com/mikedim95/Garsone-Core/${REPO_BRANCH}/deploy/pi}"
 APP_DIR="${GARS0NE_APP_DIR:-$HOME/garsone-local}"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-garsone-local}"

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/db/ensureNodeAgentSchema.js && node dist/server.js",
+    "start": "node dist/db/ensureNodeAgentSchema.js && node dist/db/ensureVenueDeploymentSchema.js && node dist/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
@@ -28,6 +28,7 @@
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
+    "jose": "^6.2.4",
     "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.14.1",
     "tsx": "^4.21.0",

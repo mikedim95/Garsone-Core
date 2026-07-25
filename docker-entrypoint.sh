@@ -60,7 +60,10 @@ case "${DB_BOOTSTRAP_MODE:-migrate}" in
     npx prisma migrate deploy
     ;;
   push)
-    npx prisma db push --skip-generate --accept-data-loss
+    # Refuse destructive schema changes during unattended Pi rollouts.
+    # A release that requires data loss must be handled as an explicit,
+    # backed-up maintenance operation instead of silently modifying the DB.
+    npx prisma db push --skip-generate
     ;;
   none|skip)
     ;;

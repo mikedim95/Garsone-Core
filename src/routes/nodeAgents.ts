@@ -6,6 +6,15 @@ import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { invalidateStoreCache } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
+import {
+  deploymentForLegacySettings,
+  ensureVenueDeployment,
+  fallbackImageRef,
+  getVenueDeployment,
+  latestRelease,
+  serializeVenueDeployment,
+  type DeploymentChannel,
+} from "../lib/venueDeployments.js";
 
 const adminOnly = [authMiddleware, requireRole(["architect"])];
 
@@ -97,11 +106,12 @@ const claimPendingNodeSchema = z.object({
 });
 
 const deploymentCommandSchema = z.object({
-  action: z.enum(["DEPLOY", "STOP"]),
+  action: z.enum(["DEPLOY", "STOP", "SYNC", "CONFIGURE"]),
   frontendPort: z.coerce.number().int().min(1).max(65535).default(8080),
   corePort: z.coerce.number().int().min(1).max(65535).default(8787),
-  imageNamespace: z.string().trim().min(1).max(255).default("mikedim95"),
-  imageTag: z.string().trim().min(1).max(100).default("pi"),
+  autoUpdate: z.boolean().default(true),
+  channel: z.enum(["STABLE", "STAGE"]).default("STABLE"),
+  nodeId: z.string().uuid().optional(),
 });
 
 const testPrinterSchema = z.object({
@@ -117,30 +127,6 @@ function tokenHash(token: string) {
 
 function bootstrapTopic(nodeKey: string, event: "claim" | "config") {
   return `garsone/nodes/${nodeKey}/${event}`;
-}
-
-function deploymentFromStore(store: any) {
-  const settings = store?.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
-  const deployment = settings.venueDeployment && typeof settings.venueDeployment === "object"
-    ? settings.venueDeployment
-    : {};
-  return {
-    target: deployment.target === "PI" ? "PI" : "ONLINE",
-    desiredState: deployment.desiredState === "RUNNING" ? "RUNNING" : "STOPPED",
-    version: Number(deployment.version || 0),
-    frontendPort: Number(deployment.frontendPort || 8080),
-    corePort: Number(deployment.corePort || 8787),
-    imageNamespace: String(deployment.imageNamespace || "mikedim95"),
-    imageTag: String(deployment.imageTag || "pi"),
-    status: String(deployment.status || "ONLINE_ONLY"),
-    message: String(deployment.message || ""),
-    localUrl: String(deployment.localUrl || ""),
-    apiUrl: String(deployment.apiUrl || ""),
-    appliedVersion: Number(deployment.appliedVersion || 0),
-    requestedAt: deployment.requestedAt || null,
-    lastReportedAt: deployment.lastReportedAt || null,
-    services: deployment.services && typeof deployment.services === "object" ? deployment.services : {},
-  };
 }
 
 function normalizeSlug(value: string) {
@@ -418,7 +404,7 @@ function claimConfigFromPending(
   });
 }
 
-function buildAgentConfig(node: any, store: any) {
+export async function buildAgentConfig(node: any, store: any) {
   const config = node.configJson && typeof node.configJson === "object" ? node.configJson : {};
   return {
     nodeId: node.id,
@@ -466,12 +452,12 @@ function buildAgentConfig(node: any, store: any) {
           ]
         : [],
     },
-    deployment: deploymentFromStore(store),
+    deployment: await getVenueDeployment(store),
     printers: Array.isArray(config.printers) ? config.printers : [],
   };
 }
 
-async function publishNodeConfigIfAddressable(
+export async function publishNodeConfigIfAddressable(
   node: any,
   store: any,
   nodeToken: string | null = null,
@@ -490,7 +476,7 @@ async function publishNodeConfigIfAddressable(
       nodeId: node.id,
       nodeToken,
       configToken,
-      config: buildAgentConfig(node, store),
+      config: await buildAgentConfig(node, store),
       ts: new Date().toISOString(),
       },
       { skipMqtt: false }
@@ -671,7 +657,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         `;
         await syncStorePrinterTopics(body.storeId, configWithBootstrap);
 
-        const agentConfig = buildAgentConfig(node, store);
+        const agentConfig = await buildAgentConfig(node, store);
         publishMessage(
           bootstrapTopic(pending.nodeKey, "claim"),
           {
@@ -729,11 +715,28 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
       const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
       const store = await db.store.findUnique({ where: { id: storeId } });
       if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
-      const node = await db.nodeAgent.findFirst({
+      const existingDeployment = await db.venueDeployment.findUnique({
         where: { storeId },
-        orderBy: { createdAt: "asc" },
       });
-      return reply.send({ deployment: deploymentFromStore(store), node: node ? serializeNode(node) : null });
+      const node = existingDeployment?.nodeId
+        ? await db.nodeAgent.findFirst({
+            where: { id: existingDeployment.nodeId, storeId },
+          })
+        : await db.nodeAgent.findFirst({
+            where: { storeId },
+            orderBy: { createdAt: "asc" },
+          });
+      const deployment = await ensureVenueDeployment(store, node);
+      const recentEvents = await db.venueDeploymentEvent.findMany({
+        where: { deploymentId: deployment.id },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      });
+      return reply.send({
+        deployment: serializeVenueDeployment(deployment, store),
+        node: node ? serializeNode(node) : null,
+        recentEvents,
+      });
     }
   );
 
@@ -746,42 +749,133 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const body = deploymentCommandSchema.parse(request.body ?? {});
         const store = await db.store.findUnique({ where: { id: storeId } });
         if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
-        const node = await db.nodeAgent.findFirst({
+        const existingDeployment = await db.venueDeployment.findUnique({
           where: { storeId },
-          orderBy: { createdAt: "asc" },
         });
+        const node = body.nodeId
+          ? await db.nodeAgent.findFirst({
+              where: { id: body.nodeId, storeId },
+            })
+          : existingDeployment?.nodeId
+          ? await db.nodeAgent.findFirst({
+              where: { id: existingDeployment.nodeId, storeId },
+            })
+          : await db.nodeAgent.findFirst({
+              where: { storeId },
+              orderBy: { createdAt: "asc" },
+            });
         if (!node) return reply.status(409).send({ error: "STORE_NODE_REQUIRED" });
 
-        const previous = deploymentFromStore(store);
-        const version = previous.version + 1;
-        const requestedAt = new Date().toISOString();
-        const nextDeployment = {
-          ...previous,
-          target: body.action === "DEPLOY" ? "PI" : "ONLINE",
-          desiredState: body.action === "DEPLOY" ? "RUNNING" : "STOPPED",
-          version,
-          frontendPort: body.frontendPort,
-          corePort: body.corePort,
-          imageNamespace: body.imageNamespace,
-          imageTag: body.imageTag,
-          status: body.action === "DEPLOY" ? "PENDING" : "STOPPING",
-          message: body.action === "DEPLOY" ? "Deployment requested from Architect" : "Stop requested from Architect",
-          requestedAt,
-        };
+        const previousRow = await ensureVenueDeployment(store, node);
+        const previous = serializeVenueDeployment(previousRow, store);
+        const channel = body.channel as DeploymentChannel;
+        const [coreRelease, frontRelease] = await Promise.all([
+          latestRelease(channel, "CORE"),
+          latestRelease(channel, "FRONT"),
+        ]);
+        const isStop = body.action === "STOP";
+        const isConfigure = body.action === "CONFIGURE";
+        const isInitialDeploy =
+          body.action === "DEPLOY" &&
+          (previous.target !== "PI" || previous.appliedDataSyncVersion === 0);
+        const shouldSync = body.action === "SYNC" || isInitialDeploy;
+        const remainsRunning =
+          !isStop &&
+          (body.action !== "CONFIGURE" || previous.desiredState === "RUNNING");
+        const shouldPublish =
+          !isConfigure ||
+          (previous.target === "PI" && previous.desiredState === "RUNNING");
+        const version = shouldPublish ? previous.version + 1 : previous.version;
+        const requestedAt = shouldPublish ? new Date() : previousRow.requestedAt;
+        const status = isStop
+          ? "STOPPING"
+          : shouldPublish
+          ? "PENDING"
+          : previous.status;
+        const message =
+          body.action === "STOP"
+            ? "Local venue stop requested from Architect"
+            : body.action === "SYNC"
+            ? "Venue data sync requested from Architect"
+            : body.action === "CONFIGURE"
+            ? "Pi rollout settings updated from Architect"
+            : "Local code deployment requested from Architect";
+
+        const deployment = await db.venueDeployment.update({
+          where: { id: previousRow.id },
+          data: {
+            nodeId: node.id,
+            target: isStop
+              ? "ONLINE"
+              : isConfigure && previous.target === "ONLINE"
+              ? "ONLINE"
+              : "PI",
+            desiredState: isStop
+              ? "STOPPED"
+              : remainsRunning
+              ? "RUNNING"
+              : previous.desiredState === "RUNNING"
+              ? "RUNNING"
+              : "STOPPED",
+            autoUpdate: body.autoUpdate,
+            channel,
+            version,
+            dataSyncVersion: shouldSync
+              ? { increment: 1 }
+              : previous.dataSyncVersion,
+            frontendPort: body.frontendPort,
+            corePort: body.corePort,
+            desiredCoreReleaseId: coreRelease?.id || null,
+            desiredFrontReleaseId: frontRelease?.id || null,
+            desiredCoreImageRef:
+              coreRelease?.imageRef || fallbackImageRef("CORE", channel),
+            desiredFrontImageRef:
+              frontRelease?.imageRef || fallbackImageRef("FRONT", channel),
+            status,
+            message,
+            requestedAt,
+          },
+        });
+        const nextDeployment = deploymentForLegacySettings(deployment);
         const settings = store.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
         const updatedStore = await db.store.update({
           where: { id: storeId },
           data: { settingsJson: { ...settings, venueDeployment: nextDeployment } },
         });
-        const updatedNode = await db.nodeAgent.update({
-          where: { id: node.id },
+        await db.venueDeploymentEvent.create({
           data: {
-            desiredConfigVersion: { increment: 1 },
-            statusMessage: body.action === "DEPLOY" ? "Local venue deployment requested" : "Local venue stop requested",
+            deploymentId: deployment.id,
+            storeId,
+            nodeId: node.id,
+            version: deployment.version,
+            eventType: body.action,
+            status,
+            message,
+            metaJson: {
+              channel,
+              autoUpdate: body.autoUpdate,
+              dataSyncVersion: deployment.dataSyncVersion,
+              coreImageRef: deployment.desiredCoreImageRef,
+              frontImageRef: deployment.desiredFrontImageRef,
+            },
           },
         });
-        await publishNodeConfigIfAddressable(updatedNode, updatedStore);
-        return reply.send({ deployment: deploymentFromStore(updatedStore), node: serializeNode(updatedNode) });
+        const updatedNode = shouldPublish
+          ? await db.nodeAgent.update({
+              where: { id: node.id },
+              data: {
+                desiredConfigVersion: { increment: 1 },
+                statusMessage: message,
+              },
+            })
+          : node;
+        if (shouldPublish) {
+          await publishNodeConfigIfAddressable(updatedNode, updatedStore);
+        }
+        return reply.send({
+          deployment: serializeVenueDeployment(deployment, updatedStore),
+          node: serializeNode(updatedNode),
+        });
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({ error: "Invalid request", details: error.errors });
@@ -947,7 +1041,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
             nodeId: node.id,
             nodeToken: token,
             configToken,
-            config: buildAgentConfig(node, node.store),
+            config: await buildAgentConfig(node, node.store),
             ts: new Date().toISOString(),
           },
           { skipMqtt: false }
@@ -967,7 +1061,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         status: node.status === "PENDING" ? "ONLINE" : node.status,
       },
     });
-    return reply.send(buildAgentConfig(node, node.store));
+    return reply.send(await buildAgentConfig(node, node.store));
   });
 
   fastify.get("/node-agent/deployment-snapshot", async (request, reply) => {
@@ -1013,28 +1107,81 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     if (deploymentReport && typeof deploymentReport === "object") {
       const store = await db.store.findUnique({ where: { id: node.storeId } });
       if (store) {
+        const report = deploymentReport as any;
         const settings = store.settingsJson && typeof store.settingsJson === "object" ? store.settingsJson as any : {};
-        const current = deploymentFromStore(store);
-        const reportedVersion = Number((deploymentReport as any).version || 0);
+        const currentRow = await ensureVenueDeployment(store, node);
+        const current = serializeVenueDeployment(currentRow, store);
+        const reportedVersion = Number(report.version || 0);
         if (reportedVersion >= current.appliedVersion) {
+          const reportedDataSyncVersion = Number(
+            report.appliedDataSyncVersion || report.dataSyncVersion || 0
+          );
+          const nextStatus = String(report.status || current.status);
+          const nextMessage = String(report.message || "");
+          const nextDeployment = await db.venueDeployment.update({
+            where: { id: currentRow.id },
+            data: {
+              appliedVersion: reportedVersion,
+              appliedDataSyncVersion: Math.max(
+                current.appliedDataSyncVersion,
+                reportedDataSyncVersion
+              ),
+              appliedCoreImageRef:
+                String(report.appliedCoreImageRef || "").trim() ||
+                current.appliedCoreImageRef ||
+                null,
+              appliedFrontImageRef:
+                String(report.appliedFrontImageRef || "").trim() ||
+                current.appliedFrontImageRef ||
+                null,
+              status: nextStatus,
+              message: nextMessage || null,
+              localUrl: String(report.localUrl || "") || null,
+              apiUrl: String(report.apiUrl || "") || null,
+              servicesJson: report.services || {},
+              lastReportedAt: new Date(),
+              lastBackupAt: report.lastBackupAt
+                ? new Date(String(report.lastBackupAt))
+                : currentRow.lastBackupAt,
+              lastBackupFile:
+                String(report.lastBackupFile || "").trim() ||
+                currentRow.lastBackupFile,
+            },
+          });
+          const serialized = deploymentForLegacySettings(nextDeployment);
           await db.store.update({
             where: { id: node.storeId },
             data: {
               settingsJson: {
                 ...settings,
-                venueDeployment: {
-                  ...current,
-                  appliedVersion: reportedVersion,
-                  status: String((deploymentReport as any).status || current.status),
-                  message: String((deploymentReport as any).message || ""),
-                  localUrl: String((deploymentReport as any).localUrl || ""),
-                  apiUrl: String((deploymentReport as any).apiUrl || ""),
-                  services: (deploymentReport as any).services || {},
-                  lastReportedAt: new Date().toISOString(),
-                },
+                venueDeployment: serialized,
               },
             },
           });
+          if (
+            reportedVersion !== current.appliedVersion ||
+            nextStatus !== current.status ||
+            nextMessage !== current.message
+          ) {
+            await db.venueDeploymentEvent.create({
+              data: {
+                deploymentId: nextDeployment.id,
+                storeId: node.storeId,
+                nodeId: node.id,
+                version: reportedVersion,
+                eventType: "NODE_REPORT",
+                status: nextStatus,
+                message: nextMessage || null,
+                metaJson: {
+                  appliedCoreImageRef: nextDeployment.appliedCoreImageRef,
+                  appliedFrontImageRef: nextDeployment.appliedFrontImageRef,
+                  appliedDataSyncVersion:
+                    nextDeployment.appliedDataSyncVersion,
+                  lastBackupFile: nextDeployment.lastBackupFile,
+                },
+              },
+            });
+          }
         }
       }
     }

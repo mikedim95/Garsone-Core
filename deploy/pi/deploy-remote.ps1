@@ -5,7 +5,7 @@ param(
 
   [string]$User = "piadmin",
   [string]$PublicHost = "",
-  [string]$InstallUrl = "https://raw.githubusercontent.com/mikedim95/Garsone-Core/stage/deploy/pi/install.sh",
+  [string]$InstallUrl = "https://raw.githubusercontent.com/mikedim95/Garsone-Core/main/deploy/pi/install.sh",
   [string]$AppDir = "",
   [switch]$NoSeed
 )

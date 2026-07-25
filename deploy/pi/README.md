@@ -10,15 +10,17 @@ For nodes associated through Architect, the preferred path is the per-store **Ve
 
 ## Build And Push Images
 
-Pushes to `main` automatically build the ARM64 Core image through
-`.github/workflows/docker-publish.yml`. Configure these GitHub Actions secrets
-in the repository before running it:
+Every push to `main` or `stage` builds and verifies the ARM64 Core image through
+`.github/workflows/docker-publish.yml`. Configure these GitHub Actions secrets:
 
 - `DOCKERHUB_USERNAME`
 - `DOCKERHUB_TOKEN` (a Docker Hub access token with write permission)
 
-The workflow publishes `mikedim95/garsone-core:pi` and an immutable
-`pi-<git-sha>` tag. It can also be run manually with **Run workflow**.
+`main` publishes the `pi`, `stable`, and immutable `stable-<git-sha>` tags.
+`stage` publishes the `stage`, `canary`, and immutable
+`canary-<git-sha>` tags. After the push, the workflow uses a short-lived GitHub
+OIDC identity to register the immutable image digest with Garsone Core; no
+long-lived release webhook secret is needed.
 
 The local helper below remains available when a manual build is needed.
 
@@ -44,13 +46,13 @@ rerun with `-Platform linux/arm/v7`.
 From your laptop, run this for each new Pi:
 
 ```bash
-ssh -t piadmin@<pi-ip> "curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/stage/deploy/pi/install.sh | bash -s -- --host <pi-ip>"
+ssh -t piadmin@<pi-ip> "curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/main/deploy/pi/install.sh | bash -s -- --host <pi-ip>"
 ```
 
 Or from the Pi itself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/stage/deploy/pi/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mikedim95/Garsone-Core/main/deploy/pi/install.sh | bash
 ```
 
 The installer:
@@ -91,8 +93,15 @@ docker compose --env-file .env -f compose.yml up -d
 
 `DB_BOOTSTRAP_MODE=push` is the default for this Pi bundle because the repo has
 incremental Prisma migrations but no baseline migration for an empty database.
-After the first successful boot, keep `push` for simple local updates or change
-to `none` if you want to manage schema changes manually.
+The container uses Prisma's non-destructive push mode: schema changes that
+would discard data fail the rollout instead of applying automatically.
+
+Architect-managed code releases keep the local database authoritative. The
+node creates a compressed `pg_dump` before replacing containers, retains the
+three newest backups, health-checks the new Core and Front, and restores the
+previous container images if the upgrade fails. Hosted venue data is imported
+only on the first deployment or when Architect explicitly requests
+**Sync venue data**; ordinary code releases do not overwrite local data.
 
 The seed is not run automatically. To seed demo data once:
 

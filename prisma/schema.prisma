@@ -38,6 +38,8 @@ model Store {
   localityApprovals         LocalityApproval[]
   nodeAgents                NodeAgent[]
   pendingNodeAgents         PendingNodeAgent[]
+  venueDeployment           VenueDeployment?
+  venueDeploymentEvents     VenueDeploymentEvent[]
 
   @@index([createdAt(sort: Desc)])
   @@map("stores")
@@ -281,23 +283,25 @@ model LocalityApproval {
 }
 
 model NodeAgent {
-  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeId              String             @db.Uuid
-  slug                 String             @db.VarChar(100)
-  displayName          String             @db.VarChar(255)
-  tokenHash            String             @db.VarChar(128)
-  configJson           Json?
-  desiredConfigVersion Int                @default(1)
-  lastAppliedVersion   Int?
-  lastSeenAt           DateTime?          @db.Timestamp(6)
-  status               NodeAgentStatus    @default(PENDING)
-  statusMessage        String?            @db.VarChar(1000)
-  lastLog              String?
-  createdAt            DateTime           @default(now()) @db.Timestamp(6)
-  updatedAt            DateTime           @updatedAt @db.Timestamp(6)
-  store                Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  events               NodeAgentEvent[]
-  claimedPendingNodes  PendingNodeAgent[]
+  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId                String                 @db.Uuid
+  slug                   String                 @db.VarChar(100)
+  displayName            String                 @db.VarChar(255)
+  tokenHash              String                 @db.VarChar(128)
+  configJson             Json?
+  desiredConfigVersion   Int                    @default(1)
+  lastAppliedVersion     Int?
+  lastSeenAt             DateTime?              @db.Timestamp(6)
+  status                 NodeAgentStatus        @default(PENDING)
+  statusMessage          String?                @db.VarChar(1000)
+  lastLog                String?
+  createdAt              DateTime               @default(now()) @db.Timestamp(6)
+  updatedAt              DateTime               @updatedAt @db.Timestamp(6)
+  store                  Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  events                 NodeAgentEvent[]
+  claimedPendingNodes    PendingNodeAgent[]
+  managedVenueDeployment VenueDeployment?
+  venueDeploymentEvents  VenueDeploymentEvent[]
 
   @@unique([storeId, slug])
   @@index([storeId])
@@ -341,6 +345,89 @@ model NodeAgentEvent {
   @@index([nodeId, ts(sort: Desc)])
   @@index([storeId, ts(sort: Desc)])
   @@map("node_agent_events")
+}
+
+model PiRelease {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel                 PiReleaseChannel
+  component               PiReleaseComponent
+  imageRef                String                 @db.VarChar(600)
+  sourceRepo              String                 @db.VarChar(255)
+  sourceSha               String                 @db.VarChar(64)
+  workflowRunId           String?                @db.VarChar(100)
+  publishedAt             DateTime               @db.Timestamp(6)
+  createdAt               DateTime               @default(now()) @db.Timestamp(6)
+  desiredCoreDeployments  VenueDeployment[]      @relation("DesiredCoreRelease")
+  desiredFrontDeployments VenueDeployment[]      @relation("DesiredFrontRelease")
+  deploymentEvents        VenueDeploymentEvent[]
+
+  @@unique([channel, component, sourceSha])
+  @@index([channel, component, publishedAt(sort: Desc)])
+  @@map("pi_releases")
+}
+
+model VenueDeployment {
+  id                     String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId                String                      @unique @db.Uuid
+  nodeId                 String?                     @unique @db.Uuid
+  target                 VenueDeploymentTarget       @default(ONLINE)
+  desiredState           VenueDeploymentDesiredState @default(STOPPED)
+  autoUpdate             Boolean                     @default(true)
+  channel                PiReleaseChannel            @default(STABLE)
+  version                Int                         @default(0)
+  appliedVersion         Int                         @default(0)
+  dataSyncVersion        Int                         @default(0)
+  appliedDataSyncVersion Int                         @default(0)
+  frontendPort           Int                         @default(8080)
+  corePort               Int                         @default(8787)
+  desiredCoreReleaseId   String?                     @db.Uuid
+  desiredFrontReleaseId  String?                     @db.Uuid
+  desiredCoreImageRef    String?                     @db.VarChar(600)
+  desiredFrontImageRef   String?                     @db.VarChar(600)
+  appliedCoreImageRef    String?                     @db.VarChar(600)
+  appliedFrontImageRef   String?                     @db.VarChar(600)
+  status                 String                      @default("ONLINE_ONLY") @db.VarChar(32)
+  message                String?                     @db.VarChar(1000)
+  localUrl               String?                     @db.VarChar(1000)
+  apiUrl                 String?                     @db.VarChar(1000)
+  servicesJson           Json?
+  requestedAt            DateTime?                   @db.Timestamp(6)
+  lastReportedAt         DateTime?                   @db.Timestamp(6)
+  lastBackupAt           DateTime?                   @db.Timestamp(6)
+  lastBackupFile         String?                     @db.VarChar(1000)
+  createdAt              DateTime                    @default(now()) @db.Timestamp(6)
+  updatedAt              DateTime                    @updatedAt @db.Timestamp(6)
+  store                  Store                       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  node                   NodeAgent?                  @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  desiredCoreRelease     PiRelease?                  @relation("DesiredCoreRelease", fields: [desiredCoreReleaseId], references: [id], onDelete: SetNull)
+  desiredFrontRelease    PiRelease?                  @relation("DesiredFrontRelease", fields: [desiredFrontReleaseId], references: [id], onDelete: SetNull)
+  events                 VenueDeploymentEvent[]
+
+  @@index([target, desiredState, autoUpdate, channel])
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("venue_deployments")
+}
+
+model VenueDeploymentEvent {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deploymentId String          @db.Uuid
+  storeId      String          @db.Uuid
+  nodeId       String?         @db.Uuid
+  releaseId    String?         @db.Uuid
+  version      Int
+  eventType    String          @db.VarChar(64)
+  status       String          @db.VarChar(32)
+  message      String?         @db.VarChar(1000)
+  metaJson     Json?
+  createdAt    DateTime        @default(now()) @db.Timestamp(6)
+  deployment   VenueDeployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  node         NodeAgent?      @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  release      PiRelease?      @relation(fields: [releaseId], references: [id], onDelete: SetNull)
+
+  @@index([deploymentId, createdAt(sort: Desc)])
+  @@index([storeId, createdAt(sort: Desc)])
+  @@map("venue_deployment_events")
 }
 
 model Order {
@@ -611,4 +698,24 @@ enum NodeAgentStatus {
   DEGRADED
   ERROR
   OFFLINE
+}
+
+enum PiReleaseChannel {
+  STABLE
+  STAGE
+}
+
+enum PiReleaseComponent {
+  CORE
+  FRONT
+}
+
+enum VenueDeploymentTarget {
+  ONLINE
+  PI
+}
+
+enum VenueDeploymentDesiredState {
+  STOPPED
+  RUNNING
 }

@@ -16,6 +16,7 @@ import { nodeAgentRoutes } from "./routes/nodeAgents.js";
 import { customerPushRoutes } from "./routes/customerPush.js";
 import { staffPushRoutes } from "./routes/staffPush.js";
 import { venueDeploymentRoutes } from "./routes/venueDeployment.js";
+import { piReleaseRoutes } from "./routes/piReleases.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
 import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
@@ -73,6 +74,7 @@ await fastify.register(nodeAgentRoutes);
 await fastify.register(customerPushRoutes);
 await fastify.register(staffPushRoutes);
 await fastify.register(venueDeploymentRoutes);
+await fastify.register(piReleaseRoutes);
 
 // Start server
 try {
