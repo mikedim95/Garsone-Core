@@ -1,0 +1,17 @@
+{
+  "CORE_IMAGE": {
+    "reference": "garsone/core:20260921-ux",
+    "id": "sha256:8d4933941ceb372e232c714c2d968aed8b2049c3e274122942d9387e46be49c6",
+    "platform": "linux/arm64"
+  },
+  "FRONT_IMAGE": {
+    "reference": "garsone/front:20260921-mobile",
+    "id": "sha256:bd6cd38c45cfeed3b9e1f15d98016b28ae4e46c70088da2baaa6d8dd4e2fe2d2",
+    "platform": "linux/arm64"
+  },
+  "POSTGRES_IMAGE": {
+    "reference": "postgres:16-alpine",
+    "id": "sha256:2c942175a1255a9abe0366e48c1b401d9f50f835b04dfea13f111609b5530df7",
+    "platform": "linux/arm64"
+  }
+}

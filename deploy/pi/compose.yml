@@ -29,6 +29,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8787
+      LOCAL_ONLY: "true"
+      TRUST_PROXY_HOPS: "1"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       DB_CONNECTION: default
@@ -75,6 +77,8 @@ services:
   front:
     image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in .env}/garsone-front:${IMAGE_TAG:-pi}
     restart: unless-stopped
+    environment:
+      CORE_UPSTREAM: core:8787
     labels:
       com.centurylinklabs.watchtower.enable: "false"
     depends_on:

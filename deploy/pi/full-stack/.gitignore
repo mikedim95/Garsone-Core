@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+!images.published-before-prework.env
+!images.lock.env
+artifacts/
+backups/
+data/
+*.inventory.json
+*.tar.gz

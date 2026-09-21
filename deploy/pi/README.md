@@ -1,5 +1,11 @@
 # Raspberry Pi Deployment
 
+For the complete **Noor installation with no cloud runtime dependency and
+direct Bluetooth printing**, use [full-stack/README.md](full-stack/README.md).
+It includes a Noor data import, local assets, offline source/image
+preparation, and compatibility with the existing GitHub image workflows.
+QR Studio is a development tool and is excluded from the Pi deployment.
+
 This bundle runs Garsone locally on a Raspberry Pi with three services:
 
 - `front`: nginx serving the built React app
@@ -21,6 +27,18 @@ Every push to `main` or `stage` builds and verifies the ARM64 Core image through
 `canary-<git-sha>` tags. After the push, the workflow uses a short-lived GitHub
 OIDC identity to register the immutable image digest with Garsone Core; no
 long-lived release webhook secret is needed.
+
+The Core Docker image defaults to `LOCAL_ONLY=true` and `TRUST_PROXY_HOPS=1`
+for this Pi topology, including older managed nodes that omit those settings.
+This keeps local guest checkout, QR imports and payment/push behavior aligned
+with the Pi frontend. The single trusted proxy is Front's nginx; restrict direct
+Core access at the network boundary. Compose explicitly connects Front to
+`core:8787`; older managed deployments use `garsone-local-core:8787`.
+
+Native hosted Node deployments do not inherit Docker defaults. If this image
+is reused for a hosted container, explicitly set `LOCAL_ONLY=false`, set
+`TRUST_PROXY_HOPS` to that deployment's verified proxy depth, and configure
+the allowed frontend origins. Use the hosted frontend build for that deployment.
 
 The local helper below remains available when a manual build is needed.
 

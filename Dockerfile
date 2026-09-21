@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:20-bookworm-slim AS deps
+FROM node:24-bookworm-slim AS deps
 
 WORKDIR /app
 
@@ -20,12 +20,16 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 
+# This published image targets a Pi behind one Front nginx proxy. Keep these
+# defaults for older node agents that do not pass local-mode settings yet.
 ENV NODE_ENV=production \
-  PORT=8787
+  PORT=8787 \
+  LOCAL_ONLY=true \
+  TRUST_PROXY_HOPS=1
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates openssl tini \
@@ -41,9 +45,10 @@ COPY prisma ./prisma
 COPY qr_codes.txt ./qr_codes.txt
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY deploy/pi/full-stack/venue-data.mjs deploy/pi/full-stack/bootstrap-admin.mjs ./tools/
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
-  && mkdir -p /app/uploads \
+  && mkdir -p /app/uploads /app/print-spool \
   && chown -R nodejs:nodejs /app
 
 USER nodejs

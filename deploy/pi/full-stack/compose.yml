@@ -1,0 +1,223 @@
+name: ${COMPOSE_PROJECT_NAME:-garsone-complete}
+
+x-runtime: &runtime
+  restart: unless-stopped
+  pull_policy: never
+  platform: ${TARGET_PLATFORM:-linux/arm64}
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  labels:
+    com.centurylinklabs.watchtower.enable: "false"
+
+x-core-env: &core-env
+  NODE_ENV: production
+  PORT: "8787"
+  DB_CONNECTION: default
+  DATABASE_URL: postgresql://${POSTGRES_USER:-garsone}:${POSTGRES_PASSWORD:?Run prepare.py init}@db:5432/${POSTGRES_DB:-garsone}?schema=public
+  DIRECT_URL: postgresql://${POSTGRES_USER:-garsone}:${POSTGRES_PASSWORD:?Run prepare.py init}@db:5432/${POSTGRES_DB:-garsone}?schema=public
+  JWT_SECRET: ${JWT_SECRET:?Run prepare.py init}
+  DB_BOOTSTRAP_MODE: push
+  DB_SEED_ON_START: "false"
+  SEED_RESET: "0"
+  ENABLE_DEV_LOGIN: "0"
+  LOCAL_ONLY: "true"
+  TRUST_PROXY_HOPS: "1"
+  LOCAL_UPLOAD_DIR: /app/uploads
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  STORE_SLUG: ${STORE_SLUG:-default-store}
+  MQTT_DISABLED: ${MQTT_DISABLED:-true}
+  MQTT_URL: mqtt://mqtt:1883
+  MQTT_USERNAME: ${MQTT_USERNAME:-garsone}
+  MQTT_PASSWORD: ${MQTT_PASSWORD:?Run prepare.py init}
+  FRONTEND_ORIGIN: ${PUBLIC_ORIGIN:?Run prepare.py init}
+  FRONTEND_BASE_URL: ${PUBLIC_ORIGIN}
+  PUBLIC_APP_BASE_URL: ${PUBLIC_ORIGIN}
+  PUBLIC_APP_URL: ${PUBLIC_ORIGIN}
+  PUBLIC_APP_PROTOCOL: http
+  PUBLIC_APP_DOMAIN: ${PUBLIC_HOST}
+  PUBLIC_APP_PORT: ${FRONT_PORT:-8080}
+  FRONTEND_PORT: ${FRONT_PORT:-8080}
+  OPS_APP_PATH: /ops
+  TZ: ${TZ:-Europe/Athens}
+
+services:
+  db:
+    <<: *runtime
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-garsone}
+      POSTGRES_USER: ${POSTGRES_USER:-garsone}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run prepare.py init}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  mqtt:
+    profiles: [mqtt, node, printer]
+    <<: *runtime
+    image: eclipse-mosquitto:2
+    environment:
+      MQTT_USERNAME: ${MQTT_USERNAME:-garsone}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?Run prepare.py init}
+    entrypoint: [/bin/sh, /etc/garsone/start-mqtt.sh]
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./start-mqtt.sh:/etc/garsone/start-mqtt.sh:ro
+      - mqtt-data:/mosquitto/data
+    healthcheck:
+      test: [CMD-SHELL, 'mosquitto_pub -h 127.0.0.1 -u "$${MQTT_USERNAME}" -P "$${MQTT_PASSWORD}" -t garsone/health -m ok -q 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  core:
+    <<: *runtime
+    image: ${CORE_IMAGE:-mikedim95/garsone-core:pi}
+    build:
+      context: ../../..
+    environment: *core-env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - core-uploads:/app/uploads
+      - print-spool:/app/print-spool
+    ports:
+      - "${CORE_BIND_ADDRESS:-0.0.0.0}:${CORE_PORT:-8787}:8787"
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  front:
+    <<: *runtime
+    image: ${FRONT_IMAGE:-mikedim95/garsone-front:pi}
+    environment:
+      CORE_UPSTREAM: core:8787
+    build:
+      context: ../../../../Garsone-Front
+      args:
+        VITE_API_URL: /api
+        VITE_LOCAL_ONLY: "true"
+        VITE_ENABLE_DEBUG_LOGIN: "false"
+    depends_on:
+      core:
+        condition: service_healthy
+    ports:
+      - "${FRONT_PORT:-8080}:80"
+    healthcheck:
+      test: [CMD-SHELL, 'wget -qO- http://127.0.0.1/api/health >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  printer:
+    <<: *runtime
+    profiles: [printer]
+    image: ${NODE_IMAGE:-mikedim95/mqtt-printer:latest}
+    build:
+      context: ../../../../Garsone-Nodes/MQTT_Printer
+    entrypoint: [/usr/bin/tini, --, python, /app/mqtt_print_orders.py]
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    devices:
+      - "${PRINTER_DEVICE:-/dev/rfcomm0}:/dev/printer"
+    environment:
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      MQTT_TLS: "false"
+      MQTT_USER: ${MQTT_USERNAME:-garsone}
+      MQTT_PASS: ${MQTT_PASSWORD:?Run prepare.py init}
+      MQTT_TOPIC: ${PRINTER_TOPIC:-}
+      MQTT_ARRIVAL_TOPIC: ${PRINTER_ARRIVAL_TOPIC:-}
+      DEVICE: /dev/printer
+      STORE_SLUG: ${STORE_SLUG:-default-store}
+      MQTT_CLIENT_ID: ${COMPOSE_PROJECT_NAME:-garsone-complete}-printer
+      TZ: ${TZ:-Europe/Athens}
+
+  node-agent:
+    <<: *runtime
+    profiles: [node]
+    image: ${NODE_IMAGE:-mikedim95/mqtt-printer:latest}
+    build:
+      context: ../../../../Garsone-Nodes/MQTT_Printer
+    depends_on:
+      core:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - /run/dbus:/run/dbus
+      - /var/lib/bluetooth:/var/lib/bluetooth
+      - node-state:/var/lib/garsone-node
+    environment:
+      NODE_API_BASE: http://core:8787
+      NODE_KEY: ${NODE_KEY:-}
+      NODE_PAIRING_SECRET: ${NODE_PAIRING_SECRET:-}
+      NODE_DISPLAY_NAME: ${PUBLIC_HOST:-raspberrypi.local}
+      NODE_LOCAL_HOSTNAME: ${PUBLIC_HOST:-raspberrypi.local}
+      NODE_VENUE_DEPLOYMENTS_ENABLED: "false"
+      NODE_MANAGE_HOST_NETWORK: "false"
+      BOOTSTRAP_MQTT_HOST: mqtt
+      BOOTSTRAP_MQTT_PORT: "1883"
+      BOOTSTRAP_MQTT_TLS: "false"
+      BOOTSTRAP_MQTT_USER: ${MQTT_USERNAME:-garsone}
+      BOOTSTRAP_MQTT_PASS: ${MQTT_PASSWORD:?Run prepare.py init}
+      TZ: ${TZ:-Europe/Athens}
+
+  seed:
+    profiles: [seed]
+    platform: ${TARGET_PLATFORM:-linux/arm64}
+    image: ${CORE_IMAGE:-mikedim95/garsone-core:pi}
+    environment:
+      <<: *core-env
+      DB_BOOTSTRAP_MODE: none
+    depends_on:
+      core:
+        condition: service_healthy
+    command: [npm, run, db:seed]
+
+  venue-import:
+    profiles: [import]
+    platform: ${TARGET_PLATFORM:-linux/arm64}
+    image: ${CORE_IMAGE:-mikedim95/garsone-core:pi}
+    environment:
+      <<: *core-env
+      ALLOW_LOCAL_VENUE_IMPORT: noor
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/data:ro
+      - core-uploads:/app/uploads
+    command: [node, tools/venue-data.mjs, import, /data/noor.local.json]
+
+  bootstrap-admin:
+    profiles: [admin]
+    platform: ${TARGET_PLATFORM:-linux/arm64}
+    image: ${CORE_IMAGE:-mikedim95/garsone-core:pi}
+    environment:
+      <<: *core-env
+      DB_BOOTSTRAP_MODE: none
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-architect@garsone.local}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
+    command: [node, tools/bootstrap-admin.mjs]
+
+volumes:
+  postgres-data:
+  core-uploads:
+  mqtt-data:
+  node-state:
+  print-spool:

@@ -2,6 +2,7 @@ import os from "os";
 import mqtt from "mqtt";
 import type { QoS } from "mqtt-packet";
 import { emitRealtime } from "./realtime.js";
+import { enqueueLocalPrint, usesLocalPrinter } from "./localPrinting.js";
 
 export type PublishOptions = {
   roles?: Array<"waiter" | "cook" | "manager">;
@@ -162,6 +163,10 @@ export function publishMessage(
 ) {
   emitRealtime(topic, payload, options);
   if (options?.skipMqtt) {
+    return;
+  }
+  if (usesLocalPrinter(topic)) {
+    void enqueueLocalPrint(topic, payload).catch(error => console.error("[local-print] enqueue failed", error));
     return;
   }
   const mqttClient = getMqttClient();

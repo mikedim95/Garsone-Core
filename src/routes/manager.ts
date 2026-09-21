@@ -3,6 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { managerResourceScope } from "../middleware/managerScope.js";
 import { kitchenServiceRoles, staffServiceRoles } from "../lib/roles.js";
 import { ensureStore, invalidateStoreCache } from "../lib/store.js";
 import { publishMessage } from "../lib/mqtt.js";
@@ -11,6 +12,7 @@ import { invalidateMenuBootstrapCache } from "./publicMenuBootstrap.js";
 import { createHmac, createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { decodeRasterImage, isPublicImageUrl } from "../lib/imageUpload.js";
 
 const LOCAL_UPLOAD_ROOT = process.env.LOCAL_UPLOAD_DIR || path.join(process.cwd(), "uploads");
 
@@ -146,7 +148,7 @@ const deriveR2PublicBase = (imageUrl?: string | null, storeSlug?: string | null)
 };
 
 export async function managerRoutes(fastify: FastifyInstance) {
-  const managerOnly = [authMiddleware, requireRole(["manager", "architect"])];
+  const managerOnly = [authMiddleware, requireRole(["manager", "architect"]), managerResourceScope];
 
   fastify.patch(
     "/manager/store/print-on-arrival",
@@ -235,12 +237,18 @@ export async function managerRoutes(fastify: FastifyInstance) {
         .split("/")
         .map((segment) => segment.trim())
         .filter(Boolean);
-      if (!normalized.length || normalized.some((segment) => segment === "." || segment === "..")) {
+      if (!normalized.length || normalized.some((segment) => segment === "." || segment === ".." || segment.includes("\\"))) {
         return reply.status(400).send({ error: "Invalid upload path" });
       }
       const filePath = path.join(LOCAL_UPLOAD_ROOT, ...normalized);
-      const data = await fs.readFile(filePath);
-      return reply.type(guessMimeType(filePath)).send(data);
+      const [rootPath, realFilePath] = await Promise.all([fs.realpath(LOCAL_UPLOAD_ROOT), fs.realpath(filePath)]);
+      const relative = path.relative(rootPath, realFilePath);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        return reply.status(400).send({ error: "Invalid upload path" });
+      }
+      const data = await fs.readFile(realFilePath);
+      return reply.header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .header("X-Content-Type-Options", "nosniff").type(guessMimeType(filePath)).send(data);
     } catch {
       return reply.status(404).send({ error: "File not found" });
     }
@@ -296,7 +304,9 @@ export async function managerRoutes(fastify: FastifyInstance) {
       const contentType = res.headers.get("content-type") || guessMimeType(requestedKey);
       const cacheControl = "public, max-age=31536000, immutable";
       const buffer = Buffer.from(await res.arrayBuffer());
-      return reply.header("Cache-Control", cacheControl).type(contentType).send(buffer);
+      return reply.header("Cache-Control", cacheControl)
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .header("X-Content-Type-Options", "nosniff").type(contentType).send(buffer);
     } catch (error) {
       fastify.log.error(error, "R2 media fetch error");
       return reply.status(500).send({ error: "Media fetch failed" });
@@ -313,7 +323,6 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const store = await ensureStore(request);
         const body = request.body as any;
         const fileName = String(body?.fileName || "").trim();
-        const mimeType = String(body?.mimeType || "application/octet-stream");
         const base64 = String(body?.base64 || "");
         const itemId = String(body?.itemId || "").trim();
 
@@ -336,7 +345,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             .replace(/-+/g, "-")
             .replace(/^-+|-+$/g, "");
 
-        const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ""), "base64");
+        // MIME type and extension come from bytes, never a client-supplied name.
+        const { buffer, mimeType, extension } = decodeRasterImage(base64);
         const storeSlug = slugSegment(store.slug || "store") || "store";
 
         const existingStoreImage = await db.item.findFirst({
@@ -364,15 +374,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const requireR2Uploads =
           String(process.env.REQUIRE_R2_UPLOADS || "").toLowerCase() === "true";
 
-        const extFrom = (name: string, mt: string) => {
-          const dot = name.lastIndexOf(".");
-          if (dot > -1 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase();
-          if (mt === "image/jpeg") return "jpg";
-          if (mt === "image/png") return "png";
-          if (mt === "image/webp") return "webp";
-          if (mt === "image/gif") return "gif";
-          return "bin";
-        };
+        const extFrom = (_name: string, _mt: string) => extension;
 
         const buildKey = async () => {
           if (itemId) {
@@ -471,7 +473,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         const SUPA_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
         const BUCKET = process.env.SUPABASE_BUCKET || "assets";
         if (SUPA_URL && SUPA_KEY) {
-          const safeName = `${Date.now()}-${fileName.replace(/[^a-zA-Z0-9_\.\-]/g, "-")}`;
+          const safeName = `${Date.now()}-${slugSegment(fileName.replace(/\.[^.]+$/, "")) || "upload"}.${extension}`;
           const supaPath = `${storeSlug}/${itemId || "temp"}/${safeName}`;
           const supaUrl = `${SUPA_URL.replace(/\/$/, "")}/storage/v1/object/${BUCKET}/${supaPath}`;
 
@@ -501,29 +503,10 @@ export async function managerRoutes(fastify: FastifyInstance) {
         );
         await fs.mkdir(path.dirname(localFilePath), { recursive: true });
         await fs.writeFile(localFilePath, buffer);
-        const proto = String(
-          (request.headers["x-forwarded-proto"] as string) ||
-            (request.protocol as string) ||
-            "https"
-        )
-          .split(",")[0]
-          .trim();
-        const host = String(
-          (request.headers["x-forwarded-host"] as string) ||
-            (request.headers.host as string) ||
-            ""
-        )
-          .split(",")[0]
-          .trim();
-        if (host) {
-          const publicUrl = `${proto}://${host}/uploads/${localKey
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`;
-          return reply.send({ publicUrl, path: localKey });
-        }
-        return reply.status(500).send({ error: "Upload failed: storage not configured" });
+        const publicUrl = `/uploads/${localKey.split("/").map(encodeURIComponent).join("/")}`;
+        return reply.send({ publicUrl, path: localKey });
       } catch (e: any) {
+        if (e?.statusCode === 400) return reply.status(400).send({ error: e.message });
         fastify.log.error(e, "Manager image upload error");
         return reply.status(500).send({ error: "Upload failed" });
       }
@@ -1184,7 +1167,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     subcategoryEl: z.string().trim().max(255).nullable().optional(),
     descriptionEn: z.string().optional(),
     descriptionEl: z.string().optional(),
-    imageUrl: z.string().url().max(2048).optional(),
+    imageUrl: z.string().max(2048).refine(isPublicImageUrl, "Invalid image URL").optional(),
     printerTopic: z.string().trim().min(1).max(255),
     priceCents: z.number().int().nonnegative(),
     categoryId: z.string().uuid(),
@@ -1261,7 +1244,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     description: z.string().optional(),
     descriptionEn: z.string().optional().nullable(),
     descriptionEl: z.string().optional().nullable(),
-    imageUrl: z.string().url().max(2048).nullable().optional(),
+    imageUrl: z.string().max(2048).refine(isPublicImageUrl, "Invalid image URL").nullable().optional(),
     printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
     priceCents: z.number().int().nonnegative().optional(),
     categoryId: z.string().uuid().optional(),
@@ -1736,7 +1719,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
   const categoryCreate = z.object({
     titleEn: z.string().min(1),
     titleEl: z.string().min(1),
-    imageUrl: z.string().url().max(2048).nullable().optional(),
+    imageUrl: z.string().max(2048).refine(isPublicImageUrl, "Invalid image URL").nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).optional(),
   });
@@ -1785,7 +1768,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
     title: z.string().min(1).optional(),
     titleEn: z.string().min(1).optional(),
     titleEl: z.string().min(1).optional(),
-    imageUrl: z.string().url().max(2048).nullable().optional(),
+    imageUrl: z.string().max(2048).refine(isPublicImageUrl, "Invalid image URL").nullable().optional(),
     sortOrder: z.number().int().optional(),
     printerTopic: z.string().trim().min(1).max(255).nullable().optional(),
   });

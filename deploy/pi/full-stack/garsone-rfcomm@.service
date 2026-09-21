@@ -1,0 +1,15 @@
+[Unit]
+Description=Noor Bluetooth printer %i
+Requires=bluetooth.service
+After=bluetooth.service
+Before=garsone-noor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/garsone/bluetooth-%i.env
+ExecStart=/usr/bin/rfcomm bind ${INDEX} ${MAC} ${CHANNEL}
+ExecStop=/usr/bin/rfcomm release ${INDEX}
+
+[Install]
+WantedBy=multi-user.target

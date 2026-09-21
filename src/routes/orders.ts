@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { Prisma, OrderItemStatus, OrderStatus, Role, ShiftStatus } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { authMiddleware, optionalAuthMiddleware } from "../middleware/auth.js";
+import { authMiddleware, optionalAuthMiddleware, requireRole } from "../middleware/auth.js";
 import { ipWhitelistMiddleware } from "../middleware/ipWhitelist.js";
 import { publishMessage, PublishOptions } from "../lib/mqtt.js";
 import {
@@ -31,11 +31,11 @@ const createOrderSchema = z.object({
     .array(
       z.object({
         itemId: z.string().uuid(),
-        quantity: z.number().int().positive(),
+        quantity: z.number().int().positive().max(999),
         modifiers: z.union([z.string(), modifierSelectionSchema]).optional(),
       })
     )
-    .min(1),
+    .min(1).max(100),
   note: z.string().max(500).optional(),
 });
 
@@ -506,7 +506,7 @@ const resolveStoreSlug = (request: any) =>
   STORE_SLUG;
 
 const bypassGuestCheckoutChecks = (storeSlug?: string | null) =>
-  (storeSlug || "").trim().toLowerCase() === "noor";
+  process.env.LOCAL_ONLY === "true" && storeSlug === STORE_SLUG;
 
 export async function orderRoutes(fastify: FastifyInstance) {
   // Create order (IP whitelisted)
@@ -527,12 +527,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         logStep("store");
         const actor = (request as any).user;
         const isStaff = Boolean(actor?.role);
-        const hasPaymentSession =
-          typeof body.paymentSessionId === "string" &&
-          body.paymentSessionId.trim().length > 0;
         const requiresLocality =
           !isStaff &&
-          !hasPaymentSession &&
           !bypassGuestCheckoutChecks(store.slug);
         const localityApprovalToken =
           typeof body.localityApprovalToken === "string"
@@ -809,7 +805,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
   // in your server.ts, near /orders
-  fastify.get("/orders-benchmark", async (request, reply) => {
+  fastify.get("/orders-benchmark", { preHandler: [authMiddleware, requireRole(["manager", "architect"])] }, async (request, reply) => {
     try {
       const storeSlug = resolveStoreSlug(request);
       const store = await ensureStore(storeSlug);

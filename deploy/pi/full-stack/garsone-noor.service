@@ -1,0 +1,15 @@
+[Unit]
+Description=Noor local application after Bluetooth device binding
+Requires=docker.service garsone-rfcomm@0.service garsone-rfcomm@1.service
+After=docker.service garsone-rfcomm@0.service garsone-rfcomm@1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Adjust to the actual extracted release location before installing this unit.
+WorkingDirectory=/opt/garsone/Garsone-Core/deploy/pi/full-stack
+ExecStart=/usr/bin/bash pi.sh start
+TimeoutStartSec=360
+
+[Install]
+WantedBy=multi-user.target

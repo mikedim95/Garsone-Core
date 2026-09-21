@@ -38,12 +38,16 @@ export async function eventsRoutes(fastify: FastifyInstance) {
       try {
         const body = z
           .object({
-            topic: z.string().min(1),
-            payload: z.any().optional(),
+            topic: z.string().min(1).max(180),
           })
           .parse(request.body ?? {});
 
-        emitRealtime(body.topic, body.payload ?? {});
+        // Only domain routes may publish authoritative order/printer/node events.
+        const storeSlug = (request as any).user.storeSlug;
+        if (body.topic !== `${storeSlug}/client/refresh`) {
+          return reply.status(403).send({ error: "EVENT_TOPIC_NOT_ALLOWED" });
+        }
+        emitRealtime(body.topic, { type: "refresh" });
 
         return reply.send({ success: true });
       } catch (error) {

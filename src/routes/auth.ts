@@ -9,12 +9,12 @@ import { authMiddleware } from "../middleware/auth.js";
 
 const signinSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z.string().min(1).max(200),
 });
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(6).max(200),
+  newPassword: z.string().min(12).max(72),
 });
 
 export async function authRoutes(fastify: FastifyInstance) {
@@ -24,7 +24,9 @@ export async function authRoutes(fastify: FastifyInstance) {
       const email = body.email.toLowerCase();
 
       const requestedSlug = getRequestedStoreSlug(request);
-      let store: Awaited<ReturnType<typeof ensureStore>> | null = requestedSlug ? await ensureStore(requestedSlug) : null;
+      const requestedStore = requestedSlug ? await db.store.findUnique({ where: { slug: requestedSlug } }) : null;
+      let store: Awaited<ReturnType<typeof ensureStore>> | null = requestedStore
+        ? { ...requestedStore, orderingMode: getOrderingMode(requestedStore) } : null;
 
       // Try store-scoped lookup first if slug was provided, otherwise fall back to global unique email lookup.
       let user = store
@@ -163,10 +165,10 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.get("/auth/dev-login/:storeSlug/:userKey", async (request, reply) => {
     const isProd = (process.env.NODE_ENV || "").toLowerCase() === "production";
     const devEnabled = (process.env.ENABLE_DEV_LOGIN || "0") === "1";
-    if (isProd && !devEnabled) {
+    if (isProd || !devEnabled || process.env.LOCAL_ONLY === "true") {
       return reply
         .status(403)
-        .send({ error: "DEV_LOGIN_DISABLED", message: "Enable with ENABLE_DEV_LOGIN=1" });
+        .send({ error: "DEV_LOGIN_DISABLED" });
     }
 
     try {
@@ -278,7 +280,7 @@ export async function authRoutes(fastify: FastifyInstance) {
       }
 
       const target = buildOpsRedirectUrl();
-      return reply.redirect(302, target);
+      return reply.redirect(target, 302);
     } catch (error) {
       console.error("Dev login error:", error);
       return reply.status(500).send({ error: "Internal server error" });

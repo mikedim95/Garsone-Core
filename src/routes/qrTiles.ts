@@ -1,4 +1,4 @@
-import { FastifyInstance } from "fastify";
+import { FastifyInstance, FastifyReply } from "fastify";
 import { Role } from "@prisma/client";
 import { z } from "zod";
 import bcrypt from "bcrypt";
@@ -6,8 +6,24 @@ import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 import { serializeRole } from "../lib/roles.js";
+import { resolveQrEvent } from "../lib/qrEvents.js";
+import { randomInt } from "node:crypto";
 
-const adminOnly = [authMiddleware, requireRole(["manager", "architect"])];
+async function requireAdminStore(request: any, reply: any) {
+  if (request.user?.role === "architect") return;
+  const storeId = request.user?.storeId;
+  const params = request.params ?? {};
+  if (!storeId || (params.storeId && params.storeId !== storeId)) {
+    return reply.status(403).send({ error: "STORE_ACCESS_DENIED" });
+  }
+  if (params.id) {
+    const tile = await db.qRTile.findUnique({ where: { id: params.id }, select: { storeId: true } });
+    if (!tile || tile.storeId !== storeId) {
+      return reply.status(404).send({ error: "QR_TILE_NOT_FOUND" });
+    }
+  }
+}
+const adminOnly = [authMiddleware, requireRole(["manager", "architect"]), requireAdminStore];
 const architectOnly = [authMiddleware, requireRole(["architect"])];
 
 const QR_CODE_REGEX = /^GT-[0-9A-HJKMNPQRSTVWXYZ]{4}-[0-9A-HJKMNPQRSTVWXYZ]{4}$/;
@@ -100,7 +116,7 @@ function serializeStoreUser(profile: any) {
 function randomQrSegment(length = QR_SEGMENT_LEN) {
   let out = "";
   for (let i = 0; i < length; i += 1) {
-    out += QR_ALPHABET[Math.floor(Math.random() * QR_ALPHABET.length)];
+    out += QR_ALPHABET[randomInt(QR_ALPHABET.length)];
   }
   return out;
 }
@@ -243,27 +259,49 @@ const PUBLIC_APP_PROTOCOL = (process.env.PUBLIC_APP_PROTOCOL || "https")
   .replace(/:$/, "")
   .toLowerCase();
 
-function renderPublicMessage(title: string, message: string) {
+const escapePublicText = (value: string, limit: number) => value.slice(0, limit)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+export function renderPublicMessage(title: string, message: string, retry = false) {
+  const safeTitle = escapePublicText(title, 160);
+  const safeMessage = escapePublicText(message, 800);
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
+    <meta name="robots" content="noindex, nofollow" />
+    <title>${safeTitle} · Garsone</title>
     <style>
-      body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-      .card { background: #0b1220; border: 1px solid #1f2937; border-radius: 14px; padding: 32px 28px; max-width: 520px; box-shadow: 0 25px 50px rgba(0,0,0,0.35); text-align: center; }
-      h1 { font-size: 22px; margin: 0 0 12px; color: #f8fafc; }
-      p { margin: 0; color: #cbd5e1; line-height: 1.5; }
+      * { box-sizing: border-box; }
+      body { font-family: system-ui, Arial, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; }
+      main { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; padding: 36px 28px; width: 100%; max-width: 480px; box-shadow: 0 12px 32px rgba(15,23,42,.06); text-align: center; }
+      .brand { color: #64748b; font-size: 14px; font-weight: 700; margin-bottom: 24px; }
+      h1 { font-size: 24px; line-height: 1.25; margin: 0 0 14px; }
+      p { margin: 0; color: #475569; line-height: 1.6; overflow-wrap: anywhere; }
+      .help { font-size: 14px; margin-top: 20px; }
+      a { display: inline-block; padding: 12px 24px; margin-top: 24px; background: #0f172a; color: #fff; border-radius: 10px; font-weight: 600; text-decoration: none; }
+      a:focus-visible { outline: 3px solid #2563eb; outline-offset: 4px; }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>${title}</h1>
-      <p>${message}</p>
-    </div>
+    <main aria-labelledby="qr-title">
+      <p class="brand">Garsone</p>
+      <h1 id="qr-title">${safeTitle}</h1>
+      <p>${safeMessage}</p>
+      ${retry ? '<a href="">Try again</a><p class="help">If it still does not open, ask a member of staff.</p>' : '<p class="help">Ask a member of staff for the current table QR code.</p>'}
+    </main>
   </body>
 </html>`;
+}
+
+function publicMessage(reply: FastifyReply, status: number, title: string, message: string, retry = false) {
+  return reply.status(status).type("text/html; charset=utf-8")
+    .header("Cache-Control", "no-store")
+    .header("Referrer-Policy", "no-referrer")
+    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+    .send(renderPublicMessage(title, message, retry));
 }
 
 function buildPublicRedirectUrl(
@@ -287,8 +325,9 @@ function buildPublicRedirectUrl(
     return `${explicit}/table/${tableId}?${params.toString()}`;
   }
 
-  // Fallback: derive from incoming host to support local/IP testing
-  if (requestHost && requestHost.trim().length > 0) {
+  // Host-derived redirects are a development convenience only. Production and
+  // Pi installs use configured PUBLIC_APP_BASE_URL / FRONTEND_ORIGIN.
+  if (process.env.NODE_ENV === "development" && requestHost && requestHost.trim().length > 0) {
     const protocol = (requestProtocol || PUBLIC_APP_PROTOCOL || "http").replace(/:$/, "");
     const hostRaw = requestHost.trim();
     const [hostBase, hostPort] = hostRaw.split(":");
@@ -533,11 +572,31 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get("/q/:publicCode", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
     const { publicCode } = request.params as { publicCode: string };
     const normalizedCode = normalizePublicCode(publicCode);
     const prefersJson = wantsJsonResponse(request);
 
     try {
+      const eventId = (request.query as { event?: unknown }).event;
+      if (eventId !== undefined) {
+        reply.header("Cache-Control", "no-store");
+        const eventTile = typeof eventId === "string" ? await resolveQrEvent(eventId, normalizedCode) : null;
+        if (!eventTile?.isActive) {
+          return prefersJson
+            ? reply.status(404).send({ error: "QR_EVENT_TILE_NOT_FOUND_OR_INACTIVE" })
+            : publicMessage(reply, 404, "This QR code is unavailable", "This event code may have been disabled or may not be ready for this venue yet.");
+        }
+        if (!eventTile.redirectUrl) {
+          return prefersJson
+            ? reply.send({ status: "UNASSIGNED_TILE", storeSlug: eventTile.storeSlug, publicCode: normalizedCode })
+            : publicMessage(reply, 200, "This table is not ready", "A table has not been assigned to this event code yet.");
+        }
+        if (prefersJson) return reply.send({ status: "OK", storeSlug: eventTile.storeSlug,
+          tableId: eventTile.tableId, tableLabel: eventTile.tableLabel, publicCode: normalizedCode, eventId,
+          redirectUrl: eventTile.redirectUrl });
+        return reply.redirect(eventTile.redirectUrl, 302);
+      }
       const tile = await db.qRTile.findUnique({
         where: { publicCode: normalizedCode },
         include: {
@@ -550,15 +609,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         if (prefersJson) {
           return reply.status(404).send({ error: "QR_TILE_NOT_FOUND_OR_INACTIVE" });
         }
-        return reply
-          .status(404)
-          .type("text/html")
-          .send(
-            renderPublicMessage(
-              "Code not active",
-              "This code is not active or does not exist."
-            )
-          );
+        return publicMessage(reply, 404, "This QR code is unavailable", "This code may have been disabled or replaced.");
       }
 
       const hasActiveTable = Boolean(tile.tableId && tile.table && tile.table.isActive);
@@ -570,14 +621,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             publicCode: tile.publicCode,
           });
         }
-        return reply
-          .type("text/html")
-          .send(
-            renderPublicMessage(
-              "Unassigned QR",
-              "This QR tile is not assigned to a table yet."
-            )
-          );
+        return publicMessage(reply, 200, "This table is not ready", "This code does not have an active table assignment yet.");
       }
 
       if (prefersJson) {
@@ -596,7 +640,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         request.headers.host,
         (request as any).protocol
       );
-      return reply.redirect(302, target);
+      return reply.redirect(target, 302);
     } catch (error) {
       fastify.log.error(
         { err: error, publicCode: normalizedCode },
@@ -605,23 +649,16 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       if (prefersJson) {
         return reply.status(500).send({ error: "FAILED_TO_RESOLVE_QR_TILE" });
       }
-      return reply
-        .status(500)
-        .type("text/html")
-        .send(
-          renderPublicMessage(
-            "Temporary issue",
-            "We could not resolve this code right now. Please try again in a moment."
-          )
-        );
+      return publicMessage(reply, 500, "We could not open your table", "Check that you are connected to the venue Wi-Fi, then try again in a moment.", true);
     }
   });
 
   fastify.get(
     "/admin/stores",
     { preHandler: adminOnly },
-    async (_request, reply) => {
+    async (request, reply) => {
       const stores = await db.store.findMany({
+        where: (request as any).user.role === "architect" ? {} : { id: (request as any).user.storeId },
         select: { id: true, slug: true, name: true, settingsJson: true },
         orderBy: { name: "asc" },
       });
@@ -644,8 +681,9 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
   fastify.get(
     "/admin/stores/overview",
     { preHandler: adminOnly },
-    async (_request, reply) => {
+    async (request, reply) => {
       const stores = await db.store.findMany({
+        where: (request as any).user.role === "architect" ? {} : { id: (request as any).user.storeId },
         select: { id: true, slug: true, name: true },
         orderBy: { name: "asc" },
       });

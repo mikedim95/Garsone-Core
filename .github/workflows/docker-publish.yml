@@ -20,11 +20,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Verify Core build
         run: |
           npm ci
           npx prisma generate
           npm run build
+          node --test tests/security-boundaries.test.mjs tests/http-security.test.mjs tests/qr-sync.test.mjs tests/qr-public.test.mjs
+          python3 deploy/pi/full-stack/tests/local-print-pty.py
 
       - name: Select release channel
         id: release

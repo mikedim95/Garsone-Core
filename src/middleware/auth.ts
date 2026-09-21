@@ -1,79 +1,51 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { verifyToken } from '../lib/jwt.js';
-import { roleMatches } from '../lib/roles.js';
+import { verifyToken, type JWTPayload } from '../lib/jwt.js';
+import { roleMatches, serializeRole } from '../lib/roles.js';
+import { db } from '../db/index.js';
+
+export async function currentSession(token: string): Promise<JWTPayload> {
+  const payload = verifyToken(token);
+  const profile = await db.profile.findUnique({
+    where: { id: payload.userId }, include: { store: true, cookType: true, waiterType: true },
+  });
+  if (!profile?.store || profile.storeId !== payload.storeId ||
+      profile.store.slug !== payload.storeSlug || serializeRole(profile.role) !== payload.role) {
+    throw new Error('Session no longer authorized');
+  }
+  return { ...payload, email: profile.email, cookTypeId: profile.cookTypeId,
+    waiterTypeId: profile.waiterTypeId, printerTopic: profile.printerTopic,
+    cookTypePrinterTopic: profile.printerTopic ?? profile.cookType?.printerTopic ?? null,
+    waiterTypePrinterTopic: profile.waiterType?.printerTopic ?? null };
+}
+
+function requestToken(request: FastifyRequest) {
+  const header = request.headers.authorization;
+  // Query tokens are reserved for legacy EventSource; never accepted on CRUD routes.
+  const queryToken = request.url.split('?')[0] === '/events' && typeof (request.query as any)?.token === 'string'
+    ? (request.query as any).token : undefined;
+  return (header?.startsWith('Bearer ') ? header.slice(7) : undefined) ||
+    request.headers['x-auth-token'] || queryToken;
+}
 
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
   try {
-    const authHeader = request.headers.authorization;
-    const bearer = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : undefined;
-    const token =
-      bearer ||
-      (typeof (request.query as any)?.token === 'string' ? (request.query as any).token : undefined) ||
-      (request.headers['x-auth-token'] as string | undefined);
-
-    console.log("[authMiddleware] path", (request as any).url, "hasBearer", Boolean(bearer), "hasHeaderToken", Boolean(authHeader), "hasQueryToken", typeof (request.query as any)?.token === 'string', "hasXAuth", Boolean((request.headers['x-auth-token'] as string | undefined)));
-
-    if (!token) {
-      console.warn("[authMiddleware] missing token for", (request as any).url);
-      return reply.status(401).send({ error: 'Missing or invalid authorization header' });
-    }
-
-    const tokenTrimmed = token.trim();
-    if (!tokenTrimmed) {
-      console.warn("[authMiddleware] blank token for", (request as any).url);
-      return reply.status(401).send({ error: 'Missing or invalid authorization header' });
-    }
-
-    const payload = verifyToken(tokenTrimmed);
-    console.log("[authMiddleware] verified", { url: (request as any).url, userId: (payload as any)?.userId, role: (payload as any)?.role, storeSlug: (payload as any)?.storeSlug });
-    
-    // Attach user and store context to request
+    const token = requestToken(request);
+    if (typeof token !== 'string' || !token.trim()) throw new Error('Missing token');
+    const payload = await currentSession(token.trim());
     (request as any).user = payload;
-    if (payload.storeSlug) {
-      (request as any).storeSlug = payload.storeSlug;
-    }
-  } catch (error) {
+    (request as any).storeSlug = payload.storeSlug;
+  } catch {
     return reply.status(401).send({ error: 'Invalid or expired token' });
   }
 }
 
-export async function optionalAuthMiddleware(request: FastifyRequest, _reply: FastifyReply) {
-  const authHeader = request.headers.authorization;
-  const bearer =
-    authHeader && authHeader.startsWith("Bearer ")
-      ? authHeader.substring(7)
-      : undefined;
-  const token =
-    bearer ||
-    (typeof (request.query as any)?.token === "string"
-      ? (request.query as any).token
-      : undefined) ||
-    (request.headers["x-auth-token"] as string | undefined);
-
-  if (!token) return;
-
-  const tokenTrimmed = token.trim();
-  if (!tokenTrimmed) return;
-
-  try {
-    const payload = verifyToken(tokenTrimmed);
-    (request as any).user = payload;
-    if (payload.storeSlug) {
-      (request as any).storeSlug = payload.storeSlug;
-    }
-  } catch (error) {
-    console.warn(
-      "[optionalAuthMiddleware] invalid token",
-      (error as Error)?.message || error
-    );
-  }
+export async function optionalAuthMiddleware(request: FastifyRequest, reply: FastifyReply) {
+  if (requestToken(request)) return authMiddleware(request, reply);
 }
 
 export function requireRole(roles: string[]) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const user = (request as any).user;
-
-    if (!user || !roleMatches(user.role, roles)) {
+    if (!roleMatches((request as any).user?.role, roles)) {
       return reply.status(403).send({ error: 'Insufficient permissions' });
     }
   };

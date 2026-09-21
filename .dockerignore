@@ -1,6 +1,7 @@
 .git
 .gitignore
 .env
+.env.*
 *.env
 node_modules
 dist
@@ -10,5 +11,7 @@ npm-debug.log*
 Dockerfile
 docker-compose*.yml
 deploy/pi/.env
+deploy/pi/full-stack/artifacts
+deploy/pi/full-stack/data
 uploads
 *.local

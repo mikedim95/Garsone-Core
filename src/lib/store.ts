@@ -64,28 +64,9 @@ export async function ensureStore(slugOrRequest?: string | any) {
   });
 
   if (!store) {
-    // Auto-bootstrap a minimal store so cloud deployments don't 500 when unseeded
-    const created = await db.store.create({
-      data: {
-        slug,
-        name: 'Garsone Offline Demo',
-        settingsJson: { orderingMode: DEFAULT_ORDERING_MODE },
-      },
-      select: { id: true, slug: true, name: true, settingsJson: true, updatedAt: true, createdAt: true },
-    });
-
-    // Also create default meta if missing
-    try {
-      await db.storeMeta.create({
-        data: {
-          storeId: created.id,
-          currencyCode: 'EUR',
-          locale: 'en',
-        },
-      });
-    } catch {}
-
-    store = created;
+    // Provisioning is an architect operation. Public headers and login attempts
+    // must never create tenant records as a side effect of a lookup.
+    throw Object.assign(new Error('STORE_NOT_FOUND'), { statusCode: 404 });
   }
 
   const orderingMode = normalizeOrderingMode((store.settingsJson as any)?.orderingMode);

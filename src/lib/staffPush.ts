@@ -1,6 +1,7 @@
 import webPush, { type PushSubscription } from "web-push";
 import { Prisma } from "@prisma/client";
 import { db } from "../db/index.js";
+import { isAllowedPushEndpoint } from "./pushEndpoint.js";
 
 type StaffPushSubscriptionRow = {
   id: string;
@@ -15,7 +16,7 @@ const vapidPrivateKey = (process.env.VAPID_PRIVATE_KEY || "").trim();
 const vapidSubject =
   (process.env.VAPID_SUBJECT || "").trim() || "mailto:support@garsone.app";
 
-const pushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
+const pushEnabled = process.env.LOCAL_ONLY !== "true" && Boolean(vapidPublicKey && vapidPrivateKey);
 
 if (pushEnabled) {
   webPush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
@@ -163,6 +164,7 @@ export async function notifyStaffPush(params: {
 
   const results = await Promise.all(
     subscriptions.map(async (subscription) => {
+      if (!isAllowedPushEndpoint(subscription.endpoint)) return { ok: false, statusCode: 400, removed: false };
       const pushSubscription: PushSubscription = {
         endpoint: subscription.endpoint,
         keys: {
@@ -175,6 +177,7 @@ export async function notifyStaffPush(params: {
         await webPush.sendNotification(pushSubscription, payload, {
           TTL: 10 * 60,
           urgency: "high",
+          timeout: 10000,
         });
         return { ok: true, statusCode: 201 };
       } catch (error) {

@@ -1,0 +1,16 @@
+# The API itself writes ESC/POS to the Pi's paired Bluetooth serial device.
+# No node agent, printer sidecar, broker, Docker socket or host network needed.
+services:
+  core:
+    environment:
+      LOCAL_PRINTING_ENABLED: "true"
+      LOCAL_PRINTER_ROUTES_FILE: /app/printers.json
+      LOCAL_PRINT_SPOOL: /app/print-spool
+      MQTT_DISABLED: "true"
+    devices:
+      - "${PRINTER_DEVICE:-/dev/rfcomm0}:${PRINTER_DEVICE:-/dev/rfcomm0}"
+      - "${PRINTER_DEVICE_SECOND:-/dev/rfcomm1}:${PRINTER_DEVICE_SECOND:-/dev/rfcomm1}"
+    group_add:
+      - "${BLUETOOTH_GID:?Set BLUETOOTH_GID to the group ID owning the Pi printer device}"
+    volumes:
+      - ./printers.json:/app/printers.json:ro

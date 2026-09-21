@@ -1,0 +1,12 @@
+{
+  "noor/orders/preparing/printer_1": {
+    "device": "/dev/rfcomm0",
+    "width": 32,
+    "encoding": "cp1253",
+    "codepage": 7,
+    "cut": false
+  },
+  "noor/orders/placed/printer_1": { "device": "/dev/rfcomm0", "width": 32, "encoding": "cp1253", "codepage": 7, "cut": false },
+  "noor/orders/preparing/printer_2": { "device": "/dev/rfcomm1", "width": 32, "encoding": "cp1253", "codepage": 7, "cut": false },
+  "noor/orders/placed/printer_2": { "device": "/dev/rfcomm1", "width": 32, "encoding": "cp1253", "codepage": 7, "cut": false }
+}

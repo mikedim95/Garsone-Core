@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/db/ensureNodeAgentSchema.js && node dist/db/ensureVenueDeploymentSchema.js && node dist/server.js",
+    "start": "node dist/db/ensureNodeAgentSchema.js && node dist/db/ensureVenueDeploymentSchema.js && node dist/db/ensureQrEventSchema.js && node dist/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
@@ -21,13 +21,14 @@
     "prisma:db-push": "prisma db push"
   },
   "dependencies": {
-    "@fastify/cors": "^9.0.1",
-    "@fastify/jwt": "^8.0.0",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/rate-limit": "^11.2.0",
     "@prisma/client": "^6.19.0",
     "@types/jsonwebtoken": "^9.0.10",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "dotenv": "^16.4.5",
-    "fastify": "^4.28.1",
+    "fastify": "^5.12.5",
+    "iconv-lite": "^0.6.3",
     "jose": "^6.2.4",
     "jsonwebtoken": "^9.0.2",
     "mqtt": "^5.14.1",
@@ -46,5 +47,8 @@
     "cross-env": "^7.0.3",
     "prisma": "^6.19.0",
     "typescript": "^5.5.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

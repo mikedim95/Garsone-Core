@@ -29,6 +29,7 @@ model Store {
   staffPushSubscriptions    StaffPushSubscription[]
   profiles                  Profile[]
   qrTiles                   QRTile[]
+  qrEvents                  QrEvent[]
   storeMeta                 StoreMeta?
   tableVisits               TableVisit[]
   tables                    Table[]
@@ -237,6 +238,27 @@ model QRTile {
   @@index([storeId])
   @@index([tableId])
   @@map("qr_tiles")
+}
+
+model QrEvent {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId             String    @db.Uuid
+  name                String    @db.VarChar(120)
+  publicAppUrl        String    @db.VarChar(2000)
+  publicApiUrl        String    @db.VarChar(2000)
+  revision            Int       @default(1)
+  isActive            Boolean   @default(true)
+  assignmentsJson     Json      @default("[]")
+  isImported          Boolean   @default(false)
+  syncTokenHash       String?   @db.VarChar(64)
+  lastAppliedRevision Int       @default(0)
+  lastAppliedAt       DateTime? @db.Timestamp(6)
+  createdAt           DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt           DateTime  @updatedAt @db.Timestamp(6)
+  store               Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, updatedAt(sort: Desc)])
+  @@map("qr_events")
 }
 
 model TableVisit {

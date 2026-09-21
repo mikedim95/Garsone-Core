@@ -235,7 +235,7 @@ export async function getMenuPayload(store: Store, preferGreek: boolean) {
       descriptionEl,
       price: item.priceCents / 100,
       priceCents: item.priceCents,
-      image: item.imageUrl ?? `https://placehold.co/400x400?text=${encodeURIComponent(name)}`,
+      image: item.imageUrl ?? "/placeholder.svg",
       imageUrl: item.imageUrl ?? null,
       category: categoryTitle,
       categoryId: item.categoryId,

@@ -3,12 +3,13 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { ensureStore } from "../lib/store.js";
 import { getCustomerPushConfig } from "../lib/customerPush.js";
+import { isAllowedPushEndpoint } from "../lib/pushEndpoint.js";
 
 const pushSubscriptionSchema = z.object({
   tableId: z.string().uuid(),
   orderId: z.string().uuid().nullable().optional(),
   subscription: z.object({
-    endpoint: z.string().url().max(1000),
+    endpoint: z.string().max(1000).refine(isAllowedPushEndpoint, "Untrusted push endpoint"),
     expirationTime: z.number().nullable().optional(),
     keys: z.object({
       p256dh: z.string().min(1).max(255),

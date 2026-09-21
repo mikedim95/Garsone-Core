@@ -1,0 +1,12 @@
+services:
+  core:
+    environment:
+      QR_SYNC_ENABLED: "true"
+      QR_SYNC_CONFIG_FILE: /run/garsone/qr-sync.json
+    volumes:
+      - type: bind
+        source: ./data/qr-sync.json
+        target: /run/garsone/qr-sync.json
+        read_only: true
+        bind:
+          create_host_path: false
