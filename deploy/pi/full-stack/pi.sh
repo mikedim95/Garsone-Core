@@ -4,6 +4,7 @@ set -Eeuo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 action="${1:-check}"
 compose=(docker compose --env-file .env -f compose.yml)
+if [[ -f compose.site.yml ]]; then compose+=(-f compose.site.yml); fi
 if [[ -f .env ]] && grep -qx 'BLUETOOTH_ENABLED=true' .env; then compose+=(-f compose.bluetooth.yml); fi
 if [[ -f .env ]] && grep -qx 'QR_SYNC_ENABLED=true' .env; then compose+=(-f compose.qr-sync.yml); fi
 if [[ -f images.lock.env ]] && ! grep -qx 'IMAGE_MODE=source' .env; then compose+=(--env-file images.lock.env); fi
@@ -47,7 +48,7 @@ case "$action" in
     ;;
   pull)
     check
-    "${compose[@]}" pull db core front
+    "${compose[@]}" pull --policy always db core front
     ;;
   start)
     check

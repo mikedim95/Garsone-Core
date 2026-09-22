@@ -100,6 +100,10 @@ def config():
 def check(_args):
     values = config()
     compose = ["docker", "compose", "--env-file", ".env", "-f", "compose.yml"]
+    if (HERE / "images.lock.env").exists() and values.get("IMAGE_MODE") != "source":
+        compose += ["--env-file", "images.lock.env"]
+    if (HERE / "compose.site.yml").exists():
+        compose += ["-f", "compose.site.yml"]
     if values.get("BLUETOOTH_ENABLED") == "true":
         compose += ["-f", "compose.bluetooth.yml"]
     if values.get("QR_SYNC_ENABLED") == "true":

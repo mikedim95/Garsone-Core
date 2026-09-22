@@ -8,3 +8,7 @@ backups/
 data/
 *.inventory.json
 *.tar.gz
+.update.lock
+.deployed-release.json
+*.update-tmp
+__pycache__/

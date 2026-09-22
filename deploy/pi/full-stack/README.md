@@ -19,19 +19,36 @@ Review the [security findings](../../../SECURITY-REVIEW.md) before cutover.
 
 ## Existing GitHub release workflows
 
+The normal deployment path is **edit → commit/push → GitHub Actions tests and
+ARM64 build → Docker Hub → Pi download and health-checked update**. Follow
+[Commit to Raspberry Pi](PIPELINE.md) for the commands. The installed Pi uses
+published images and never builds application images during an update.
+
+From `Garsone-Core` on this computer, after publication succeeds:
+
+```powershell
+python deploy/pi/full-stack/update.py check --host piadmin@100.91.30.75
+python deploy/pi/full-stack/update.py apply --host piadmin@100.91.30.75
+```
+
+Use `--component front` or `--component core` to update only that component.
+Application updates preserve the local database and venue settings. Installation
+is on demand; boot starts the last installed image pins without registry access.
+
 | Repository | Workflow | Published images |
 | --- | --- | --- |
 | Garsone-Core | `.github/workflows/docker-publish.yml` | `mikedim95/garsone-core:pi`, `stable`, `stable-<full SHA>` on main; stage/canary equivalents on stage |
 | Garsone-Front | `.github/workflows/docker-publish.yml` | `mikedim95/garsone-front` with the same channels |
 | Garsone-Nodes | `.github/workflows/docker-image.yml` | `mikedim95/mqtt-printer:latest`, `sha-<short SHA>`, version tags |
 
-All existing workflows target ARM64. Core and Front register digest-pinned
-releases with the hosted API using GitHub OIDC. That release-registration
-mechanism remains in place; the standalone Pi does not need it to operate.
+All existing workflows target ARM64. Core and Front also attempt to register
+digest-pinned releases with the hosted API using GitHub OIDC. Registration is
+best effort; a cloud API outage does not fail a successful image publication.
+The standalone updater verifies successful GitHub builds directly and pulls
+their exact commit tags from Docker Hub, then saves immutable digest references.
 The Dockerfiles used by those workflows include the new local API/proxy and
 direct-print code. Hosted Render builds still use their existing Node/Vite
-commands. Initial verification was local; pushes to `main` trigger the existing
-publication and release-registration workflows.
+commands. Pushes to `main` trigger the publication workflow.
 
 `images.published-before-prework.env` records the images found before these
 changes. Those old images **do not contain this offline/direct-print work**.
@@ -73,8 +90,10 @@ transaction. Access controls must allow the exporting machine.
 
 ## Prepare and transfer
 
-The quickest path for this prepared release is the tested, prebuilt image
-archive. Transfer the source archive, `garsone-images-arm64.tar.gz`, and
+Normal online deployment uses the published-image path below, followed by
+`update.py` for routine upgrades. For an initial installation without registry
+access, an optional prebuilt image archive can be transferred. Transfer the
+source archive, `garsone-images-arm64.tar.gz`, and
 `noor-data.tar.gz` with their `.sha256` files. After extracting the source
 archive and verifying the checksums, on the Pi run:
 
@@ -130,11 +149,11 @@ and matching `PUBLIC_ORIGIN=http://<host>:8080`. Phones resolve the public
 host; only containers use names such as `core` and `db`. Reserve the Pi IP in
 DHCP or configure local DNS. Do not use `localhost` for customer QR codes.
 
-For the published-image path, copy the post-publication `images.lock.env`
-and run `bash pi.sh pull`. While these changes are only local, initialize
-with `python3 prepare.py init --source --host <host>` instead, then run
-`bash pi.sh build`. Source mode uses separate local image tags and ignores
-the published-image lock. `init` refuses to overwrite an existing `.env`.
+For the normal published-image path, copy the post-publication `images.lock.env`
+and run `bash pi.sh pull`. Source builds are a separate development fallback,
+selected explicitly with `prepare.py init --source` and `pi.sh build`; they
+are not used for the installed Noor deployment. `init` refuses to overwrite
+an existing `.env`.
 
 Then, before letting users open the app:
 
