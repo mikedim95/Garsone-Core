@@ -5,8 +5,10 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -326,6 +328,65 @@ class PiExecutionTests(unittest.TestCase):
         self.assertIn("--wait", args)
         self.assertIn("--force-recreate", args)
         self.assertEqual(args[-1], "front")
+
+    @unittest.skipUnless(shutil.which("tar"), "A real tar executable is required for the volume backup regression test")
+    def test_backup_archives_real_contents_of_upload_and_spool_volumes(self):
+        pi = object.__new__(update.Pi)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            backup = root / "backup"
+            backup.mkdir()
+            fixtures = {
+                "uploads-volume": {"nested/menu.txt": b"Noor menu asset", "logo.bin": b"\x00\x01\x02"},
+                "spool-volume": {"pending/job.json": b'{"id":"ticket-1","status":"pending"}'},
+            }
+            for volume, files in fixtures.items():
+                for name, content in files.items():
+                    file = root / volume / name
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_bytes(content)
+            old_core = {
+                "Image": "old-core-config-id",
+                "Mounts": [
+                    {"Type": "volume", "Name": "uploads-volume", "Destination": "/app/uploads"},
+                    {"Type": "volume", "Name": "spool-volume", "Destination": "/app/print-spool"},
+                ],
+            }
+            dump = b"read-only-database-dump-fixture"
+
+            def database(*args, **kwargs):
+                if "pg_restore" in args:
+                    self.assertEqual(kwargs["stdin"].read(), dump)
+                    self.assertIn("--list", args)
+                else:
+                    self.assertIn("pg_dump", args[-1])
+                    kwargs["stdout"].write(dump)
+
+            def archive_volume(args, **kwargs):
+                mount = args[args.index("--mount") + 1]
+                self.assertIn(",readonly", mount)
+                self.assertIn("--read-only", args)
+                self.assertEqual(args[args.index("--network") + 1], "none")
+                volume = next(part.split("=", 1)[1] for part in mount.split(",") if part.startswith("source="))
+                # Execute the updater's actual tar arguments, replacing only its
+                # container mount path with the corresponding temporary fixture.
+                tar_args = list(args[args.index("--entrypoint") + 3:])
+                tar_args[tar_args.index("-C") + 1] = str(root / volume)
+                return subprocess.run([shutil.which("tar"), *tar_args], check=True, stderr=subprocess.PIPE, **kwargs)
+
+            with patch.object(pi, "compose", side_effect=database) as compose, patch.object(pi, "run", side_effect=archive_volume) as execute:
+                pi.backup_data(backup, old_core)
+            self.assertEqual(compose.call_count, 2)
+            self.assertEqual(execute.call_count, 2)
+            self.assertEqual((backup / "database.dump").read_bytes(), dump)
+            for volume, archive_name in [("uploads-volume", "uploads.tar.gz"), ("spool-volume", "print-spool.tar.gz")]:
+                with tarfile.open(backup / archive_name, "r:gz") as archive:
+                    contents = {}
+                    for member in archive.getmembers():
+                        if member.isfile():
+                            with archive.extractfile(member) as file:
+                                contents[member.name.removeprefix("./")] = file.read()
+                self.assertEqual(contents, fixtures[volume])
 
     def test_pull_refuses_wrong_architecture_or_receipt_absent_from_inspect(self):
         pi = object.__new__(update.Pi)

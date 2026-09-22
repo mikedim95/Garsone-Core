@@ -135,7 +135,7 @@ class Pi:
             with (directory / name).open('wb') as output:
                 self.run(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--read-only',
                           '--mount', f'type=volume,source={mounts[0]["Name"]},target=/backup-source,readonly',
-                          '--entrypoint', 'tar', old_core['Image'], '-C', '/backup-source', '-czf', '-'], stdout=output)
+                          '--entrypoint', 'tar', old_core['Image'], '-C', '/backup-source', '-czf', '-', '.'], stdout=output)
 
 
 def apply(pi, releases):
