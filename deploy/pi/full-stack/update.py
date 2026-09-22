@@ -73,9 +73,9 @@ class Pi:
         for key, file in [('BLUETOOTH_ENABLED', 'compose.bluetooth.yml'), ('QR_SYNC_ENABLED', 'compose.qr-sync.yml')]:
             if self.env.get(key) == 'true':
                 self.command += ['-f', file]
-        # Shell image variables must not override the release lock.
+        # The installed files are authoritative, including the Compose project name.
         self.process_env = {key: value for key, value in os.environ.items()
-                            if key not in {'CORE_IMAGE', 'FRONT_IMAGE', 'POSTGRES_IMAGE', 'COMPOSE_PROFILES'}}
+                            if key not in set(self.env) | {'CORE_IMAGE', 'FRONT_IMAGE', 'POSTGRES_IMAGE', 'COMPOSE_PROFILES', 'COMPOSE_FILE', 'COMPOSE_PROJECT_NAME'}}
 
     def run(self, args, **kwargs):
         return subprocess.run(args, cwd=self.directory, env=self.process_env, check=True, **kwargs)
@@ -106,15 +106,21 @@ class Pi:
                 raise RuntimeError('Public API health check failed.')
 
     def pull(self, release):
-        self.run(['docker', 'pull', '--platform', 'linux/arm64', release['imageTag']])
+        pulled = self.run(['docker', 'pull', '--platform', 'linux/arm64', release['imageTag']], capture_output=True, text=True)
+        print(pulled.stdout, end='')
+        digests = re.findall(r'^Digest: (sha256:[0-9a-f]{64})\s*$', pulled.stdout, re.M)
+        if len(digests) != 1:
+            raise RuntimeError('Docker did not return a unique digest for the requested release tag.')
         detail = json.loads(self.run(['docker', 'image', 'inspect', release['imageTag']], capture_output=True, text=True).stdout)[0]
         if detail['Os'] != 'linux' or detail['Architecture'] != 'arm64':
             raise RuntimeError('Published image is not Linux ARM64.')
         repository = 'mikedim95/garsone-' + release['component']
-        references = [ref for ref in detail.get('RepoDigests', []) if re.fullmatch(re.escape(repository) + r'@sha256:[0-9a-f]{64}', ref)]
-        if len(references) != 1:
-            raise RuntimeError('Cannot unambiguously resolve the Docker Hub image digest.')
-        return references[0]
+        # A cached image ID can legitimately carry digests for several source commits.
+        # Pin the pull receipt for this tag, not an arbitrary inspect-list entry.
+        reference = repository + '@' + digests[0]
+        if reference not in detail.get('RepoDigests', []):
+            raise RuntimeError('Downloaded digest does not match the inspected Docker Hub image.')
+        return reference
 
     def backup_data(self, directory, old_core):
         with (directory / 'database.dump').open('wb') as output:

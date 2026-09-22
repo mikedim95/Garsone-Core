@@ -311,6 +311,10 @@ class UpdateTests(unittest.TestCase):
 
 
 class PiExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch("sys.stdout", new_callable=io.StringIO))
+        self.enterContext(patch("sys.stderr", new_callable=io.StringIO))
+
     def test_start_never_builds_pulls_or_recreates_dependencies(self):
         pi = object.__new__(update.Pi)
         with patch.object(pi, "compose") as execute:
@@ -323,17 +327,17 @@ class PiExecutionTests(unittest.TestCase):
         self.assertIn("--force-recreate", args)
         self.assertEqual(args[-1], "front")
 
-    def test_pull_refuses_wrong_architecture_or_ambiguous_registry_digest(self):
+    def test_pull_refuses_wrong_architecture_or_receipt_absent_from_inspect(self):
         pi = object.__new__(update.Pi)
         for detail in [
             {"Os": "linux", "Architecture": "amd64", "RepoDigests": [NEW_FRONT]},
             {"Os": "windows", "Architecture": "arm64", "RepoDigests": [NEW_FRONT]},
             {"Os": "linux", "Architecture": "arm64", "RepoDigests": []},
-            {"Os": "linux", "Architecture": "arm64", "RepoDigests": [OLD_FRONT, NEW_FRONT]},
+            {"Os": "linux", "Architecture": "arm64", "RepoDigests": [OLD_FRONT]},
             {"Os": "linux", "Architecture": "arm64", "RepoDigests": [NEW_CORE]},
         ]:
             with self.subTest(detail=detail), patch.object(pi, "run", side_effect=[
-                subprocess.CompletedProcess([], 0),
+                subprocess.CompletedProcess([], 0, stdout="Digest: " + NEW_FRONT.split("@")[1] + "\n", stderr=""),
                 subprocess.CompletedProcess([], 0, stdout=json.dumps([detail])),
             ]):
                 with self.assertRaises(RuntimeError):
@@ -343,13 +347,44 @@ class PiExecutionTests(unittest.TestCase):
         pi = object.__new__(update.Pi)
         detail = {"Os": "linux", "Architecture": "arm64", "RepoDigests": [NEW_FRONT]}
         with patch.object(pi, "run", side_effect=[
-            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0, stdout="Digest: " + NEW_FRONT.split("@")[1] + "\n", stderr=""),
             subprocess.CompletedProcess([], 0, stdout=json.dumps([detail])),
         ]) as execute:
             self.assertEqual(pi.pull(publication("front")), NEW_FRONT)
         self.assertEqual(execute.call_args_list[0].args[0], [
             "docker", "pull", "--platform", "linux/arm64", publication("front")["imageTag"],
         ])
+
+    def test_pull_selects_exact_receipt_when_image_has_multiple_repository_digests(self):
+        pi = object.__new__(update.Pi)
+        for references in [[OLD_FRONT, NEW_FRONT], [NEW_FRONT, OLD_FRONT]]:
+            detail = {"Os": "linux", "Architecture": "arm64", "RepoDigests": references}
+            with self.subTest(references=references), patch.object(pi, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, stdout="Digest: " + NEW_FRONT.split("@")[1] + "\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout=json.dumps([detail])),
+            ]):
+                self.assertEqual(pi.pull(publication("front")), NEW_FRONT)
+
+    def test_pull_refuses_absent_malformed_or_multiple_receipts(self):
+        pi = object.__new__(update.Pi)
+        receipt = "Digest: " + NEW_FRONT.split("@")[1] + "\n"
+        for stdout, stderr in [
+            ("Status: Image is up to date\n", ""),
+            ("Digest: malformed\n", ""),
+            ("Digest: sha256:" + "d" * 63 + "\n", ""),
+            ("Digest: sha256:" + "g" * 64 + "\n", ""),
+            ("untrusted-prefix " + receipt, ""),
+            (receipt + receipt, ""),
+            (receipt + "Digest: " + OLD_FRONT.split("@")[1] + "\n", ""),
+            ("", receipt),
+        ]:
+            detail = {"Os": "linux", "Architecture": "arm64", "RepoDigests": [NEW_FRONT]}
+            with self.subTest(stdout=stdout, stderr=stderr), patch.object(pi, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, stdout=stdout, stderr=stderr),
+                subprocess.CompletedProcess([], 0, stdout=json.dumps([detail])),
+            ]):
+                with self.assertRaises(RuntimeError):
+                    pi.pull(publication("front"))
 
 
 if __name__ == "__main__":
