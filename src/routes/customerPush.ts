@@ -4,10 +4,11 @@ import { db } from "../db/index.js";
 import { ensureStore } from "../lib/store.js";
 import { getCustomerPushConfig } from "../lib/customerPush.js";
 import { isAllowedPushEndpoint } from "../lib/pushEndpoint.js";
+import { BillingError, requestVisitToken, requireGuestVisit } from "../lib/diningBilling.js";
 
 const pushSubscriptionSchema = z.object({
   tableId: z.string().uuid(),
-  orderId: z.string().uuid().nullable().optional(),
+  orderId: z.string().uuid(),
   subscription: z.object({
     endpoint: z.string().max(1000).refine(isAllowedPushEndpoint, "Untrusted push endpoint"),
     expirationTime: z.number().nullable().optional(),
@@ -33,6 +34,8 @@ export async function customerPushRoutes(fastify: FastifyInstance) {
       }
 
       const store = await ensureStore(request);
+      const visit = await requireGuestVisit(requestVisitToken(request), store.id);
+      if (visit.tableId !== body.tableId) return reply.status(403).send({ error: "VISIT_TABLE_MISMATCH" });
       const table = await db.table.findFirst({
         where: { id: body.tableId, storeId: store.id },
         select: { id: true },
@@ -42,13 +45,14 @@ export async function customerPushRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Table not found" });
       }
 
-      const requestedOrderId = body.orderId || null;
+      const requestedOrderId = body.orderId;
       if (requestedOrderId) {
         const order = await db.order.findFirst({
           where: {
             id: requestedOrderId,
             storeId: store.id,
             tableId: table.id,
+            diningVisitId: visit.id,
           },
           select: { id: true },
         });
@@ -82,6 +86,7 @@ export async function customerPushRoutes(fastify: FastifyInstance) {
 
       return reply.send({ ok: true, enabled: true });
     } catch (error) {
+      if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
       if (error instanceof z.ZodError) {
         return reply
           .status(400)

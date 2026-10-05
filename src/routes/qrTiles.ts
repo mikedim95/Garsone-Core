@@ -789,6 +789,9 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             : null;
 
         const result = await db.$transaction(async (tx: any) => {
+          if (await tx.diningVisit.count({ where: { storeId } })) {
+            throw Object.assign(new Error("DINING_HISTORY_PROTECTED"), { statusCode: 409 });
+          }
           const [
             orders,
             tableVisits,
@@ -855,6 +858,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           deleted: result,
         });
       } catch (error) {
+        if ((error as any)?.message === "DINING_HISTORY_PROTECTED") return reply.status(409).send({ error: "DINING_HISTORY_PROTECTED" });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)

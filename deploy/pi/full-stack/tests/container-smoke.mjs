@@ -79,10 +79,17 @@ try {
   const guestPage = await guestContext.newPage();
   await guestPage.goto(printed, { waitUntil: 'networkidle' });
   assert.equal(new URL(guestPage.url()).pathname, '/table/' + tile.tableId);
+  const visitStorageKey = `garsone:customer-visit:noor:${tile.tableId}`;
+  await guestPage.waitForFunction(key => {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    return saved?.state === 'active' && Boolean(saved?.token);
+  }, visitStorageKey);
+  const guestVisit = await guestPage.evaluate(key => JSON.parse(localStorage.getItem(key)), visitStorageKey);
   const guestOrder = await guestContext.request.post(base + '/api/orders', {
-    headers: { 'x-store-slug': 'noor' }, data: { tableId: tile.tableId, items: [{ itemId: item.id, quantity: 1 }], note: 'Offline event guest test' },
+    headers: { 'x-store-slug': 'noor', 'x-table-visit': guestVisit.token }, data: { tableId: tile.tableId, items: [{ itemId: item.id, quantity: 1 }], note: 'Offline event guest test' },
   });
   assert.ok(guestOrder.ok(), await guestOrder.text());
+  assert.equal((await guestOrder.json()).order.diningVisitId, guestVisit.visitId);
   assert.equal(guestExternal.length, 0, guestExternal.join(', '));
   const disabled = await context.request.patch(base + `/api/admin/qr-events/${event.id}`, {
     headers, data: { expectedRevision: event.revision, isActive: false },

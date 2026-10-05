@@ -25,6 +25,8 @@ model Store {
   modifierOptions           ModifierOption[]
   modifiers                 Modifier[]
   orders                    Order[]
+  localPrintIntents         LocalPrintIntent[]
+  diningVisits             DiningVisit[]
   customerPushSubscriptions CustomerPushSubscription[]
   staffPushSubscriptions    StaffPushSubscription[]
   profiles                  Profile[]
@@ -208,6 +210,7 @@ model Table {
   createdAt                 DateTime                   @default(now()) @db.Timestamp(6)
   updatedAt                 DateTime                   @updatedAt @db.Timestamp(6)
   orders                    Order[]
+  diningVisits              DiningVisit[]
   customerPushSubscriptions CustomerPushSubscription[]
   qrTiles                   QRTile[]
   tableVisits               TableVisit[]
@@ -456,6 +459,10 @@ model Order {
   id                        String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeId                   String                     @db.Uuid
   tableId                   String                     @db.Uuid
+  submissionId              String?                    @db.Uuid
+  submissionHash            String?                    @db.VarChar(64)
+  diningVisitId             String?                    @db.Uuid
+  diningVisit               DiningVisit?               @relation(fields: [diningVisitId], references: [id], onDelete: Restrict)
   status                    OrderStatus                @default(PLACED)
   paymentStatus             PaymentStatus              @default(PENDING)
   totalCents                Int                        @default(0)
@@ -474,6 +481,7 @@ model Order {
   paymentId                 String?                    @db.VarChar(255)
   paymentError              String?
   orderItems                OrderItem[]
+  localPrintIntents          LocalPrintIntent[]
   customerPushSubscriptions CustomerPushSubscription[]
   store                     Store                      @relation(fields: [storeId], references: [id], onDelete: Cascade)
   table                     Table                      @relation(fields: [tableId], references: [id], onDelete: Cascade)
@@ -481,7 +489,113 @@ model Order {
   @@index([storeId, placedAt(sort: Desc)])
   @@index([tableId, placedAt(sort: Desc)])
   @@index([storeId, paymentStatus])
+  @@unique([storeId, submissionId])
+  @@index([diningVisitId])
   @@map("orders")
+}
+
+// Order receipt intent is committed with the order. A worker claims queued jobs
+// as uncertain before touching the printer; ambiguous writes need staff review.
+model DiningVisit {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId           String   @db.Uuid
+  tableId           String   @db.Uuid
+  activeTableId     String?  @unique @db.Uuid
+  status            String   @default("OPEN") @db.VarChar(24)
+  revision          Int      @default(1)
+  currencyCode      String   @default("EUR") @db.VarChar(8)
+  openedAt          DateTime @default(now()) @db.Timestamp(6)
+  closedAt          DateTime? @db.Timestamp(6)
+  billRequestedAt   DateTime? @db.Timestamp(6)
+  updatedAt         DateTime @updatedAt @db.Timestamp(6)
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  table             Table    @relation(fields: [tableId], references: [id], onDelete: Restrict)
+  orders            Order[]
+  guestSessions     DiningGuestSession[]
+  payments          DiningPayment[]
+  actions           DiningAction[]
+  @@index([storeId, status, openedAt(sort: Desc)])
+  @@map("dining_visits")
+}
+
+model DiningGuestSession {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  visitId   String   @db.Uuid
+  tokenHash String   @unique @db.VarChar(64)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  visit     DiningVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  @@index([visitId])
+  @@map("dining_guest_sessions")
+}
+
+model DiningPayment {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId    String   @db.Uuid
+  visitId    String   @db.Uuid
+  requestId  String   @db.Uuid
+  amountCents Int
+  method     String   @db.VarChar(16)
+  recordedBy String   @db.Uuid
+  recordedAt DateTime @default(now()) @db.Timestamp(6)
+  visit      DiningVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  allocations DiningPaymentAllocation[]
+  @@unique([storeId, requestId])
+  @@index([storeId, recordedAt])
+  @@index([visitId])
+  @@map("dining_payments")
+}
+
+model DiningPaymentAllocation {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId   String @db.Uuid
+  orderItemId String @db.Uuid
+  amountCents Int
+  payment     DiningPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  @@unique([paymentId, orderItemId])
+  @@index([orderItemId])
+  @@map("dining_payment_allocations")
+}
+
+model DiningAction {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId    String @db.Uuid
+  visitId    String @db.Uuid
+  requestId  String @db.Uuid
+  requestHash String @db.VarChar(64)
+  kind       String @db.VarChar(24)
+  actorId    String? @db.Uuid
+  detail     Json
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  visit      DiningVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  @@unique([storeId, requestId])
+  @@index([visitId, createdAt])
+  @@map("dining_actions")
+}
+
+model LocalPrintIntent {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId      String    @db.Uuid
+  orderId      String?   @db.Uuid
+  topic        String    @db.VarChar(512)
+  payload      Json
+  state        String    @default("queued") @db.VarChar(20)
+  error        String?
+  reprintOfId  String?   @db.Uuid
+  resolvedAt   DateTime? @db.Timestamp(6)
+  resolvedBy   String?   @db.VarChar(255)
+  resolution   String?   @db.VarChar(255)
+  startedAt    DateTime? @db.Timestamp(6)
+  completedAt  DateTime? @db.Timestamp(6)
+  createdAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamp(6)
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order        Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt(sort: Desc)])
+  @@index([state, createdAt])
+  @@index([orderId])
+  @@map("local_print_intents")
 }
 
 model CustomerPushSubscription {
@@ -527,6 +641,7 @@ model StaffPushSubscription {
 model OrderItem {
   id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   orderId          String            @db.Uuid
+  paymentAllocations DiningPaymentAllocation[]
   itemId           String            @db.Uuid
   titleSnapshot    String            @db.VarChar(255)
   unitPriceCents   Int

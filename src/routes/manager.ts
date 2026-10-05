@@ -13,6 +13,8 @@ import { createHmac, createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { decodeRasterImage, isPublicImageUrl } from "../lib/imageUpload.js";
+import { BillingError, assertOrderFinanciallyMutable, bumpDiningVisit } from "../lib/diningBilling.js";
+import { publishBillingUpdate } from "./billing.js";
 
 const LOCAL_UPLOAD_ROOT = process.env.LOCAL_UPLOAD_DIR || path.join(process.cwd(), "uploads");
 
@@ -664,9 +666,10 @@ export async function managerRoutes(fastify: FastifyInstance) {
           updateData.isActive = body.isActive;
         }
 
-        await db.table.update({
-          where: { id },
-          data: updateData,
+        await db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "tables" WHERE "id" = ${id}::uuid FOR UPDATE`;
+          if (updateData.isActive === false && await tx.diningVisit.findUnique({ where: { activeTableId: id } })) throw new BillingError("TABLE_HAS_OPEN_VISIT", 409);
+          await tx.table.update({ where: { id }, data: updateData });
         });
 
         const withCounts = await getTableWithCounts(store.id, id);
@@ -677,6 +680,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         }
         return reply.send({ table: serializeManagerTable(withCounts) });
       } catch (e) {
+        if (e instanceof BillingError) return reply.status(e.status).send({ error: e.code });
         if (e instanceof z.ZodError) {
           return reply
             .status(400)
@@ -703,26 +707,20 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ error: "Table not found" });
         }
 
-        if (!table.isActive) {
-          await db.$transaction([
-            db.qRTile.updateMany({
-              where: { storeId: store.id, tableId: id },
-              data: { tableId: null },
-            }),
-            db.table.delete({ where: { id } }),
-          ]);
-          return reply.send({ deleted: true, id });
-        }
-
-        await db.$transaction([
-          db.waiterTable.deleteMany({
-            where: { storeId: store.id, tableId: id },
-          }),
-          db.table.update({
-            where: { id },
-            data: { isActive: false },
-          }),
-        ]);
+        const deleted = await db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "tables" WHERE "id" = ${id}::uuid FOR UPDATE`;
+          if (await tx.diningVisit.findUnique({ where: { activeTableId: id } })) throw new BillingError("TABLE_HAS_OPEN_VISIT", 409);
+          if (!table.isActive) {
+            if (await tx.diningVisit.count({ where: { tableId: id } })) throw new BillingError("TABLE_HAS_VISIT_HISTORY", 409);
+            await tx.qRTile.updateMany({ where: { storeId: store.id, tableId: id }, data: { tableId: null } });
+            await tx.table.delete({ where: { id } });
+            return true;
+          }
+          await tx.waiterTable.deleteMany({ where: { storeId: store.id, tableId: id } });
+          await tx.table.update({ where: { id }, data: { isActive: false } });
+          return false;
+        });
+        if (deleted) return reply.send({ deleted: true, id });
 
         const withCounts = await getTableWithCounts(store.id, id);
         if (!withCounts) {
@@ -730,6 +728,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
         }
         return reply.send({ table: serializeManagerTable(withCounts) });
       } catch (e) {
+        if (e instanceof BillingError) return reply.status(e.status).send({ error: e.code });
         console.error("Failed to deactivate table", e);
         return reply.status(500).send({ error: "Failed to delete table" });
       }
@@ -1675,9 +1674,19 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        await db.order.delete({ where: { id } });
+        const store = await ensureStore(request);
+        const removed = await db.$transaction(async (tx) => {
+          const order = await tx.order.findFirst({ where: { id, storeId: store.id } });
+          if (!order) throw new BillingError("ORDER_NOT_FOUND", 404);
+          await assertOrderFinanciallyMutable(tx, order);
+          await tx.order.delete({ where: { id, diningVisitId: order.diningVisitId } });
+          if (order.diningVisitId) await bumpDiningVisit(tx, order.diningVisitId);
+          return order;
+        });
+        if (removed.diningVisitId) void publishBillingUpdate(store.slug, removed.diningVisitId).catch(() => {});
         return reply.send({ success: true });
       } catch (e) {
+        if (e instanceof BillingError) return reply.status(e.status).send({ error: e.code });
         return reply.status(500).send({ error: "Failed to delete order" });
       }
     }
@@ -1689,14 +1698,21 @@ export async function managerRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        const updated = await db.order.update({
-          where: { id },
-          data: { status: "CANCELLED" },
+        const store = await ensureStore(request);
+        const updated = await db.$transaction(async (tx) => {
+          const order = await tx.order.findFirst({ where: { id, storeId: store.id } });
+          if (!order) throw new BillingError("ORDER_NOT_FOUND", 404);
+          await assertOrderFinanciallyMutable(tx, order);
+          const result = await tx.order.update({ where: { id, diningVisitId: order.diningVisitId }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+          if (order.diningVisitId) await bumpDiningVisit(tx, order.diningVisitId);
+          return result;
         });
+        if (updated.diningVisitId) void publishBillingUpdate(store.slug, updated.diningVisitId).catch(() => {});
         return reply.send({
           order: { id: updated.id, status: updated.status },
         });
       } catch (e) {
+        if (e instanceof BillingError) return reply.status(e.status).send({ error: e.code });
         return reply.status(500).send({ error: "Failed to cancel order" });
       }
     }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import Fastify from 'fastify';
 import { WebSocket } from 'ws';
 
@@ -18,6 +19,11 @@ const storeA = { id: '11111111-1111-4111-8111-111111111111', slug: 'noor', name:
 const storeB = { id: '22222222-2222-4222-8222-222222222222', slug: 'other', name: 'Other', settingsJson: {} };
 const tableA = '33333333-3333-4333-8333-333333333333';
 const tableB = '44444444-4444-4444-8444-444444444444';
+const guestTokenA = 'ab'.repeat(32), guestTokenB = 'cd'.repeat(32);
+const visits = [
+  { id: '88888888-8888-4888-8888-888888888888', storeId: storeA.id, tableId: tableA, status: 'OPEN', token: guestTokenA },
+  { id: '99999999-9999-4999-8999-999999999999', storeId: storeB.id, tableId: tableB, status: 'OPEN', token: guestTokenB },
+];
 const tileId = '55555555-5555-4555-8555-555555555555';
 const profileA = { id: '66666666-6666-4666-8666-666666666666', email: 'manager@noor.test', role: 'MANAGER', storeId: storeA.id, store: storeA };
 const profileB = { id: '77777777-7777-4777-8777-777777777777', email: 'manager@other.test', role: 'MANAGER', storeId: storeB.id, store: storeB };
@@ -25,6 +31,10 @@ let storeCreateCalls = 0;
 let tileUpdateCalls = 0;
 let tableLookupEnabled = false;
 const fakeDb = {
+  diningGuestSession: { findUnique: async ({ where }) => {
+    const visit = visits.find(value => createHash('sha256').update(value.token).digest('hex') === where.tokenHash);
+    return visit ? { visitId: visit.id, visit } : null;
+  } },
   profile: { findUnique: async ({ where }) => [profileA, profileB].find(p => p.id === where.id) || null },
   store: {
     findUnique: async ({ where }) => [storeA, storeB].find(s => s.id === where.id || s.slug === where.slug) || null,
@@ -129,8 +139,9 @@ test('WebSockets isolate stores and tables, suppress node secrets and guest orde
     const managerA = await open(`?token=${tokenFor(profileA)}`);
     const managerB = await open(`?token=${tokenFor(profileB)}`);
     const anonymous = await open('');
-    const guestA = await open(`?storeSlug=noor&tableId=${tableA}`);
-    const guestB = await open(`?storeSlug=other&tableId=${tableB}`);
+    const unscopedGuest = await open(`?storeSlug=noor&tableId=${tableA}`);
+    const guestA = await open(`?storeSlug=noor&tableId=${tableA}&visit=${guestTokenA}`);
+    const guestB = await open(`?storeSlug=other&tableId=${tableB}&visit=${guestTokenB}`);
     const rejectedOrigin = new WebSocket(base, { origin: 'https://untrusted.invalid' });
     sockets.push(rejectedOrigin);
     await assert.rejects(once(rejectedOrigin, 'open'));
@@ -141,11 +152,12 @@ test('WebSockets isolate stores and tables, suppress node secrets and guest orde
     finally { profileB.role = 'MANAGER'; }
     emitRealtime('noor/orders/placed', { orderId: 'staff-order', tableId: tableA, note: 'private' }, { roles: ['manager'] });
     emitRealtime('garsone/nodes/test/config', { nodeToken: 'must-never-reach-browser', config: { wifiPassword: 'private' } });
-    emitRealtime('noor/orders/paid', { orderId: 'guest-order', tableId: tableA, status: 'PAID', note: 'private', items: ['private'], order: { secret: true } }, { anonymousOnly: true });
+    emitRealtime('noor/orders/paid', { orderId: 'guest-order', tableId: tableA, status: 'PAID', note: 'private', items: ['private'], order: { secret: true } }, { anonymousOnly: true, visitId: visits[0].id });
     await new Promise(resolve => setTimeout(resolve, 75));
     assert.equal(managerA.length, 1);
     assert.equal(managerB.length, 0);
     assert.equal(anonymous.length, 0);
+    assert.equal(unscopedGuest.length, 0);
     assert.equal(guestB.length, 0);
     assert.deepEqual(guestA, [{ topic: 'noor/orders/paid', payload: { orderId: 'guest-order', tableId: tableA, status: 'PAID' } }]);
   } finally {
@@ -199,7 +211,7 @@ test('push subscriptions cannot target private hosts, URL parser tricks or untru
     for (const endpoint of denied) {
       assert.equal(isAllowedPushEndpoint(endpoint), false, endpoint);
       const response = await app.inject({ method: 'POST', url: '/public/push/subscriptions',
-        payload: { tableId: tableA, subscription: { endpoint, keys: { p256dh: 'test', auth: 'test' } } } });
+        payload: { tableId: tableA, orderId: tileId, subscription: { endpoint, keys: { p256dh: 'test', auth: 'test' } } } });
       assert.equal(response.statusCode, 400, endpoint);
     }
     for (const endpoint of ['https://fcm.googleapis.com/fcm/send/test', 'https://updates.push.services.mozilla.com/wpush/v2/test', 'https://web.push.apple.com/test']) {

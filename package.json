@@ -18,7 +18,7 @@
     "seed": "npm run db:seed",
     "prisma:gen": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:db-push": "prisma db push"
+    "prisma:db-push": "node dist/db/ensureOrderReliabilitySchema.js && node dist/db/ensureDiningBillingSchema.js && prisma db push"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

@@ -20,7 +20,12 @@ import { venueDeploymentRoutes } from "./routes/venueDeployment.js";
 import { piReleaseRoutes } from "./routes/piReleases.js";
 import { setupRealtimeGateway } from "./lib/realtime.js";
 import { getMqttClient } from "./lib/mqtt.js";
-import { startLocalPrinting, localPrintStatus } from "./lib/localPrinting.js";
+import { startLocalPrinting, stopLocalPrinting, localPrintStatus } from "./lib/localPrinting.js";
+import { db } from "./db/index.js";
+import { ensureOrderReliabilitySchema } from "./db/ensureOrderReliabilitySchema.js";
+import { localOperationsRoutes } from "./routes/localOperations.js";
+import { billingRoutes } from "./routes/billing.js";
+import { ensureDiningBillingSchema } from "./db/ensureDiningBillingSchema.js";
 import { authMiddleware, requireRole } from "./middleware/auth.js";
 import { ensureOrderPaymentColumns } from "./db/ensureOrderPaymentColumns.js";
 import { ensureProfilePrinterTopic } from "./db/ensureProfilePrinterTopic.js";
@@ -41,8 +46,8 @@ const PORT = parseInt(process.env.PORT || "8787", 10);
 const fastify = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || "info",
-    serializers: { req: request => ({ method: request.method, url: request.url?.split("?")[0], hostname: request.hostname, remoteAddress: request.ip }) },
-    redact: ["req.headers.authorization", "req.headers.cookie", "req.headers.x-auth-token", "req.headers.x-deployment-secret"],
+    serializers: { req: request => ({ method: request.method, url: request.url?.split("?")[0].replace(/\/orders\/submissions\/[^/]+/, "/orders/submissions/[redacted]"), hostname: request.hostname, remoteAddress: request.ip }) },
+    redact: ["req.headers.authorization", "req.headers.cookie", "req.headers.x-auth-token", "req.headers.x-deployment-secret", "req.headers.idempotency-key", "req.headers.x-table-visit"],
   },
   trustProxy: (_address, hop) => hop < Number(process.env.TRUST_PROXY_HOPS || "0"),
 });
@@ -55,7 +60,10 @@ fastify.get("/health", async (request, reply) => {
 });
 
 setupRealtimeGateway(fastify);
-await startLocalPrinting();
+await ensureOrderReliabilitySchema();
+await ensureDiningBillingSchema();
+await startLocalPrinting(db);
+fastify.addHook("onClose", async () => stopLocalPrinting());
 fastify.get("/manager/local-printing", {
   preHandler: [authMiddleware, requireRole(["manager", "architect"])],
 }, async request => localPrintStatus((request as any).user.storeSlug));
@@ -72,6 +80,8 @@ await fastify.register(menuRoutes);
 await fastify.register(orderRoutes);
 await fastify.register(waiterTableRoutes);
 await fastify.register(managerRoutes);
+await fastify.register(localOperationsRoutes);
+await fastify.register(billingRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(qrTileRoutes);
 await fastify.register(qrEventRoutes);

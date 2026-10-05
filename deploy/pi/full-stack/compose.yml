@@ -26,6 +26,7 @@ x-core-env: &core-env
   LOCAL_ONLY: "true"
   TRUST_PROXY_HOPS: "1"
   LOCAL_UPLOAD_DIR: /app/uploads
+  LOCAL_BACKUP_STATUS_FILE: /app/runtime-status/backup.json
   LOG_LEVEL: ${LOG_LEVEL:-info}
   STORE_SLUG: ${STORE_SLUG:-default-store}
   MQTT_DISABLED: ${MQTT_DISABLED:-true}
@@ -89,6 +90,7 @@ services:
     volumes:
       - core-uploads:/app/uploads
       - print-spool:/app/print-spool
+      - ./runtime-status:/app/runtime-status:ro
     ports:
       - "${CORE_BIND_ADDRESS:-0.0.0.0}:${CORE_PORT:-8787}:8787"
     healthcheck:
@@ -166,8 +168,9 @@ services:
       NODE_API_BASE: http://core:8787
       NODE_KEY: ${NODE_KEY:-}
       NODE_PAIRING_SECRET: ${NODE_PAIRING_SECRET:-}
-      NODE_DISPLAY_NAME: ${PUBLIC_HOST:-raspberrypi.local}
-      NODE_LOCAL_HOSTNAME: ${PUBLIC_HOST:-raspberrypi.local}
+      NODE_DISPLAY_NAME: ${NODE_HOSTNAME:-garsone-pi}
+      NODE_LOCAL_HOSTNAME: ${NODE_HOSTNAME:-garsone-pi}
+      NODE_TAILSCALE_HOSTNAME: ${NODE_TAILSCALE_HOSTNAME:-${NODE_HOSTNAME:-garsone-pi}}
       NODE_VENUE_DEPLOYMENTS_ENABLED: "false"
       NODE_MANAGE_HOST_NETWORK: "false"
       BOOTSTRAP_MQTT_HOST: mqtt
@@ -213,6 +216,7 @@ services:
       DB_BOOTSTRAP_MODE: none
       LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-architect@garsone.local}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
+      LOCAL_BOOTSTRAP_EMPTY: ${LOCAL_BOOTSTRAP_EMPTY:-false}
     command: [node, tools/bootstrap-admin.mjs]
 
 volumes:

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import Fastify from 'fastify';
 
@@ -16,6 +17,9 @@ const tableId = '22222222-2222-4222-8222-222222222222';
 const itemId = '33333333-3333-4333-8333-333333333333';
 const otherId = '44444444-4444-4444-8444-444444444444';
 const orderId = '55555555-5555-4555-8555-555555555555';
+const visitId = '66666666-6666-4666-8666-666666666666';
+const visitToken = 'a'.repeat(64);
+const visit = { id: visitId, storeId, tableId, activeTableId: tableId, status: 'OPEN', revision: 1 };
 const store = { id: storeId, slug: 'checkout-test', name: 'Test Venue', settingsJson: {} };
 const table = { id: tableId, storeId, label: '1', isActive: true };
 const item = { id: itemId, storeId, title: 'Tea', priceCents: 500, isAvailable: true, itemModifiers: [] };
@@ -25,6 +29,12 @@ const fakeDb = {
   table: { findFirst: async ({ where }) => where.id === tableId && where.storeId === storeId ? table : null },
   item: { findMany: async ({ where }) => where.storeId === storeId && where.id.in.includes(itemId) && item.isAvailable ? [item] : [] },
   waiterTable: { findMany: async () => [] },
+  diningGuestSession: { findUnique: async ({ where }) => where.tokenHash === createHash('sha256').update(visitToken).digest('hex') ? { visitId, visit } : null },
+  diningVisit: {
+    findUnique: async ({ where }) => where.id === visitId ? visit : null,
+    update: async () => ({ ...visit, revision: ++visit.revision }),
+  },
+  $queryRaw: async () => [{ id: visitId }],
   order: {
     findFirst: async () => null,
     create: async ({ data }) => {
@@ -44,7 +54,7 @@ globalThis.prisma = fakeDb;
 const { orderRoutes } = await import('../dist/routes/orders.js');
 const app = Fastify();
 await app.register(orderRoutes);
-const headers = { 'x-store-slug': store.slug };
+const headers = { 'x-store-slug': store.slug, 'x-table-visit': visitToken };
 const payload = { tableId, items: [{ itemId, quantity: 2, modifiers: '{}' }], note: 'Two cups please.' };
 
 test('direct checkout creates unpaid orders in cloud and local modes without approval', async () => {
@@ -73,6 +83,18 @@ test('legacy checkout fields do not mark an order as paid or require an approval
   assert.equal(response.json().order.paymentStatus, 'PENDING');
   assert.equal(response.json().order.totalCents, 1000);
   assert.equal(writes.at(-1).paymentStatus, undefined);
+});
+
+test('direct checkout retains guest visit access checks in cloud and local modes', async () => {
+  const before = writes.length;
+  for (const localMode of ['false', 'true']) {
+    process.env.LOCAL_ONLY = localMode;
+    const response = await app.inject({ method: 'POST', url: '/orders', headers: { 'x-store-slug': store.slug }, payload });
+    assert.equal(response.statusCode, 403, response.body);
+    assert.equal(response.json().error, 'VISIT_ACCESS_REQUIRED');
+  }
+  process.env.LOCAL_ONLY = 'false';
+  assert.equal(writes.length, before);
 });
 
 test('direct checkout rejects missing and cross-store tables before writing', async () => {

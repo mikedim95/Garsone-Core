@@ -17,11 +17,21 @@ import {
 } from "../lib/tableVisits.js";
 import { notifyCustomerOrderStatus } from "../lib/customerPush.js";
 import { notifyStaffPush } from "../lib/staffPush.js";
+import { guestOrdersGuard, publishBillingUpdate } from "./billing.js";
+import { BillingError, lockDiningVisit, openDiningVisit, bumpDiningVisit, assertOrderFinanciallyMutable } from "../lib/diningBilling.js";
+import {
+  assertSubmissionMatches,
+  lockOrderSubmission,
+  orderSubmissionHash,
+  readSubmissionId,
+  SubmissionConflictError,
+} from "../lib/orderSubmission.js";
 
 const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string())]));
 
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
+  submissionId: z.string().uuid().optional(),
   visit: z.string().trim().min(8).max(128).optional(),
   items: z
     .array(
@@ -35,7 +45,7 @@ const createOrderSchema = z.object({
   note: z.string().max(500).optional(),
 });
 
-const updatePendingTableOrdersSchema = createOrderSchema.omit({ tableId: true }).extend({
+const updatePendingTableOrdersSchema = createOrderSchema.omit({ tableId: true, submissionId: true }).extend({
   orderIds: z.array(z.string().uuid()).min(1).max(20).optional(),
 });
 
@@ -43,6 +53,7 @@ const updateStatusSchema = z.object({
   status: z.nativeEnum(OrderStatus),
   cancelReason: z.string().trim().min(1).max(255).optional(),
   skipMqtt: z.boolean().optional(),
+  printReceipt: z.boolean().optional(),
 });
 
 const updateItemStatusSchema = z.object({
@@ -220,6 +231,7 @@ function getVisitTokenFromRequest(request: any, provided?: unknown) {
 function serializeOrder(order: OrderWithRelations) {
   return {
     id: order.id,
+    diningVisitId: order.diningVisitId,
     tableId: order.tableId,
     tableLabel: order.table?.label ?? "Unknown",
     ticketNumber: (order as any).ticketNumber ?? undefined,
@@ -402,11 +414,10 @@ function publishWaiterCallPrints(params: {
   }
 }
 
-function publishPrinterTopicsForOrder(
+function buildPrinterMessagesForOrder(
   storeSlug: string,
   order: OrderWithRelations,
   status: OrderStatus,
-  options?: PublishOptions,
   allowedPrinterTopic?: string | null,
   printReason?: "ITEM_CHANGE"
 ) {
@@ -421,7 +432,8 @@ function publishPrinterTopicsForOrder(
     grouped.set(key, list);
   }
 
-  if (grouped.size === 0) return;
+  const messages: Array<{ topic: string; payload: Record<string, unknown> }> = [];
+  if (grouped.size === 0) return messages;
 
   const normalizedAllowed =
     typeof allowedPrinterTopic === "string" && allowedPrinterTopic.trim()
@@ -464,11 +476,56 @@ function publishPrinterTopicsForOrder(
         printerTopic: printerKey,
       })),
     };
-    publishMessage(
-      `${storeSlug}/orders/${statusSegment}/${printerKey}`,
-      payload,
-      options
-    );
+    messages.push({ topic: `${storeSlug}/orders/${statusSegment}/${printerKey}`, payload });
+  }
+  return messages;
+}
+
+function publishPrinterTopicsForOrder(
+  storeSlug: string,
+  order: OrderWithRelations,
+  status: OrderStatus,
+  options?: PublishOptions,
+  allowedPrinterTopic?: string | null,
+  printReason?: "ITEM_CHANGE"
+) {
+  for (const message of buildPrinterMessagesForOrder(storeSlug, order, status, allowedPrinterTopic, printReason)) {
+    publishMessage(message.topic, message.payload, options);
+  }
+}
+
+async function persistLocalPrinterMessages(
+  tx: Prisma.TransactionClient,
+  storeId: string,
+  orderId: string,
+  messages: Array<{ topic: string; payload: Record<string, unknown> }>
+) {
+  if (process.env.LOCAL_PRINTING_ENABLED !== "true" || !messages.length) return;
+  await tx.localPrintIntent.createMany({
+    data: messages.map(({ topic, payload }) => ({
+      storeId, orderId, topic,
+      // Strip undefined fields and serialize Dates before writing JSONB.
+      payload: JSON.parse(JSON.stringify(payload)) as Prisma.InputJsonValue,
+    })),
+  });
+}
+
+class OrderEditConflictError extends Error {}
+
+async function lockEditableOrders(tx: Prisma.TransactionClient, snapshots: Array<{ id: string; updatedAt: Date }>) {
+  // All edit routes lock in the same order. Reject a stale calculation rather
+  // than overwrite another edit or change an order the kitchen just accepted.
+  const financial = await tx.order.findMany({ where: { id: { in: snapshots.map((s) => s.id) } } });
+  for (const visitId of [...new Set(financial.map((o) => o.diningVisitId).filter((id): id is string => Boolean(id)))].sort()) {
+    await lockDiningVisit(tx, visitId);
+  }
+  for (const order of financial) await assertOrderFinanciallyMutable(tx, order);
+  for (const snapshot of [...snapshots].sort((a, b) => a.id.localeCompare(b.id))) {
+    const [current] = await tx.$queryRaw<Array<{ status: OrderStatus; updatedAt: Date }>>`
+      SELECT "status", "updatedAt" FROM "orders" WHERE "id" = ${snapshot.id}::uuid FOR UPDATE`;
+    if (!current || current.status !== OrderStatus.PLACED || current.updatedAt.getTime() !== snapshot.updatedAt.getTime()) {
+      throw new OrderEditConflictError("Order changed; refresh before editing");
+    }
   }
 }
 
@@ -499,6 +556,7 @@ const resolveStoreSlug = (request: any) =>
   STORE_SLUG;
 
 export async function orderRoutes(fastify: FastifyInstance) {
+  fastify.addHook("preHandler", guestOrdersGuard);
   // Guests submit the cart directly. Store, table, item and modifier checks
   // still apply; checkout no longer requires a payment session or tag approval.
   fastify.post(
@@ -512,10 +570,32 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const logStep = (label: string) =>
           console.log(`[orders:create] ${label} +${Date.now() - t0}ms`);
         const body = createOrderSchema.parse(request.body);
+        const submissionId = readSubmissionId(body.submissionId, request.headers["idempotency-key"]);
+        const submissionHash = submissionId ? orderSubmissionHash({
+          ...body,
+          items: body.items.map((item) => ({ ...item, modifiers: parseModifiers(item.modifiers) })),
+        }) : undefined;
         logStep("parsed");
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         logStep("store");
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role && actor.role !== "guest");
+        // A previously committed submission is safe to return before validating
+        // current stock. Retrying must not create a new
+        // order just because its first response was lost.
+        if (submissionId) {
+          const existing = await db.order.findUnique({
+            where: { storeId_submissionId: { storeId: store.id, submissionId } },
+            include: { table: { select: { id: true, label: true } }, orderItems: ORDER_ITEM_INCLUDE },
+          });
+          if (existing) {
+            if (!isStaff && existing.diningVisitId !== (request as any).diningVisit?.id) throw new BillingError("Order not found", 404);
+            assertSubmissionMatches(existing, submissionHash!);
+            return reply.header("Cache-Control", "no-store").send({ order: serializeOrder(existing), replayed: true });
+          }
+        }
+
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
         });
@@ -524,6 +604,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         if (!table) {
           return reply.status(404).send({ error: "Table not found" });
         }
+        const diningVisit = (request as any).diningVisit ||
+          await db.$transaction((tx) => openDiningVisit(tx, store.id, table.id));
 
         const itemIds = body.items.map((item) => item.itemId);
         const items = await db.item.findMany({
@@ -657,11 +739,28 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
         logStep("computed");
 
-        const createdOrder = await db.$transaction(async (tx) => {
+        const persistLocalPrint = process.env.LOCAL_PRINTING_ENABLED === "true" && getPrintOnArrival(store);
+        const result = await db.$transaction(async (tx) => {
+          if (submissionId) {
+            await lockOrderSubmission(tx, store.id, submissionId);
+            const existing = await tx.order.findUnique({
+              where: { storeId_submissionId: { storeId: store.id, submissionId } },
+              include: { table: { select: { id: true, label: true } }, orderItems: ORDER_ITEM_INCLUDE },
+            });
+            if (existing) {
+              assertSubmissionMatches(existing, submissionHash!);
+              return { order: existing, replayed: true };
+            }
+          }
+          const liveVisit = await lockDiningVisit(tx, diningVisit.id, store.id);
+          if (liveVisit.tableId !== table.id) throw new BillingError("VISIT_MOVED", 409);
           const created = await tx.order.create({
             data: {
               storeId: store.id,
               tableId: table.id,
+              submissionId,
+              submissionHash,
+              diningVisitId: liveVisit.id,
               status: OrderStatus.PLACED,
               totalCents: orderTotalCents,
               note: body.note,
@@ -675,60 +774,85 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          return created;
+          if (persistLocalPrint) {
+            await persistLocalPrinterMessages(tx, store.id, created.id,
+              buildPrinterMessagesForOrder(store.slug, created, OrderStatus.PLACED));
+          }
+          await bumpDiningVisit(tx, liveVisit.id);
+          return { order: created, replayed: false };
         });
-        logStep("dbCreate");
-
-        const waiterIds = await getWaiterIdsForTable(store.id, table.id);
-        const placedPayload = {
-          orderId: createdOrder.id,
-          tableId: createdOrder.tableId,
-          tableLabel: table.label,
-          ticketNumber: (createdOrder as any).ticketNumber ?? undefined,
-          createdAt: createdOrder.createdAt,
-          totalCents: createdOrder.totalCents,
-          note: createdOrder.note,
-          items: createdOrder.orderItems.map((orderItem) => ({
-            id: orderItem.id,
-            itemId: orderItem.itemId,
-            title: orderItem.titleSnapshot,
-            quantity: orderItem.quantity,
-            unitPriceCents: orderItem.unitPriceCents,
-            status: orderItem.status,
-            acceptedAt: orderItem.acceptedAt,
-            servedAt: orderItem.servedAt,
-            modifiers: orderItem.orderItemOptions,
-            categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
-            categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
-            printerTopic: normalizePrinterTopic(
-              (orderItem as any)?.item?.printerTopic,
-              (orderItem as any)?.item?.category?.printerTopic
-            ),
-          })),
-        };
-        const topicSlug = store.slug;
-        publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
-          roles: ["cook"],
-        });
-        if (getPrintOnArrival(store)) {
-          publishPrinterTopicsForOrder(
-            topicSlug,
-            createdOrder as OrderWithRelations,
-            OrderStatus.PLACED,
-            { roles: ["cook"] }
-          );
+        const createdOrder = result.order;
+        if (result.replayed) {
+          return reply.header("Cache-Control", "no-store").send({ order: serializeOrder(createdOrder), replayed: true });
         }
-        notifyWaiters(`${topicSlug}/orders/placed`, placedPayload, waiterIds, {
-          skipMqtt: true,
-        });
-        logStep("published");
+        logStep("dbCreate");
+        void publishBillingUpdate(store.slug, diningVisit.id).catch(() => {});
+
+        // Realtime notifications are best-effort after commit. A notification
+        // outage must not turn an accepted order into a misleading 500 response;
+        // staff clients recover their authoritative snapshot on reconnect.
+        try {
+          const waiterIds = await getWaiterIdsForTable(store.id, table.id);
+          const placedPayload = {
+            orderId: createdOrder.id,
+            tableId: createdOrder.tableId,
+            tableLabel: table.label,
+            ticketNumber: (createdOrder as any).ticketNumber ?? undefined,
+            createdAt: createdOrder.createdAt,
+            totalCents: createdOrder.totalCents,
+            note: createdOrder.note,
+            items: createdOrder.orderItems.map((orderItem) => ({
+              id: orderItem.id,
+              itemId: orderItem.itemId,
+              title: orderItem.titleSnapshot,
+              quantity: orderItem.quantity,
+              unitPriceCents: orderItem.unitPriceCents,
+              status: orderItem.status,
+              acceptedAt: orderItem.acceptedAt,
+              servedAt: orderItem.servedAt,
+              modifiers: orderItem.orderItemOptions,
+              categoryId: (orderItem as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (orderItem as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (orderItem as any)?.item?.printerTopic,
+                (orderItem as any)?.item?.category?.printerTopic
+              ),
+            })),
+          };
+          const topicSlug = store.slug;
+          publishMessage(`${topicSlug}/orders/placed`, placedPayload, {
+            roles: ["cook"],
+          });
+          if (getPrintOnArrival(store)) {
+            publishPrinterTopicsForOrder(
+              topicSlug,
+              createdOrder as OrderWithRelations,
+              OrderStatus.PLACED,
+              { roles: ["cook"], ...(persistLocalPrint ? { skipMqtt: true } : {}) }
+            );
+          }
+          notifyWaiters(`${topicSlug}/orders/placed`, placedPayload, waiterIds, {
+            skipMqtt: true,
+          });
+          logStep("published");
+        } catch (notificationError) {
+          request.log.warn({ err: notificationError, orderId: createdOrder.id }, "Order accepted; live notification failed");
+        }
         logStep("total");
 
         return reply
           .status(201)
+          .header("Cache-Control", "no-store")
           .header("Server-Timing", 'total;desc="createOrder"')
-          .send({ order: serializeOrder(createdOrder) });
+          .send({ order: serializeOrder(createdOrder), replayed: false });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
+        if (error instanceof SubmissionConflictError) {
+          return reply.status(409).send({ error: "IDEMPOTENCY_KEY_REUSED" });
+        }
+        if ((error as Error)?.message === "Invalid modifiers payload") {
+          return reply.status(400).send({ error: "Invalid modifiers payload" });
+        }
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -747,6 +871,30 @@ export async function orderRoutes(fastify: FastifyInstance) {
       }
     }
   );
+  // Recovery is read-only. The random submission UUID is a receipt capability,
+  // additionally scoped to the original store and table; a missing result never
+  // initiates a replacement order. Approval can already have been consumed.
+  fastify.get("/orders/submissions/:submissionId", {
+    preHandler: [ipWhitelistMiddleware, optionalAuthMiddleware],
+  }, async (request, reply) => {
+    try {
+      const { submissionId } = z.object({ submissionId: z.string().uuid() }).parse(request.params);
+      const { tableId } = z.object({ tableId: z.string().uuid() }).parse(request.query);
+      const store = await ensureStore(resolveStoreSlug(request));
+      const order = await db.order.findFirst({
+        where: { storeId: store.id, ...((request as any).diningVisit ? { diningVisitId: (request as any).diningVisit.id } : { tableId }), submissionId: submissionId.toLowerCase() },
+        include: { table: { select: { id: true, label: true } }, orderItems: ORDER_ITEM_INCLUDE },
+      });
+      reply.header("Cache-Control", "no-store");
+      if (!order) return reply.status(404).send({ error: "ORDER_SUBMISSION_NOT_FOUND" });
+      return reply.send({ order: serializeOrder(order), replayed: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) return reply.status(400).send({ error: "Invalid request" });
+      if ((error as Error)?.message === "STORE_NOT_FOUND") return reply.status(404).send({ error: "ORDER_SUBMISSION_NOT_FOUND" });
+      request.log.error({ err: error }, "Order submission recovery failed");
+      return reply.status(500).send({ error: "Failed to recover order" });
+    }
+  });
   // in your server.ts, near /orders
   fastify.get("/orders-benchmark", { preHandler: [authMiddleware, requireRole(["manager", "architect"])] }, async (request, reply) => {
     try {
@@ -989,6 +1137,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           shift: shiftResponse,
         });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         console.error("Get orders error:", error);
         return reply.status(500).send({ error: "Failed to fetch orders" });
       }
@@ -1020,6 +1169,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         return reply.send({ order: serializeOrder(order) });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         console.error("Get order error:", error);
         return reply.status(500).send({ error: "Failed to fetch order" });
       }
@@ -1037,6 +1187,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const { id } = request.params as { id: string };
         const body = updateStatusSchema.parse(request.body);
         const skipStatusMqtt = body.skipMqtt === true;
+        if (body.status === OrderStatus.PAID) throw new BillingError("BILLING_PAYMENT_REQUIRED", 409);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         const actor = (request as any).user;
@@ -1062,7 +1213,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const allowByRole = (role?: string) => {
           if (!role) return false;
           const isManager = role === "manager" || role === "architect";
-          if (next === OrderStatus.SERVED || next === OrderStatus.PAID)
+          if (next === OrderStatus.SERVED)
             return role === "waiter" || role === "hybrid" || isManager;
           if (next === OrderStatus.PREPARING || next === OrderStatus.READY)
             return role === "cook" || role === "hybrid" || isManager;
@@ -1088,13 +1239,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           body.cancelReason.trim().length > 0
             ? body.cancelReason.trim()
             : undefined;
-        const statusChanged = existing.status !== body.status;
         const updateData: any = {
           status: body.status,
           updatedAt: now,
         };
         const broadcastToGuests = (suffix: string, payload: any) =>
-          publishMessage(`${store.slug}/${suffix}`, payload, {
+          publishMessage(`${store.slug}/${suffix}`, { ...payload, visitId: existing.diningVisitId }, {
             anonymousOnly: true,
             skipMqtt: true,
           });
@@ -1107,7 +1257,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           for (let i = flowIndex + 1; i < STATUS_PROGRESS_FLOW.length; i++) {
             const futureStatus = STATUS_PROGRESS_FLOW[i];
             const futureField = STATUS_TIMESTAMP_FIELDS[futureStatus];
-            if (futureField && (existing as any)[futureField]) {
+            if (futureField && futureField !== "paidAt" && (existing as any)[futureField]) {
               updateData[futureField] = null;
             }
           }
@@ -1123,260 +1273,238 @@ export async function orderRoutes(fastify: FastifyInstance) {
             updateData.cancelledAt = null;
           }
         }
-        let updatedOrder = await db.order.update({
-          where: { id },
-          data: updateData,
-          include: {
-            table: true,
-            orderItems: ORDER_ITEM_INCLUDE,
-          },
+        const localPrinting = process.env.LOCAL_PRINTING_ENABLED === "true";
+        const wantsPreparingPrint = body.status === OrderStatus.PREPARING && !skipStatusMqtt &&
+          (body.printReceipt === true || !getPrintOnArrival(store));
+        const { order: updatedOrder, statusChanged } = await db.$transaction(async (tx) => {
+          if (existing.diningVisitId) await lockDiningVisit(tx, existing.diningVisitId, store.id);
+          // Serialize transitions for this order so retried accepts cannot allocate
+          // another ticket number or queue a duplicate receipt.
+          await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${id}::uuid AND "storeId" = ${store.id}::uuid FOR UPDATE`;
+          const current = await tx.order.findUniqueOrThrow({ where: { id } });
+          const currentIndex = STATUS_PROGRESS_FLOW.indexOf(current.status);
+          const requestedIndex = STATUS_PROGRESS_FLOW.indexOf(body.status);
+          if (body.status === OrderStatus.CANCELLED || (requestedIndex >= 0 && requestedIndex < currentIndex)) {
+            await assertOrderFinanciallyMutable(tx, current);
+          }
+          const changed = current.status !== body.status;
+          let ticketNumber = current.ticketNumber;
+          if (body.status === OrderStatus.PREPARING && ticketNumber == null) {
+            const day = new Date().toISOString().slice(0, 10);
+            const counter = await tx.kitchenTicketSeq.upsert({
+              where: { storeId_day: { storeId: store.id, day } },
+              create: { storeId: store.id, day, seq: 1 },
+              update: { seq: { increment: 1 } },
+              select: { seq: true },
+            });
+            ticketNumber = counter.seq;
+          }
+          const order = await tx.order.update({
+            where: { id }, data: { ...updateData, ticketNumber },
+            include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
+          });
+          if (localPrinting && wantsPreparingPrint) {
+            const prior = await tx.localPrintIntent.findMany({
+              where: { orderId: id, storeId: store.id }, select: { topic: true, payload: true },
+            });
+            const acceptedTopics = new Set(prior.filter((job) => {
+              const payload = job.payload as Record<string, unknown>;
+              return payload?.status === OrderStatus.PREPARING && !payload?.printReason;
+            }).map((job) => job.topic));
+            const messages = buildPrinterMessagesForOrder(store.slug, order, OrderStatus.PREPARING, cookPrinterTopic)
+              .filter((message) => !acceptedTopics.has(message.topic));
+            await persistLocalPrinterMessages(tx, store.id, order.id, messages);
+          }
+          if (changed && order.diningVisitId) await bumpDiningVisit(tx, order.diningVisitId);
+          return { order, statusChanged: changed };
         });
 
-        const waiterIdsForOrder = await getWaiterIdsForTable(
-          store.id,
-          updatedOrder.tableId
-        );
+        if (updatedOrder.diningVisitId) void publishBillingUpdate(store.slug, updatedOrder.diningVisitId).catch(() => {});
+        try {
+          const waiterIdsForOrder = await getWaiterIdsForTable(store.id, updatedOrder.tableId);
 
-        if (body.status === OrderStatus.PREPARING) {
-          // Allocate daily ticket number if missing
-          if ((updatedOrder as any).ticketNumber == null) {
-            const day = new Date().toISOString().slice(0, 10); // UTC day
-            const result = await db.$transaction(async (tx) => {
-              // Re-check inside the transaction to avoid double allocation
-              const current = await tx.order.findUnique({
-                where: { id },
-                select: { ticketNumber: true },
-              });
-              if (current?.ticketNumber != null) {
-                return tx.order.findUnique({
-                  where: { id },
-                  include: {
-                    table: true,
-                    orderItems: ORDER_ITEM_INCLUDE,
-                  },
-                });
-              }
-              const counter = await tx.kitchenTicketSeq.upsert({
-                where: { storeId_day: { storeId: store.id, day } },
-                create: { storeId: store.id, day, seq: 1 },
-                update: { seq: { increment: 1 } },
-                select: { seq: true },
-              });
-              return tx.order.update({
-                where: { id },
-                data: { ticketNumber: counter.seq },
-                include: {
-                  table: true,
-                  orderItems: ORDER_ITEM_INCLUDE,
-                },
-              });
-            });
-            updatedOrder = result as any;
-          }
-          // Notify that kitchen accepted the order
-          const orderSnapshot = serializeOrder(
-            updatedOrder as OrderWithRelations
-          );
-          const payload = {
-            orderId: updatedOrder.id,
-            tableId: updatedOrder.tableId,
-            tableLabel: updatedOrder.table?.label ?? "",
-            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
-            status: OrderStatus.PREPARING,
-            ts: new Date().toISOString(),
-            items: updatedOrder.orderItems.map((oi) => ({
-              title: oi.titleSnapshot,
-              quantity: oi.quantity,
-              unitPriceCents: oi.unitPriceCents,
-              modifiers: oi.orderItemOptions,
-              categoryId: (oi as any)?.item?.categoryId ?? undefined,
-              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-              printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.printerTopic
-              ),
-            })),
-            order: orderSnapshot,
-          };
-          const topicBase = store.slug;
-          const cookPublishOptions: PublishOptions = {
-            roles: ["cook"],
-            ...(skipStatusMqtt ? { skipMqtt: true } : {}),
-          };
-          if (!cookPrinterTopic) {
-            publishMessage(
+          if (body.status === OrderStatus.PREPARING) {
+            // Notify that kitchen accepted the order
+            const orderSnapshot = serializeOrder(
+              updatedOrder as OrderWithRelations
+            );
+            const payload = {
+              orderId: updatedOrder.id,
+              tableId: updatedOrder.tableId,
+              tableLabel: updatedOrder.table?.label ?? "",
+              ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
+              status: OrderStatus.PREPARING,
+              ts: new Date().toISOString(),
+              items: updatedOrder.orderItems.map((oi) => ({
+                title: oi.titleSnapshot,
+                quantity: oi.quantity,
+                unitPriceCents: oi.unitPriceCents,
+                modifiers: oi.orderItemOptions,
+                categoryId: (oi as any)?.item?.categoryId ?? undefined,
+                categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+                printerTopic: normalizePrinterTopic(
+                  (oi as any)?.item?.printerTopic
+                ),
+              })),
+              order: orderSnapshot,
+            };
+            const topicBase = store.slug;
+            const cookPublishOptions: PublishOptions = {
+              roles: ["cook"],
+              ...((skipStatusMqtt || localPrinting) ? { skipMqtt: true } : {}),
+            };
+            if (!cookPrinterTopic) {
+              publishMessage(
+                `${topicBase}/orders/preparing`,
+                payload,
+                cookPublishOptions
+              );
+            }
+            if (body.printReceipt === true || !getPrintOnArrival(store)) {
+              publishPrinterTopicsForOrder(
+                topicBase,
+                updatedOrder as OrderWithRelations,
+                OrderStatus.PREPARING,
+                cookPublishOptions,
+                cookPrinterTopic
+              );
+            }
+            notifyWaiters(
               `${topicBase}/orders/preparing`,
               payload,
-              cookPublishOptions
+              waiterIdsForOrder,
+              { skipMqtt: true }
             );
+            broadcastToGuests("orders/preparing", payload);
           }
-          if (!getPrintOnArrival(store)) {
+
+          if (body.status === OrderStatus.READY) {
+            const payload = {
+              orderId: updatedOrder.id,
+              tableId: updatedOrder.tableId,
+              tableLabel: updatedOrder.table?.label ?? "",
+              ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
+              status: OrderStatus.READY,
+              ts: new Date().toISOString(),
+              items: updatedOrder.orderItems.map((oi) => ({
+                title: oi.titleSnapshot,
+                quantity: oi.quantity,
+                unitPriceCents: oi.unitPriceCents,
+                modifiers: oi.orderItemOptions,
+                categoryId: (oi as any)?.item?.categoryId ?? undefined,
+                categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+                printerTopic: normalizePrinterTopic(
+                  (oi as any)?.item?.printerTopic
+                ),
+              })),
+            };
+            const topicBase = store.slug;
+            const cookPublishOptions: PublishOptions = { roles: ["cook"] };
+            if (!cookPrinterTopic) {
+              publishMessage(
+                `${topicBase}/orders/ready`,
+                payload,
+                cookPublishOptions
+              );
+            }
             publishPrinterTopicsForOrder(
               topicBase,
               updatedOrder as OrderWithRelations,
-              OrderStatus.PREPARING,
+              OrderStatus.READY,
               cookPublishOptions,
               cookPrinterTopic
             );
-          }
-          notifyWaiters(
-            `${topicBase}/orders/preparing`,
-            payload,
-            waiterIdsForOrder,
-            { skipMqtt: true }
-          );
-          broadcastToGuests("orders/preparing", payload);
-        }
-
-        if (body.status === OrderStatus.READY) {
-          const payload = {
-            orderId: updatedOrder.id,
-            tableId: updatedOrder.tableId,
-            tableLabel: updatedOrder.table?.label ?? "",
-            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
-            status: OrderStatus.READY,
-            ts: new Date().toISOString(),
-            items: updatedOrder.orderItems.map((oi) => ({
-              title: oi.titleSnapshot,
-              quantity: oi.quantity,
-              unitPriceCents: oi.unitPriceCents,
-              modifiers: oi.orderItemOptions,
-              categoryId: (oi as any)?.item?.categoryId ?? undefined,
-              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-              printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.printerTopic
-              ),
-            })),
-          };
-          const topicBase = store.slug;
-          const cookPublishOptions: PublishOptions = { roles: ["cook"] };
-          if (!cookPrinterTopic) {
-            publishMessage(
+            notifyWaiters(
               `${topicBase}/orders/ready`,
               payload,
-              cookPublishOptions
+              waiterIdsForOrder
             );
+            broadcastToGuests("orders/ready", payload);
           }
-          publishPrinterTopicsForOrder(
-            topicBase,
-            updatedOrder as OrderWithRelations,
-            OrderStatus.READY,
-            cookPublishOptions,
-            cookPrinterTopic
-          );
-          notifyWaiters(
-            `${topicBase}/orders/ready`,
-            payload,
-            waiterIdsForOrder
-          );
-          broadcastToGuests("orders/ready", payload);
-        }
 
-        if (body.status === OrderStatus.CANCELLED) {
-          const payload = {
-            orderId: updatedOrder.id,
-            tableId: updatedOrder.tableId,
-            tableLabel: updatedOrder.table?.label ?? "",
-            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
-            status: OrderStatus.CANCELLED,
-            ts: new Date().toISOString(),
-            items: updatedOrder.orderItems.map((oi) => ({
-              title: oi.titleSnapshot,
-              quantity: oi.quantity,
-              unitPriceCents: oi.unitPriceCents,
-              modifiers: oi.orderItemOptions,
-              categoryId: (oi as any)?.item?.categoryId ?? undefined,
-              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-              printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.printerTopic
-              ),
-            })),
-          };
-          const topicBase = store.slug;
-          publishMessage(`${topicBase}/orders/canceled`, payload, {
-            roles: ["cook"],
-          });
-          notifyWaiters(
-            `${topicBase}/orders/canceled`,
-            payload,
-            waiterIdsForOrder,
-            { skipMqtt: true }
-          );
-          broadcastToGuests("orders/canceled", payload);
-          broadcastToGuests("orders/cancelled", payload);
-        }
+          if (body.status === OrderStatus.CANCELLED) {
+            const payload = {
+              orderId: updatedOrder.id,
+              tableId: updatedOrder.tableId,
+              tableLabel: updatedOrder.table?.label ?? "",
+              ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
+              status: OrderStatus.CANCELLED,
+              ts: new Date().toISOString(),
+              items: updatedOrder.orderItems.map((oi) => ({
+                title: oi.titleSnapshot,
+                quantity: oi.quantity,
+                unitPriceCents: oi.unitPriceCents,
+                modifiers: oi.orderItemOptions,
+                categoryId: (oi as any)?.item?.categoryId ?? undefined,
+                categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+                printerTopic: normalizePrinterTopic(
+                  (oi as any)?.item?.printerTopic
+                ),
+              })),
+            };
+            const topicBase = store.slug;
+            publishMessage(`${topicBase}/orders/canceled`, payload, {
+              roles: ["cook"],
+            });
+            notifyWaiters(
+              `${topicBase}/orders/canceled`,
+              payload,
+              waiterIdsForOrder,
+              { skipMqtt: true }
+            );
+            broadcastToGuests("orders/canceled", payload);
+            broadcastToGuests("orders/cancelled", payload);
+          }
 
-        if (body.status === OrderStatus.SERVED) {
-          const payload = {
-            orderId: updatedOrder.id,
-            tableId: updatedOrder.tableId,
-            tableLabel: updatedOrder.table?.label ?? "",
-            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
-            status: OrderStatus.SERVED,
-            ts: new Date().toISOString(),
-            items: updatedOrder.orderItems.map((oi) => ({
-              title: oi.titleSnapshot,
-              quantity: oi.quantity,
-              unitPriceCents: oi.unitPriceCents,
-              modifiers: oi.orderItemOptions,
-              categoryId: (oi as any)?.item?.categoryId ?? undefined,
-              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-              printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.printerTopic
-              ),
-            })),
-          };
-          const topicBase = store.slug;
-          publishMessage(`${topicBase}/orders/served`, payload, {
-            roles: ["cook"],
-          });
-          notifyWaiters(
-            `${topicBase}/orders/served`,
-            payload,
-            waiterIdsForOrder,
-            { skipMqtt: true }
-          );
-          broadcastToGuests("orders/served", payload);
-        }
+          if (body.status === OrderStatus.SERVED) {
+            const payload = {
+              orderId: updatedOrder.id,
+              tableId: updatedOrder.tableId,
+              tableLabel: updatedOrder.table?.label ?? "",
+              ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
+              status: OrderStatus.SERVED,
+              ts: new Date().toISOString(),
+              items: updatedOrder.orderItems.map((oi) => ({
+                title: oi.titleSnapshot,
+                quantity: oi.quantity,
+                unitPriceCents: oi.unitPriceCents,
+                modifiers: oi.orderItemOptions,
+                categoryId: (oi as any)?.item?.categoryId ?? undefined,
+                categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+                printerTopic: normalizePrinterTopic(
+                  (oi as any)?.item?.printerTopic
+                ),
+              })),
+            };
+            const topicBase = store.slug;
+            publishMessage(`${topicBase}/orders/served`, payload, {
+              roles: ["cook"],
+            });
+            notifyWaiters(
+              `${topicBase}/orders/served`,
+              payload,
+              waiterIdsForOrder,
+              { skipMqtt: true }
+            );
+            broadcastToGuests("orders/served", payload);
+          }
 
-        if (body.status === OrderStatus.PAID) {
-          const payload = {
-            orderId: updatedOrder.id,
-            tableId: updatedOrder.tableId,
-            tableLabel: updatedOrder.table?.label ?? "",
-            ticketNumber: (updatedOrder as any).ticketNumber ?? undefined,
-            status: OrderStatus.PAID,
-            ts: new Date().toISOString(),
-            items: updatedOrder.orderItems.map((oi) => ({
-              title: oi.titleSnapshot,
-              quantity: oi.quantity,
-              unitPriceCents: oi.unitPriceCents,
-              modifiers: oi.orderItemOptions,
-            })),
-          };
-          const topicBase = store.slug;
-          publishMessage(`${topicBase}/orders/paid`, payload, {
-            roles: ["cook"],
-          });
-          notifyWaiters(
-            `${topicBase}/orders/paid`,
-            payload,
-            waiterIdsForOrder,
-            { skipMqtt: true }
-          );
-          broadcastToGuests("orders/paid", payload);
-        }
+          if (statusChanged) {
+            void notifyCustomerOrderStatus({
+              order: updatedOrder,
+              storeSlug: store.slug,
+            }).catch((error) => {
+              console.warn("Customer push notification failed:", error);
+            });
+          }
 
-        if (statusChanged) {
-          void notifyCustomerOrderStatus({
-            order: updatedOrder,
-            storeSlug: store.slug,
-          }).catch((error) => {
-            console.warn("Customer push notification failed:", error);
-          });
+        } catch (notificationError) {
+          request.log.warn({ err: notificationError, orderId: updatedOrder.id }, "Order status accepted; live notification failed");
         }
 
         return reply.send({ order: serializeOrder(updatedOrder) });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -1515,7 +1643,36 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const cancelsOrder = body.quantity === 0 && existing.orderItems.length === 1;
         const now = new Date();
 
+        const buildChangeEvent = (order: OrderWithRelations) => ({
+          orderId: order.id,
+          tableId: order.tableId,
+          tableLabel: order.table?.label ?? "",
+          ticketNumber: order.ticketNumber ?? undefined,
+          status: order.status,
+          createdAt: order.createdAt,
+          totalCents: order.totalCents,
+          note: order.note,
+          items: serializeOrder(order).items,
+          order: serializeOrder(order),
+          change: { from: before, to: after },
+          ts: now.toISOString(),
+        });
+        const printerTopic = normalizePrinterTopic(dbItem.printerTopic, dbItem.category?.printerTopic);
+        const printStatus = getPrintOnArrival(store) ? OrderStatus.PLACED : OrderStatus.PREPARING;
+        const buildChangeTicket = (order: OrderWithRelations) => ({
+          topic: `${store.slug}/orders/${printStatus.toLowerCase()}/${printerTopic}`,
+          payload: {
+            ...buildChangeEvent(order), status: printStatus, printReason: "ITEM_CHANGE", printerTopic,
+            items: [{
+              id: currentItem.id, itemId: currentItem.itemId, title: currentItem.titleSnapshot,
+              quantity: body.quantity, unitPriceCents: body.quantity > 0 ? unitPriceCents : 0,
+              modifiers: options, printerTopic,
+            }],
+          },
+        });
+
         const updated = await db.$transaction(async (tx) => {
+          await lockEditableOrders(tx, [existing]);
           if (body.quantity === 0) {
             await tx.orderItem.delete({ where: { id: currentItem.id } });
           } else {
@@ -1545,65 +1702,37 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          return tx.order.findUniqueOrThrow({
+          const updatedOrder = await tx.order.findUniqueOrThrow({
             where: { id: existing.id },
             include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
           });
+          await persistLocalPrinterMessages(tx, store.id, updatedOrder.id, [buildChangeTicket(updatedOrder)]);
+          if (updatedOrder.diningVisitId) await bumpDiningVisit(tx, updatedOrder.diningVisitId);
+          return updatedOrder;
         });
+        if (updated.diningVisitId) void publishBillingUpdate(store.slug, updated.diningVisitId).catch(() => {});
 
         const orderPayload = serializeOrder(updated as OrderWithRelations);
-        const eventPayload = {
-          orderId: updated.id,
-          tableId: updated.tableId,
-          tableLabel: updated.table?.label ?? "",
-          ticketNumber: (updated as any).ticketNumber ?? undefined,
-          status: updated.status,
-          createdAt: updated.createdAt,
-          totalCents: updated.totalCents,
-          note: updated.note,
-          items: orderPayload.items,
-          order: orderPayload,
-          change: { from: before, to: after },
-          ts: now.toISOString(),
-        };
-        const topic = cancelsOrder ? "canceled" : "placed";
-        publishMessage(`${store.slug}/orders/${topic}`, eventPayload, { roles: ["cook"] });
-        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
-        notifyWaiters(`${store.slug}/orders/${topic}`, eventPayload, waiterIds, {
-          skipMqtt: true,
-        });
-        publishMessage(`${store.slug}/orders/${topic}`, eventPayload, {
-          anonymousOnly: true,
-          skipMqtt: true,
-        });
+        const eventPayload = buildChangeEvent(updated);
+        try {
+          const topic = cancelsOrder ? "canceled" : "placed";
+          publishMessage(`${store.slug}/orders/${topic}`, eventPayload, { roles: ["cook"] });
+          const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+          notifyWaiters(`${store.slug}/orders/${topic}`, eventPayload, waiterIds, {
+            skipMqtt: true,
+          });
+          publishMessage(`${store.slug}/orders/${topic}`, eventPayload, {
+            anonymousOnly: true,
+            skipMqtt: true,
+          });
 
-        const printerTopic = normalizePrinterTopic(
-          dbItem.printerTopic,
-          dbItem.category?.printerTopic
-        );
-        const printStatus = getPrintOnArrival(store)
-          ? OrderStatus.PLACED
-          : OrderStatus.PREPARING;
-        publishMessage(
-          `${store.slug}/orders/${printStatus.toLowerCase()}/${printerTopic}`,
-          {
-            ...eventPayload,
-            status: printStatus,
-            printReason: "ITEM_CHANGE",
-            printerTopic,
-            items: [
-              {
-                id: currentItem.id,
-                itemId: currentItem.itemId,
-                title: currentItem.titleSnapshot,
-                quantity: body.quantity,
-                unitPriceCents: body.quantity > 0 ? unitPriceCents : 0,
-                modifiers: options,
-                printerTopic,
-              },
-            ],
-          }
-        );
+          const printMessage = buildChangeTicket(updated);
+          publishMessage(printMessage.topic, printMessage.payload,
+            process.env.LOCAL_PRINTING_ENABLED === "true" ? { skipMqtt: true } : undefined);
+
+        } catch (notificationError) {
+          request.log.warn({ err: notificationError, orderId: updated.id }, "Order edit accepted; live notification failed");
+        }
 
         return reply.send({
           order: orderPayload,
@@ -1611,6 +1740,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
           removed: body.quantity === 0,
         });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
+        if (error instanceof OrderEditConflictError) {
+          return reply.status(409).send({ error: "ORDER_CHANGED", message: "Order changed; refresh before editing" });
+        }
         if (error instanceof z.ZodError) {
           return reply.status(400).send({ error: "Invalid request", details: error.errors });
         }
@@ -1665,7 +1798,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             orderId: params.id,
             order: { storeId: store.id },
           },
-          include: { order: { select: { id: true, status: true, tableId: true } } },
+          include: { order: { select: { id: true, status: true, tableId: true, diningVisitId: true } } },
         });
 
         if (!orderItem) {
@@ -1691,10 +1824,19 @@ export async function orderRoutes(fastify: FastifyInstance) {
           updateData.servedAt = null;
         }
 
-        await db.orderItem.update({
-          where: { id: params.itemId },
-          data: updateData,
+        await db.$transaction(async (tx) => {
+          if (orderItem.order.diningVisitId) await lockDiningVisit(tx, orderItem.order.diningVisitId, store.id);
+          await tx.$queryRaw`SELECT "id" FROM "orders" WHERE "id" = ${params.id}::uuid FOR UPDATE`;
+          const currentOrder = await tx.order.findUniqueOrThrow({ where: { id: params.id } });
+          if (currentOrder.status === OrderStatus.CANCELLED) throw new BillingError("ORDER_CANCELLED", 409);
+          const currentItem = await tx.orderItem.findUniqueOrThrow({ where: { id: params.itemId } });
+          const flow = [OrderItemStatus.PLACED, OrderItemStatus.ACCEPTED, OrderItemStatus.SERVED];
+          if (flow.indexOf(body.status) < flow.indexOf(currentItem.status)) await assertOrderFinanciallyMutable(tx, currentOrder);
+          await tx.orderItem.update({ where: { id: params.itemId }, data: updateData });
+          await tx.order.update({ where: { id: params.id }, data: { updatedAt: now } });
+          if (currentOrder.diningVisitId) await bumpDiningVisit(tx, currentOrder.diningVisitId);
         });
+        if (orderItem.order.diningVisitId) void publishBillingUpdate(store.slug, orderItem.order.diningVisitId).catch(() => {});
 
         const order = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
@@ -1729,6 +1871,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         return reply.send({ order: serializeOrder(order as OrderWithRelations) });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -1761,6 +1904,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         });
         return reply.send({ ahead });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         console.error("Order queue summary error:", error);
         return reply
           .status(500)
@@ -1857,6 +2001,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         return reply.send({ queuePosition, estimatedMinutes });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -1906,8 +2051,9 @@ export async function orderRoutes(fastify: FastifyInstance) {
           where: {
             storeId: store.id,
             tableId: params.id,
+            ...((request as any).diningVisit ? { diningVisitId: (request as any).diningVisit.id } : {}),
             ...(unpaidOnly
-              ? { status: { not: OrderStatus.PAID } }
+              ? { status: { notIn: [OrderStatus.PAID, OrderStatus.CANCELLED] }, paymentStatus: { not: "COMPLETED" as const } }
               : query.status
               ? { status: query.status }
               : {}),
@@ -1921,6 +2067,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         });
         return reply.send({ orders: orders.map(serializeOrder) });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -1950,6 +2097,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const body = updatePendingTableOrdersSchema.parse(request.body);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role && actor.role !== "guest");
         const table = await db.table.findFirst({
           where: { id: params.id, storeId: store.id },
         });
@@ -1962,6 +2111,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           where: {
             storeId: store.id,
             tableId: params.id,
+            ...((request as any).diningVisit ? { diningVisitId: (request as any).diningVisit.id } : {}),
             status: OrderStatus.PLACED,
             ...(requestedOrderIds.length
               ? { id: { in: requestedOrderIds } }
@@ -2098,6 +2248,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const now = new Date();
 
         const updated = await db.$transaction(async (tx) => {
+          await lockEditableOrders(tx, editableOrders);
           await tx.orderItem.deleteMany({ where: { orderId: primaryOrder.id } });
 
           if (supersededOrderIds.length > 0) {
@@ -2106,6 +2257,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
                 id: { in: supersededOrderIds },
                 storeId: store.id,
                 tableId: params.id,
+            ...((request as any).diningVisit ? { diningVisitId: (request as any).diningVisit.id } : {}),
                 status: OrderStatus.PLACED,
               },
               data: {
@@ -2131,91 +2283,102 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
+          if (getPrintOnArrival(store)) {
+            await persistLocalPrinterMessages(tx, store.id, updatedOrder.id,
+              buildPrinterMessagesForOrder(store.slug, updatedOrder, OrderStatus.PLACED, null, "ITEM_CHANGE"));
+          }
+          if (updatedOrder.diningVisitId) await bumpDiningVisit(tx, updatedOrder.diningVisitId);
           return updatedOrder;
         });
+        if (updated.diningVisitId) void publishBillingUpdate(store.slug, updated.diningVisitId).catch(() => {});
 
-        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
-        const topicBase = store.slug;
-        const payloadPlaced = {
-          orderId: updated.id,
-          tableId: updated.tableId,
-          tableLabel: updated.table?.label ?? "",
-          ticketNumber: (updated as any).ticketNumber ?? undefined,
-          createdAt: updated.createdAt,
-          totalCents: updated.totalCents,
-          note: updated.note,
-          items: updated.orderItems.map((oi) => ({
-            id: oi.id,
-            itemId: oi.itemId,
-            title: oi.titleSnapshot,
-            quantity: oi.quantity,
-            unitPriceCents: oi.unitPriceCents,
-            status: oi.status,
-            acceptedAt: oi.acceptedAt,
-            servedAt: oi.servedAt,
-            modifiers: oi.orderItemOptions,
-            categoryId: (oi as any)?.item?.categoryId ?? undefined,
-            categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-            printerTopic: normalizePrinterTopic(
-              (oi as any)?.item?.printerTopic,
-              (oi as any)?.item?.category?.printerTopic
-            ),
-          })),
-        };
-        publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
-          roles: ["cook"],
-        });
-        if (getPrintOnArrival(store)) {
-          publishPrinterTopicsForOrder(
-            topicBase,
-            updated as OrderWithRelations,
-            OrderStatus.PLACED,
-            { roles: ["cook"] },
-            null,
-            "ITEM_CHANGE"
-          );
-        }
-        notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
-          skipMqtt: true,
-        });
-
-        for (const order of supersededOrders) {
-          const payloadCanceled = {
-            orderId: order.id,
-            tableId: order.tableId,
-            tableLabel: order.table?.label ?? "",
-            ticketNumber: (order as any).ticketNumber ?? undefined,
-            status: OrderStatus.CANCELLED,
-            ts: now.toISOString(),
-            items: order.orderItems.map((oi) => ({
+        try {
+          const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+          const topicBase = store.slug;
+          const payloadPlaced = {
+            orderId: updated.id,
+            tableId: updated.tableId,
+            tableLabel: updated.table?.label ?? "",
+            ticketNumber: (updated as any).ticketNumber ?? undefined,
+            createdAt: updated.createdAt,
+            totalCents: updated.totalCents,
+            note: updated.note,
+            items: updated.orderItems.map((oi) => ({
+              id: oi.id,
+              itemId: oi.itemId,
               title: oi.titleSnapshot,
               quantity: oi.quantity,
               unitPriceCents: oi.unitPriceCents,
+              status: oi.status,
+              acceptedAt: oi.acceptedAt,
+              servedAt: oi.servedAt,
               modifiers: oi.orderItemOptions,
               categoryId: (oi as any)?.item?.categoryId ?? undefined,
               categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
               printerTopic: normalizePrinterTopic(
-                (oi as any)?.item?.printerTopic
+                (oi as any)?.item?.printerTopic,
+                (oi as any)?.item?.category?.printerTopic
               ),
             })),
           };
-          publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
+          publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
             roles: ["cook"],
           });
-          notifyWaiters(
-            `${topicBase}/orders/canceled`,
-            payloadCanceled,
-            waiterIds,
-            { skipMqtt: true }
-          );
-          publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
-            anonymousOnly: true,
+          if (getPrintOnArrival(store)) {
+            publishPrinterTopicsForOrder(
+              topicBase,
+              updated as OrderWithRelations,
+              OrderStatus.PLACED,
+              { roles: ["cook"], ...(process.env.LOCAL_PRINTING_ENABLED === "true" ? { skipMqtt: true } : {}) },
+              null,
+              "ITEM_CHANGE"
+            );
+          }
+          notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
             skipMqtt: true,
           });
-          publishMessage(`${topicBase}/orders/cancelled`, payloadCanceled, {
-            anonymousOnly: true,
-            skipMqtt: true,
-          });
+
+          for (const order of supersededOrders) {
+            const payloadCanceled = {
+              orderId: order.id,
+              tableId: order.tableId,
+              tableLabel: order.table?.label ?? "",
+              ticketNumber: (order as any).ticketNumber ?? undefined,
+              status: OrderStatus.CANCELLED,
+              ts: now.toISOString(),
+              items: order.orderItems.map((oi) => ({
+                title: oi.titleSnapshot,
+                quantity: oi.quantity,
+                unitPriceCents: oi.unitPriceCents,
+                modifiers: oi.orderItemOptions,
+                categoryId: (oi as any)?.item?.categoryId ?? undefined,
+                categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+                printerTopic: normalizePrinterTopic(
+                  (oi as any)?.item?.printerTopic
+                ),
+              })),
+            };
+            publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
+              roles: ["cook"],
+            });
+            notifyWaiters(
+              `${topicBase}/orders/canceled`,
+              payloadCanceled,
+              waiterIds,
+              { skipMqtt: true }
+            );
+            publishMessage(`${topicBase}/orders/canceled`, payloadCanceled, {
+              anonymousOnly: true,
+              skipMqtt: true,
+            });
+            publishMessage(`${topicBase}/orders/cancelled`, payloadCanceled, {
+              anonymousOnly: true,
+              skipMqtt: true,
+            });
+          }
+
+        } catch (notificationError) {
+          request.log.warn({ err: notificationError, orderId: updated.id }, "Order edit accepted; live notification failed");
         }
 
         return reply.send({
@@ -2223,6 +2386,10 @@ export async function orderRoutes(fastify: FastifyInstance) {
           supersededOrderIds,
         });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
+        if (error instanceof OrderEditConflictError) {
+          return reply.status(409).send({ error: "ORDER_CHANGED", message: "Order changed; refresh before editing" });
+        }
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -2255,6 +2422,8 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const body = createOrderSchema.partial().parse(request.body);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
+        const actor = (request as any).user;
+        const isStaff = Boolean(actor?.role && actor.role !== "guest");
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
           include: {
@@ -2338,6 +2507,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         }
 
         const updated = await db.$transaction(async (tx) => {
+          await lockEditableOrders(tx, [existing]);
           if (orderItemsData) {
             await tx.orderItem.deleteMany({ where: { orderId: id } });
           }
@@ -2357,57 +2527,72 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
+          if (getPrintOnArrival(store)) {
+            await persistLocalPrinterMessages(tx, store.id, updatedOrder.id,
+              buildPrinterMessagesForOrder(store.slug, updatedOrder, OrderStatus.PLACED, null, "ITEM_CHANGE"));
+          }
+          if (updatedOrder.diningVisitId) await bumpDiningVisit(tx, updatedOrder.diningVisitId);
           return updatedOrder;
         });
+        if (updated.diningVisitId) void publishBillingUpdate(store.slug, updated.diningVisitId).catch(() => {});
 
-        // Notify clients (re-emit placed with new content)
-        const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
-        const payloadPlaced = {
-          orderId: updated.id,
-          tableId: updated.tableId,
-          tableLabel: updated.table?.label ?? "",
-          ticketNumber: (updated as any).ticketNumber ?? undefined,
-          createdAt: updated.createdAt,
-          totalCents: updated.totalCents,
-          note: updated.note,
-          items: updated.orderItems.map((oi) => ({
-            id: oi.id,
-            itemId: oi.itemId,
-            title: oi.titleSnapshot,
-            quantity: oi.quantity,
-            unitPriceCents: oi.unitPriceCents,
-            status: oi.status,
-            acceptedAt: oi.acceptedAt,
-            servedAt: oi.servedAt,
-            modifiers: oi.orderItemOptions,
-            categoryId: (oi as any)?.item?.categoryId ?? undefined,
-            categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
-            printerTopic: normalizePrinterTopic(
-              (oi as any)?.item?.printerTopic,
-              (oi as any)?.item?.category?.printerTopic
-            ),
-          })),
-        };
-        const topicBase = store.slug;
-        publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
-          roles: ["cook"],
-        });
-        if (getPrintOnArrival(store)) {
-          publishPrinterTopicsForOrder(
-            topicBase,
-            updated as OrderWithRelations,
-            OrderStatus.PLACED,
-            { roles: ["cook"] },
-            null,
-            "ITEM_CHANGE"
-          );
+        try {
+          // Notify clients (re-emit placed with new content)
+          const waiterIds = await getWaiterIdsForTable(store.id, updated.tableId);
+          const payloadPlaced = {
+            orderId: updated.id,
+            tableId: updated.tableId,
+            tableLabel: updated.table?.label ?? "",
+            ticketNumber: (updated as any).ticketNumber ?? undefined,
+            createdAt: updated.createdAt,
+            totalCents: updated.totalCents,
+            note: updated.note,
+            items: updated.orderItems.map((oi) => ({
+              id: oi.id,
+              itemId: oi.itemId,
+              title: oi.titleSnapshot,
+              quantity: oi.quantity,
+              unitPriceCents: oi.unitPriceCents,
+              status: oi.status,
+              acceptedAt: oi.acceptedAt,
+              servedAt: oi.servedAt,
+              modifiers: oi.orderItemOptions,
+              categoryId: (oi as any)?.item?.categoryId ?? undefined,
+              categoryTitle: (oi as any)?.item?.category?.title ?? undefined,
+              printerTopic: normalizePrinterTopic(
+                (oi as any)?.item?.printerTopic,
+                (oi as any)?.item?.category?.printerTopic
+              ),
+            })),
+          };
+          const topicBase = store.slug;
+          publishMessage(`${topicBase}/orders/placed`, payloadPlaced, {
+            roles: ["cook"],
+          });
+          if (getPrintOnArrival(store)) {
+            publishPrinterTopicsForOrder(
+              topicBase,
+              updated as OrderWithRelations,
+              OrderStatus.PLACED,
+              { roles: ["cook"], ...(process.env.LOCAL_PRINTING_ENABLED === "true" ? { skipMqtt: true } : {}) },
+              null,
+              "ITEM_CHANGE"
+            );
+          }
+          notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
+            skipMqtt: true,
+          });
+
+        } catch (notificationError) {
+          request.log.warn({ err: notificationError, orderId: updated.id }, "Order edit accepted; live notification failed");
         }
-        notifyWaiters(`${topicBase}/orders/placed`, payloadPlaced, waiterIds, {
-          skipMqtt: true,
-        });
 
         return reply.send({ order: serializeOrder(updated) });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
+        if (error instanceof OrderEditConflictError) {
+          return reply.status(409).send({ error: "ORDER_CHANGED", message: "Order changed; refresh before editing" });
+        }
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -2478,7 +2663,12 @@ export async function orderRoutes(fastify: FastifyInstance) {
           })),
           order: serializeOrder(order as any),
         };
-        const cookPublishOptions: PublishOptions = { roles: ["cook"] };
+        const localPrinting = process.env.LOCAL_PRINTING_ENABLED === "true";
+        if (localPrinting) {
+          await db.$transaction((tx) => persistLocalPrinterMessages(tx, store.id, order.id,
+            buildPrinterMessagesForOrder(store.slug, order, OrderStatus.PREPARING, cookPrinterTopic)));
+        }
+        const cookPublishOptions: PublishOptions = { roles: ["cook"], ...(localPrinting ? { skipMqtt: true } : {}) };
         if (!cookPrinterTopic) {
           publishMessage(
             `${store.slug}/orders/preparing`,
@@ -2495,6 +2685,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
         );
         return reply.send({ success: true });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)
@@ -2625,6 +2816,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
 
         return reply.send({ success: true });
       } catch (error) {
+        if (error instanceof BillingError) return reply.status(error.status).send({ error: error.code });
         if (error instanceof z.ZodError) {
           return reply
             .status(400)

@@ -5,6 +5,7 @@ import { verifyToken } from "./jwt.js";
 import { db } from "../db/index.js";
 import { serializeRole } from "./roles.js";
 import { isAllowedOrigin } from "./httpSecurity.js";
+import { requireGuestVisit } from "./diningBilling.js";
 
 type RoleName = "waiter" | "cook" | "manager" | "architect" | "hybrid";
 
@@ -14,6 +15,7 @@ interface ClientSession {
   role?: RoleName;
   storeSlug?: string;
   tableId?: string;
+  visitId?: string;
   expiresAt?: number;
   isAlive: boolean;
 }
@@ -24,6 +26,7 @@ export interface EmitOptions {
   roles?: RoleName[];
   userIds?: string[];
   anonymousOnly?: boolean;
+  visitId?: string;
 }
 
 async function extractAuth(req: IncomingMessage): Promise<Omit<ClientSession, "socket" | "isAlive">> {
@@ -48,11 +51,12 @@ async function extractAuth(req: IncomingMessage): Promise<Omit<ClientSession, "s
   const storeSlug = url.searchParams.get("storeSlug") || "";
   const tableId = url.searchParams.get("tableId") || "";
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(storeSlug) || !/^[0-9a-f-]{36}$/i.test(tableId)) return {};
-  const table = await db.table.findFirst({
-    where: { id: tableId, isActive: true, store: { slug: storeSlug } },
-    select: { id: true },
-  });
-  return table ? { storeSlug, tableId: table.id } : {};
+  const tokenVisit = url.searchParams.get("visit") || "";
+  if (!tokenVisit) return {};
+  const store = await db.store.findUnique({ where: { slug: storeSlug }, select: { id: true } });
+  if (!store) return {};
+  const visit = await requireGuestVisit(tokenVisit, store.id);
+  return { storeSlug, tableId: visit.tableId, visitId: visit.id };
 }
 
 function roleMatches(sessionRole: RoleName | undefined, roles: RoleName[]) {
@@ -72,7 +76,7 @@ function topicStore(topic: string): string | null {
 function guestPayload(payload: any) {
   const out: Record<string, unknown> = {};
   // Send table status invalidations, never staff order/item/price/note data.
-  for (const key of ["orderId", "tableId", "status", "ts"]) {
+  for (const key of ["orderId", "tableId", "visitId", "status", "ts"]) {
     if (typeof payload?.[key] === "string") out[key] = payload[key];
   }
   return out;
@@ -125,7 +129,9 @@ export function emitRealtime(topic: string, payload: any, options?: EmitOptions)
     if (session.socket.readyState !== WebSocket.OPEN || session.storeSlug !== storeSlug) continue;
     if (session.expiresAt && session.expiresAt <= Date.now()) continue;
     if (options?.anonymousOnly) {
-      if (session.role || !session.tableId || session.tableId !== payload?.tableId) continue;
+      if (session.role || !session.visitId) continue;
+      const visitId = options?.visitId || payload?.visitId || payload?.diningVisitId;
+      if (!visitId || session.visitId !== visitId) continue;
     } else {
       if (!session.role) continue;
       if (options?.roles && !roleMatches(session.role, options.roles)) continue;
@@ -140,6 +146,15 @@ export function emitRealtime(topic: string, payload: any, options?: EmitOptions)
       session.socket.send(JSON.stringify({ topic, payload: options?.anonymousOnly ? guestPayload(payload) : payload }));
     } catch {
       session.socket.terminate();
+      clients.delete(session);
+    }
+  }
+}
+
+export function closeGuestVisitSockets(visitId: string) {
+  for (const session of clients) {
+    if (!session.role && session.visitId === visitId) {
+      session.socket.close(4001, "Visit closed");
       clients.delete(session);
     }
   }

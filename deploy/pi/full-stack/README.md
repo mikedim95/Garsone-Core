@@ -1,5 +1,12 @@
 # Noor on a standalone Raspberry Pi
 
+For a **new empty full installation with local MQTT**, run
+`python deploy_onboard.py --full-stack --host <pi-LAN-IP> --user piadmin`
+from the sibling `Garsone-Nodes` directory. That onboarding mode enables the
+`node` profile and MQTT, creates an empty local venue/admin, and associates the
+node with local Core. It does not import the Noor data described below. See
+[full local onboarding](../../../../Garsone-Nodes/README.md#full-local-installation-with-mqtt).
+
 The Pi is authoritative for Noor's database, staff login, menu, QR resolution,
 orders, WebSocket updates, images and Bluetooth printing. There is no required
 Render, Supabase, R2, Tailscale or MQTT connection at runtime. Customers must be
@@ -210,16 +217,36 @@ the units in `/etc/systemd/system`, and enable `garsone-noor.service`. Its
 dependencies bind both devices before bringing the application up, including
 after reboot. For one printer, remove the second unit dependency as well.
 
-The application stores pending tickets in `print-spool`, serializes writes
-per device, uses CP1253/ESC t 7 by default, and bounds each device write to
-20 seconds. Printer codepages/cut settings must be verified on paper.
-The kernel accepting bytes does not prove a physical receipt printed.
-Failed or interrupted writes remain `uncertain` and are **not** automatically
-retried; inspect the printer, then explicitly reprint from the order UI.
-Authenticated managers can inspect `GET /api/manager/local-printing`.
+The application saves print intents in Postgres, serializes writes per device,
+uses CP1253/ESC t 7 by default, and bounds each device write to 20 seconds.
+Existing `print-spool` files are imported once at startup with deterministic
+IDs; uncertain tickets remain uncertain. Keep the spool volume for upgrade recovery.
+Printer codepages/cut settings must be verified on paper. A successful device
+write means **sent**, not confirmed on paper. Failed or interrupted writes remain
+`uncertain` and are **not** automatically retried. Missing devices remain queued
+because no write has begun.
+
+Local managers and architects can open **Manager → Local operations** at
+`/manager/operations`. They can inspect the queue, send a labelled test ticket,
+confirm that an uncertain ticket printed, or explicitly request a labelled
+reprint after checking the paper. Actions are idempotent and record the staff
+member; a ticket being written cannot be reprinted through these controls.
+The API is `/api/manager/local-operations`; the older read-only
+`/api/manager/local-printing` endpoint remains available.
 Do not run the legacy MQTT printer profile on the same devices.
 
+New customer orders carry a saved submission ID. A lost response is recovered
+by a read-only lookup; an explicit retry resends the same saved payload and ID.
+It cannot create a second order. The cart stays on the phone until confirmation,
+and items added while waiting remain in the cart. This works over local HTTP;
+it does not depend on a service worker or internet access. Staff and customer
+screens reload authoritative data after reconnect, phone wake and focus.
+
 ## Local URLs and independence checks
+
+For customer visits, bill requests, split and partial payments, staff table
+transfers and reporting, see [Table visits and bills](BILLING.md). Deploy Core
+and Front together because customer requests now carry an active-visit capability.
 
 | Consumer | Destination |
 | --- | --- |
@@ -249,6 +276,15 @@ uses non-destructive Prisma `db push`; there is no complete baseline migration.
 There is no automatic standalone schema rollback. Restore backups into fresh
 volumes with the previous release after a failed incompatible schema change.
 Never use `docker compose down -v` against a venue installation.
+
+The local operations screen reports database reachability, application uptime,
+available upload storage, and the age of the last validated deployment backup.
+`update.py` writes only a timestamp/source to `runtime-status/backup.json` after
+the database dump and volume archives succeed. Compose mounts that directory
+read-only into Core; backups, environment files and the Docker socket are not
+exposed to the app. Older installations need the updated Compose mount when
+these files are next installed. Until metadata exists, backup age is **unknown**.
+This is deployment-backup monitoring, not a scheduled backup service.
 
 Do not start this stack alongside an existing `garsone-local` or
 Architect-managed Pi deployment. The start helper detects those containers

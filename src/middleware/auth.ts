@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { verifyToken, type JWTPayload } from '../lib/jwt.js';
 import { roleMatches, serializeRole } from '../lib/roles.js';
 import { db } from '../db/index.js';
+import { Prisma } from '@prisma/client';
 
 export async function currentSession(token: string): Promise<JWTPayload> {
   const payload = verifyToken(token);
@@ -34,7 +35,14 @@ export async function authMiddleware(request: FastifyRequest, reply: FastifyRepl
     const payload = await currentSession(token.trim());
     (request as any).user = payload;
     (request as any).storeSlug = payload.storeSlug;
-  } catch {
+  } catch (error) {
+    // A stopped database is not an expired login. Keep access closed while
+    // telling clients to retry their existing session once service recovers.
+    if (error instanceof Prisma.PrismaClientInitializationError ||
+        error instanceof Prisma.PrismaClientKnownRequestError ||
+        error instanceof Prisma.PrismaClientUnknownRequestError) {
+      return reply.header('Retry-After', '5').status(503).send({ error: 'SESSION_SERVICE_UNAVAILABLE' });
+    }
     return reply.status(401).send({ error: 'Invalid or expired token' });
   }
 }

@@ -60,6 +60,10 @@ case "${DB_BOOTSTRAP_MODE:-migrate}" in
     npx prisma migrate deploy
     ;;
   push)
+    # Existing orders need the additive nullable idempotency index installed
+    # before Prisma's generic unique-index warning. Empty DBs are a safe no-op.
+    node dist/db/ensureOrderReliabilitySchema.js
+    node dist/db/ensureDiningBillingSchema.js
     # Refuse destructive schema changes during unattended Pi rollouts.
     # A release that requires data loss must be handled as an explicit,
     # backed-up maintenance operation instead of silently modifying the DB.

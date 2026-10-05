@@ -68,6 +68,10 @@ def init(args):
         values.update({key: f"garsone/{name}:{values['RELEASE_TAG']}" for key, name in (
             ("CORE_IMAGE", "core"), ("FRONT_IMAGE", "front"), ("NODE_IMAGE", "node"))})
         values["CORE_BIND_ADDRESS"] = "127.0.0.1"
+    if args.with_node:
+        values.update(COMPOSE_PROFILES="node", MQTT_DISABLED="false")
+    if args.empty:
+        values.update(STORE_SLUG="local", LOCAL_BOOTSTRAP_EMPTY="true")
     if args.prebuilt:
         references = json.loads((HERE / "images.prebuilt.json").read_text(encoding="utf-8"))
         values.update({key: value["reference"] for key, value in references.items()})
@@ -247,6 +251,8 @@ def main():
     command.add_argument("--host", default="raspberrypi.local")
     command.add_argument("--source", action="store_true", help="Use separate local image tags for source builds")
     command.add_argument("--prebuilt", action="store_true", help="Use images.prebuilt.json from the tested image archive")
+    command.add_argument("--with-node", action="store_true", help="Enable the authenticated local MQTT broker and node agent")
+    command.add_argument("--empty", action="store_true", help="Bootstrap a blank local venue and administrator, without importing data")
     command.set_defaults(func=init)
     command = commands.add_parser("lock-images", help="Pin images already published by GitHub Actions")
     command.add_argument("--channel", choices=("stable", "stage"), default="stable")

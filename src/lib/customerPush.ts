@@ -17,13 +17,6 @@ const vapidPublicKey = (process.env.VAPID_PUBLIC_KEY || "").trim();
 const vapidPrivateKey = (process.env.VAPID_PRIVATE_KEY || "").trim();
 const vapidSubject =
   (process.env.VAPID_SUBJECT || "").trim() || "mailto:support@garsone.app";
-const tableFallbackSubscriptionTtlMs = Math.max(
-  15 * 60 * 1000,
-  Number.parseInt(
-    process.env.CUSTOMER_PUSH_TABLE_SUBSCRIPTION_TTL_MS || "",
-    10
-  ) || 30 * 60 * 1000
-);
 
 const pushEnabled = process.env.LOCAL_ONLY !== "true" && Boolean(vapidPublicKey && vapidPrivateKey);
 
@@ -83,20 +76,17 @@ export async function notifyCustomerOrderStatus(params: {
   }
 
   const { order, storeSlug } = params;
-  const tableFallbackSince = new Date(
-    Date.now() - tableFallbackSubscriptionTtlMs
-  );
+  // A table is reused by different customers. Only a specific order in a live
+  // visit may reach its subscribers; legacy table-wide endpoints receive none.
+  const current = await db.order.findFirst({
+    where: { id: order.id, storeId: order.storeId },
+    select: { diningVisit: { select: { status: true } } },
+  });
+  if (!current?.diningVisit || current.diningVisit.status === "CLOSED") return;
   const subscriptions = await db.customerPushSubscription.findMany({
     where: {
       storeId: order.storeId,
-      OR: [
-        { orderId: order.id },
-        {
-          tableId: order.tableId,
-          orderId: null,
-          updatedAt: { gte: tableFallbackSince },
-        },
-      ],
+      orderId: order.id,
     },
   });
 

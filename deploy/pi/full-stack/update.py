@@ -48,6 +48,18 @@ def replace_images(original, references):
     return '\n'.join(lines) + '\n'
 
 
+def record_backup_status(directory):
+    """Publish only a timestamp to the app, never backup paths, credentials or dump contents."""
+    status_directory = directory / 'runtime-status'
+    status_directory.mkdir(mode=0o755, exist_ok=True)
+    status = status_directory / 'backup.json'
+    atomic_write(status, json.dumps({
+        'source': 'deployment',
+        'lastSuccessfulAt': datetime.now(timezone.utc).isoformat(),
+    }) + '\n')
+    status.chmod(0o644)  # Read-only bind mount; the unprivileged Core user can read this metadata.
+
+
 @contextmanager
 def update_lock(directory):
     import fcntl
@@ -172,6 +184,7 @@ def apply(pi, releases):
             stopped = True
             pi.compose('stop', '--timeout', '30', 'front', 'core')
             pi.backup_data(backup, old_core)
+            record_backup_status(pi.directory)
         atomic_write(lock, replace_images(original, changed))
         pins_changed = True
         pi.compose('config', '--quiet')
