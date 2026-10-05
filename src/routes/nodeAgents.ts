@@ -1,3 +1,4 @@
+import { nodeQrSnapshot } from "../lib/nodeQrConfig.js";
 import { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
@@ -1064,6 +1065,12 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
       },
     });
     return reply.send(await buildAgentConfig(node, node.store));
+  });
+
+  fastify.get("/node-agent/qr-config", async (request, reply) => {
+    const node = await authenticateNode(request);
+    if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
+    return reply.send(await nodeQrSnapshot(node.store));
   });
 
   fastify.get("/node-agent/deployment-snapshot", async (request, reply) => {

@@ -24,6 +24,7 @@ x-core-env: &core-env
   SEED_RESET: "0"
   ENABLE_DEV_LOGIN: "0"
   LOCAL_ONLY: "true"
+  LOCAL_QR_SYNC_SECRET: ${LOCAL_QR_SYNC_SECRET:-}
   TRUST_PROXY_HOPS: "1"
   LOCAL_UPLOAD_DIR: /app/uploads
   LOCAL_BACKUP_STATUS_FILE: /app/runtime-status/backup.json
@@ -169,6 +170,8 @@ services:
       NODE_API_BASE: ${NODE_API_BASE:-https://order-flow-api-3uuy.onrender.com}
       NODE_COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-garsone-complete}
       NODE_LOCAL_ORIGIN: ${PUBLIC_ORIGIN}
+      NODE_LOCAL_QR_SYNC_URL: http://core:8787/internal/qr-config
+      LOCAL_QR_SYNC_SECRET: ${LOCAL_QR_SYNC_SECRET:-}
       NODE_LAN_IP: ${NODE_LAN_IP:-${PUBLIC_HOST}}
       NODE_TAILSCALE_IP: ${NODE_TAILSCALE_IP:-}
       NODE_KEY: ${NODE_KEY:-}

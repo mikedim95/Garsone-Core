@@ -30,7 +30,7 @@ jobs:
           npm ci
           npx prisma generate
           npm run build
-          node --test tests/direct-checkout.test.mjs tests/security-boundaries.test.mjs tests/http-security.test.mjs tests/qr-sync.test.mjs tests/qr-public.test.mjs tests/local-print-queue.test.mjs tests/auth-outage.test.mjs tests/customer-push-visit.test.mjs tests/local-architect.test.mjs
+          node --test tests/direct-checkout.test.mjs tests/security-boundaries.test.mjs tests/http-security.test.mjs tests/qr-sync.test.mjs tests/qr-public.test.mjs tests/local-print-queue.test.mjs tests/auth-outage.test.mjs tests/customer-push-visit.test.mjs tests/local-architect.test.mjs tests/node-qr-config.test.mjs
           node tests/run-order-reliability.mjs
           python3 deploy/pi/full-stack/tests/local-print-pty.py
           python3 -m unittest discover -s deploy/pi/full-stack/tests -p 'test_*.py'

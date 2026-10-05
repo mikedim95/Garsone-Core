@@ -61,6 +61,7 @@ def init(args):
         "NODE_KEY": secrets.token_hex(16),
         "NODE_PAIRING_SECRET": secrets.token_hex(32),
         "LOCAL_ADMIN_PASSWORD": secrets.token_urlsafe(24),
+        "LOCAL_QR_SYNC_SECRET": secrets.token_hex(32),
         "LOCAL_WAITER_PASSWORD": secrets.token_urlsafe(24),
         "LOCAL_COOK_PASSWORD": secrets.token_urlsafe(24),
         "LOCAL_HYBRID_PASSWORD": secrets.token_urlsafe(24),

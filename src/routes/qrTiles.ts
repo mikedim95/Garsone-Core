@@ -7,6 +7,7 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 import { serializeRole } from "../lib/roles.js";
 import { resolveQrEvent } from "../lib/qrEvents.js";
+import { localQrPublicUrl } from "../lib/nodeQrConfig.js";
 import { randomInt } from "node:crypto";
 
 async function requireAdminStore(request: any, reply: any) {
@@ -189,6 +190,7 @@ function serializeTile(tile: any) {
     storeSlug: tile.store?.slug ?? null,
     storeName: tile.store?.name ?? null,
     publicCode: tile.publicCode,
+    publicUrl: localQrPublicUrl(tile.store, tile.publicCode),
     label: tile.label ?? null,
     isActive: tile.isActive,
     tableId: tile.tableId ?? null,
@@ -242,7 +244,7 @@ async function createTiles(
   return db.qRTile.findMany({
     where: { id: { in: created.map((tile) => tile.id) } },
     include: {
-      store: { select: { slug: true, name: true } },
+      store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
       table: { select: { id: true, label: true } },
     },
     orderBy: { createdAt: "desc" },
@@ -557,7 +559,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       select: {
         id: true,
         label: true,
-        store: { select: { slug: true, name: true } },
+        store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
       },
     });
     if (!table || !table.store?.slug) {
@@ -876,7 +878,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const tiles = await db.qRTile.findMany({
         include: {
-          store: { select: { slug: true, name: true } },
+          store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -1069,7 +1071,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       const tiles = await db.qRTile.findMany({
         where: { storeId },
         include: {
-          store: { select: { slug: true, name: true } },
+          store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -1208,7 +1210,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           where: { id },
           data: updateData,
           include: {
-            store: { select: { slug: true, name: true } },
+            store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
             table: { select: { id: true, label: true } },
           },
         });
