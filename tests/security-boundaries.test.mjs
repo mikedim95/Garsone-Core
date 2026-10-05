@@ -192,6 +192,11 @@ test('uploads reject active content disguised as images and media responses sand
     assert.equal(image.mimeType, 'image/png');
     assert.equal(image.extension, 'png');
     assert.equal(isPublicImageUrl('/uploads/noor/menu/photo.png'), true);
+    assert.equal(isPublicImageUrl('/offline-assets/ca2ded9d3f90b635.jpg'), true);
+    assert.equal(isPublicImageUrl('/placeholder.svg'), true);
+    for (const path of ['/offline-assets/../private', '/offline-assets/%2e%2e/private', '//foreign.test/image.jpg', '/private', '/offline-assets/\\private']) {
+      assert.equal(isPublicImageUrl(path), false, path);
+    }
     assert.equal(isPublicImageUrl('/uploads/../../secrets'), false);
     assert.equal(isPublicImageUrl('javascript:alert(1)'), false);
   } finally {

@@ -22,10 +22,13 @@ export function decodeRasterImage(input: string) {
 
 export function isPublicImageUrl(value: string): boolean {
   try {
-    if (value.startsWith("/uploads/") && !value.includes("\\")) {
+    // Pi menu snapshots use bundled images; editing a price must preserve them.
+    const localPrefix = ["/uploads/", "/offline-assets/"].find(prefix => value.startsWith(prefix));
+    if (localPrefix && !value.includes("\\")) {
       const url = new URL(value, "https://local.invalid");
-      return url.origin === "https://local.invalid" && url.pathname.startsWith("/uploads/");
+      return url.origin === "https://local.invalid" && url.pathname.startsWith(localPrefix);
     }
+    if (value === "/placeholder.svg") return true;
     const url = new URL(value);
     return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
   } catch { return false; }

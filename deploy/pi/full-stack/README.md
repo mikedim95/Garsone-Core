@@ -11,6 +11,14 @@ Compose services. Orders use the local broker. Add `--store-slug habibi
 local database. It does not import the Noor data described below. See
 [full local onboarding](../../../../Garsone-Nodes/README.md#full-local-installation-with-mqtt).
 
+To edit the local menu, open `http://<pi-LAN-IP>:8080/manager` and sign in with
+the local Manager account. In **Menu**, use **Edit** to change an item's name,
+description, price, image or availability. **Disable** hides it from the customer
+menu; enable **Show disabled items** to find and re-enable it. Saves go to the
+Pi's PostgreSQL database and work without internet. Existing items can be edited
+before printers are configured. Architect QR assignment sync preserves these
+local menu changes. Browser demo mode is disabled in local installation builds.
+
 The Pi is authoritative for Noor's database, staff login, menu, QR resolution,
 orders, WebSocket updates, images and Bluetooth printing. There is no required
 Render, Supabase, R2, Tailscale or MQTT connection at runtime. Customers must be
