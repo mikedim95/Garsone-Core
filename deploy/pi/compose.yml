@@ -54,11 +54,6 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:support@garsone.app}
-      VIVA_API_KEY: ${VIVA_API_KEY:-}
-      VIVA_SOURCE_CODE: ${VIVA_SOURCE_CODE:-Default}
-      VIVA_CLIENT_ID: ${VIVA_CLIENT_ID:-}
-      VIVA_CLIENT_SECRET: ${VIVA_CLIENT_SECRET:-}
-      VIVA_MERCHANT_ID: ${VIVA_MERCHANT_ID:-}
     volumes:
       - core-uploads:/app/uploads
     ports:

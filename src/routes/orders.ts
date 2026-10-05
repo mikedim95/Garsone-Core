@@ -15,7 +15,6 @@ import {
   validateTableVisitToken,
   REQUIRE_TABLE_VISIT,
 } from "../lib/tableVisits.js";
-import { createVivaPaymentOrder } from "../lib/viva.js";
 import { notifyCustomerOrderStatus } from "../lib/customerPush.js";
 import { notifyStaffPush } from "../lib/staffPush.js";
 
@@ -24,9 +23,6 @@ const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string()
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
   visit: z.string().trim().min(8).max(128).optional(),
-  localityApprovalToken: z.string().trim().min(8).max(128).optional(),
-  localitySessionId: z.string().trim().min(8).max(128).optional(),
-  paymentSessionId: z.string().trim().min(8).max(128).optional(),
   items: z
     .array(
       z.object({
@@ -56,8 +52,6 @@ const updateItemStatusSchema = z.object({
 const updateOrderItemSchema = z.object({
   quantity: z.number().int().min(0).max(999),
   modifiers: z.union([z.string(), modifierSelectionSchema]).optional(),
-  localityApprovalToken: z.string().trim().min(8).max(128).optional(),
-  localitySessionId: z.string().trim().min(8).max(128).optional(),
 });
 
 const callWaiterSchema = z.object({
@@ -140,7 +134,6 @@ const ORDERS_MAX_TAKE = Math.max(
   parsePositiveInt(process.env.ORDERS_MAX_TAKE, 10000)
 );
 const REQUIRE_VISIT_TOKEN = REQUIRE_TABLE_VISIT;
-const LOCALITY_PURPOSE = "ORDER_SUBMIT";
 
 const ORDER_ITEM_INCLUDE = {
   include: {
@@ -505,11 +498,9 @@ const resolveStoreSlug = (request: any) =>
   (request as any)?.user?.storeSlug ||
   STORE_SLUG;
 
-const bypassGuestCheckoutChecks = (storeSlug?: string | null) =>
-  process.env.LOCAL_ONLY === "true" && storeSlug === STORE_SLUG;
-
 export async function orderRoutes(fastify: FastifyInstance) {
-  // Create order (IP whitelisted)
+  // Guests submit the cart directly. Store, table, item and modifier checks
+  // still apply; checkout no longer requires a payment session or tag approval.
   fastify.post(
     "/orders",
     {
@@ -525,26 +516,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
         logStep("store");
-        const actor = (request as any).user;
-        const isStaff = Boolean(actor?.role);
-        const requiresLocality =
-          !isStaff &&
-          !bypassGuestCheckoutChecks(store.slug);
-        const localityApprovalToken =
-          typeof body.localityApprovalToken === "string"
-            ? body.localityApprovalToken.trim()
-            : "";
-        const localitySessionId =
-          typeof body.localitySessionId === "string"
-            ? body.localitySessionId.trim()
-            : "";
-
-        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
-        }
-
         const table = await db.table.findFirst({
           where: { id: body.tableId, storeId: store.id },
         });
@@ -704,29 +675,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          if (requiresLocality) {
-            const consumedAt = new Date();
-            const consumed = await tx.localityApproval.updateMany({
-              where: {
-                approvalToken: localityApprovalToken,
-                storeId: store.id,
-                tableId: table.id,
-                purpose: LOCALITY_PURPOSE,
-                sessionId: localitySessionId,
-                consumedAt: null,
-                expiresAt: { gt: consumedAt },
-              },
-              data: {
-                consumedAt,
-                consumedOrderId: created.id,
-              },
-            });
-
-            if (consumed.count !== 1) {
-              throw new Error("LOCALITY_APPROVAL_INVALID");
-            }
-          }
-
           return created;
         });
         logStep("dbCreate");
@@ -785,11 +733,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
-        }
-        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
         console.error("Create order error:", {
           error,
@@ -1459,16 +1402,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
           .parse(request.params ?? {});
         const body = updateOrderItemSchema.parse(request.body ?? {});
         const store = await ensureStore(resolveStoreSlug(request));
-        const actor = (request as any).user;
-        const requiresLocality =
-          !actor?.role && !bypassGuestCheckoutChecks(store.slug);
-        const localityApprovalToken = body.localityApprovalToken?.trim() ?? "";
-        const localitySessionId = body.localitySessionId?.trim() ?? "";
-
-        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
-          return reply.status(403).send({ error: "LOCALITY_APPROVAL_REQUIRED" });
-        }
-
         const existing = await db.order.findFirst({
           where: { id: params.id, storeId: store.id },
           include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
@@ -1612,22 +1545,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          if (requiresLocality) {
-            const consumed = await tx.localityApproval.updateMany({
-              where: {
-                approvalToken: localityApprovalToken,
-                storeId: store.id,
-                tableId: existing.tableId,
-                purpose: LOCALITY_PURPOSE,
-                sessionId: localitySessionId,
-                consumedAt: null,
-                expiresAt: { gt: now },
-              },
-              data: { consumedAt: now, consumedOrderId: existing.id },
-            });
-            if (consumed.count !== 1) throw new Error("LOCALITY_APPROVAL_INVALID");
-          }
-
           return tx.order.findUniqueOrThrow({
             where: { id: existing.id },
             include: { table: true, orderItems: ORDER_ITEM_INCLUDE },
@@ -1696,9 +1613,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply.status(400).send({ error: "Invalid request", details: error.errors });
-        }
-        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
-          return reply.status(403).send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
         console.error("Update order item error:", error);
         return reply.status(500).send({ error: "Failed to update order item" });
@@ -2036,25 +1950,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const body = updatePendingTableOrdersSchema.parse(request.body);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
-        const actor = (request as any).user;
-        const isStaff = Boolean(actor?.role);
-        const requiresLocality =
-          !isStaff && !bypassGuestCheckoutChecks(store.slug);
-        const localityApprovalToken =
-          typeof body.localityApprovalToken === "string"
-            ? body.localityApprovalToken.trim()
-            : "";
-        const localitySessionId =
-          typeof body.localitySessionId === "string"
-            ? body.localitySessionId.trim()
-            : "";
-
-        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
-        }
-
         const table = await db.table.findFirst({
           where: { id: params.id, storeId: store.id },
         });
@@ -2236,28 +2131,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          if (requiresLocality) {
-            const consumed = await tx.localityApproval.updateMany({
-              where: {
-                approvalToken: localityApprovalToken,
-                storeId: store.id,
-                tableId: updatedOrder.tableId,
-                purpose: LOCALITY_PURPOSE,
-                sessionId: localitySessionId,
-                consumedAt: null,
-                expiresAt: { gt: now },
-              },
-              data: {
-                consumedAt: now,
-                consumedOrderId: updatedOrder.id,
-              },
-            });
-
-            if (consumed.count !== 1) {
-              throw new Error("LOCALITY_APPROVAL_INVALID");
-            }
-          }
-
           return updatedOrder;
         });
 
@@ -2355,11 +2228,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
         }
-        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_INVALID" });
-        }
         console.error("Edit pending table orders error:", {
           error,
           storeSlug: resolveStoreSlug(request),
@@ -2387,25 +2255,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
         const body = createOrderSchema.partial().parse(request.body);
         const storeSlug = resolveStoreSlug(request);
         const store = await ensureStore(storeSlug);
-        const actor = (request as any).user;
-        const isStaff = Boolean(actor?.role);
-        const requiresLocality =
-          !isStaff && !bypassGuestCheckoutChecks(store.slug);
-        const localityApprovalToken =
-          typeof body.localityApprovalToken === "string"
-            ? body.localityApprovalToken.trim()
-            : "";
-        const localitySessionId =
-          typeof body.localitySessionId === "string"
-            ? body.localitySessionId.trim()
-            : "";
-
-        if (requiresLocality && (!localityApprovalToken || !localitySessionId)) {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_REQUIRED" });
-        }
-
         const existing = await db.order.findFirst({
           where: { id, storeId: store.id },
           include: {
@@ -2508,29 +2357,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
             },
           });
 
-          if (requiresLocality) {
-            const consumedAt = new Date();
-            const consumed = await tx.localityApproval.updateMany({
-              where: {
-                approvalToken: localityApprovalToken,
-                storeId: store.id,
-                tableId: updatedOrder.tableId,
-                purpose: LOCALITY_PURPOSE,
-                sessionId: localitySessionId,
-                consumedAt: null,
-                expiresAt: { gt: consumedAt },
-              },
-              data: {
-                consumedAt,
-                consumedOrderId: updatedOrder.id,
-              },
-            });
-
-            if (consumed.count !== 1) {
-              throw new Error("LOCALITY_APPROVAL_INVALID");
-            }
-          }
-
           return updatedOrder;
         });
 
@@ -2586,11 +2412,6 @@ export async function orderRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: error.errors });
-        }
-        if ((error as Error)?.message === "LOCALITY_APPROVAL_INVALID") {
-          return reply
-            .status(403)
-            .send({ error: "LOCALITY_APPROVAL_INVALID" });
         }
         console.error("Edit order error:", {
           error,
@@ -2815,110 +2636,4 @@ export async function orderRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // Generate demo Viva payment URL before placing order
-  fastify.post(
-    "/payment/viva/checkout-url",
-    {
-      preHandler: [ipWhitelistMiddleware],
-    },
-    async (request, reply) => {
-      try {
-        // Log the exact incoming payload for debugging Viva checkout URL failures
-        try {
-          console.log(
-            "[payment/checkout-url] incoming body:",
-            JSON.stringify(request.body)
-          );
-        } catch (e) {
-          console.log(
-            "[payment/checkout-url] incoming body (raw):",
-            request.body
-          );
-        }
-        const body = z
-          .object({
-            tableId: z.string().uuid(),
-            amount: z.number().positive(),
-            amountCents: z.number().int().positive().optional(),
-            description: z.string().optional(),
-          })
-          .parse(request.body);
-
-        const normalizedAmountCents =
-          typeof body.amountCents === "number"
-            ? body.amountCents
-            : Math.round(body.amount * 100);
-        const normalizedAmount = normalizedAmountCents / 100;
-
-        const storeSlug = resolveStoreSlug(request);
-        const store = await ensureStore(storeSlug);
-
-        const table = await db.table.findFirst({
-          where: { id: body.tableId, storeId: store.id },
-        });
-
-        if (!table) {
-          return reply.status(404).send({ error: "Table not found" });
-        }
-
-        // Generate unique session ID for this payment attempt
-        const sessionId = `${store.id}_${body.tableId}_${Date.now()}`;
-
-        // Create payment order via Viva Smart Checkout API
-        console.log("[payment/checkout-url] creating Viva payment order", {
-          amount: normalizedAmount,
-          amountCents: normalizedAmountCents,
-          orderId: sessionId,
-          tableId: body.tableId,
-          description: body.description || "Restaurant Order",
-        });
-
-        // Build return URL for after payment completion
-        // Prefer explicit FRONTEND_BASE_URL env var. Otherwise derive from headers/hostname
-        const frontendBase =
-          process.env.FRONTEND_BASE_URL ||
-          (() => {
-            const h = ((request.headers as any)["x-forwarded-host"] ||
-              (request.headers as any)["host"] ||
-              request.hostname) as string;
-            const hostOnly = String(h).split(":")[0];
-            const port = process.env.FRONTEND_PORT || "8080";
-            return `${request.protocol}://${hostOnly}${port ? `:${port}` : ""}`;
-          })();
-
-        const returnUrl = `${frontendBase}/payment-complete?sessionId=${sessionId}&tableId=${body.tableId}`;
-        console.log("[payment/checkout-url] return URL for Viva:", returnUrl);
-
-        const paymentSession = await createVivaPaymentOrder({
-          amount: normalizedAmount,
-          orderId: sessionId,
-          tableId: body.tableId,
-          description: body.description || "Restaurant Order",
-          returnUrl: returnUrl,
-        });
-
-        console.log(
-          "[payment/checkout-url] Viva returned session:",
-          paymentSession
-        );
-
-        return reply.send({
-          checkoutUrl: paymentSession.checkoutUrl,
-          sessionId: sessionId,
-          amount: paymentSession.amount,
-          tableId: body.tableId,
-        });
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          return reply
-            .status(400)
-            .send({ error: "Invalid request", details: error.errors });
-        }
-        console.error("Payment URL generation error:", error);
-        return reply
-          .status(500)
-          .send({ error: "Failed to generate payment URL" });
-      }
-    }
-  );
 }

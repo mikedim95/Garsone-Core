@@ -9,11 +9,9 @@ import { orderRoutes } from "./routes/orders.js";
 import { storeRoutes } from "./routes/store.js";
 import { waiterTableRoutes } from "./routes/waiterTables.js";
 import { managerRoutes } from "./routes/manager.js";
-import { webhookRoutes } from "./routes/webhooks.js";
 import { eventsRoutes } from "./routes/events.js";
 import { qrTileRoutes } from "./routes/qrTiles.js";
 import { qrEventRoutes } from "./routes/qrEvents.js";
-import { localityRoutes } from "./routes/locality.js";
 import { publicMenuBootstrapRoutes } from "./routes/publicMenuBootstrap.js";
 import { nodeAgentRoutes } from "./routes/nodeAgents.js";
 import { customerPushRoutes } from "./routes/customerPush.js";
@@ -50,14 +48,6 @@ const fastify = Fastify({
 });
 jwtSecret();
 
-if (process.env.LOCAL_ONLY === "true") {
-  fastify.addHook("onRequest", async (request, reply) => {
-    if (request.url.split("?")[0] === "/payment/viva/checkout-url") {
-      return reply.code(503).send({ error: "Online payment is disabled on this local installation. Pay at the venue." });
-    }
-  });
-}
-
 await registerHttpSecurity(fastify);
 // Health check
 fastify.get("/health", async (request, reply) => {
@@ -82,11 +72,9 @@ await fastify.register(menuRoutes);
 await fastify.register(orderRoutes);
 await fastify.register(waiterTableRoutes);
 await fastify.register(managerRoutes);
-await fastify.register(webhookRoutes);
 await fastify.register(eventsRoutes);
 await fastify.register(qrTileRoutes);
 await fastify.register(qrEventRoutes);
-await fastify.register(localityRoutes);
 await fastify.register(publicMenuBootstrapRoutes);
 await fastify.register(nodeAgentRoutes);
 await fastify.register(customerPushRoutes);

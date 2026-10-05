@@ -33,7 +33,7 @@ try {
   assert.equal(menu.items.length, 54);
   const image = snapshot.rows.item.find(item => item.imageUrl?.startsWith('/uploads/')).imageUrl;
   assert.equal((await context.request.get(base + image)).status(), 200);
-  assert.equal((await context.request.post(base + '/api/payment/viva/checkout-url', { data: {} })).status(), 503);
+  assert.equal((await context.request.post(base + '/api/payment/viva/checkout-url', { data: {} })).status(), 404);
   const tile = snapshot.rows.qRTile.find(tile => tile.tableId && tile.isActive);
   const qr = await context.request.get(base + '/api/q/' + tile.publicCode, { headers: { Accept: 'application/json' } });
   assert.equal((await qr.json()).storeSlug, 'noor');

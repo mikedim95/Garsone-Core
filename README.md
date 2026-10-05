@@ -2,7 +2,7 @@
 
 Backend API and realtime services for the OrderFlow restaurant ordering system.
 Provides authentication, menu and order APIs, realtime events over MQTT and
-WebSocket, payments via Viva Smart Checkout, and admin tooling for tables,
+WebSocket, direct cart submission, and admin tooling for tables,
 staff, menus, QR tiles, and assets.
 
 ## Features
@@ -13,7 +13,7 @@ staff, menus, QR tiles, and assets.
 - Waiter table assignments and call-waiter alerts
 - Admin/manager APIs for tables, staff roles, menu catalog, modifiers, QR tiles
 - Asset uploads via R2 or Supabase (optional)
-- Viva Smart Checkout payments + webhook listener
+- Direct guest checkout without a payment session or NFC approval
 
 ## Tech Stack
 
@@ -27,7 +27,7 @@ staff, menus, QR tiles, and assets.
 
 - `src/server.ts` - Fastify bootstrap and route registration
 - `src/routes/` - HTTP endpoints
-- `src/lib/` - MQTT, realtime, Viva, caching helpers
+- `src/lib/` - MQTT, realtime, caching helpers
 - `prisma/` - schema and seeds
 
 ## Getting Started
@@ -112,15 +112,6 @@ environment variables via the host platform.
 - Supabase: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or
   `SUPABASE_SERVICE_KEY`, `SUPABASE_BUCKET`
 
-### Payments (Viva)
-
-- `VIVA_API_KEY`, `VIVA_SOURCE_CODE`
-- `VIVA_CLIENT_ID`, `VIVA_CLIENT_SECRET`, `VIVA_MERCHANT_ID`
-- `VIVA_TOKEN_URL`
-- `VIVA_CURRENCY_CODE` (default `978` for EUR)
-- `VIVA_CUSTOMER_COUNTRY_CODE` (default `GR`)
-- `VIVA_REQUEST_LANG` (default `el-GR`)
-
 ## API Overview
 
 This is not exhaustive; see `src/routes/` for details.
@@ -132,16 +123,9 @@ This is not exhaustive; see `src/routes/` for details.
 - Orders: `POST /orders`, `GET /orders`, `PATCH /orders/:id`,
   `POST /orders/:id/print`, `GET /orders/queue`,
   `GET /public/table/:id/orders`, `POST /call-waiter`
-- Payments: `POST /payment/viva/checkout-url`,
-  `POST /payments/viva/webhook`
 - Realtime: `GET /events/ws?token=...` (WebSocket), `POST /events/publish`
 - QR tiles: `GET /q/:publicCode`, `GET /public/table/:tableId`,
   admin routes under `/admin/.../qr-tiles`
-
-## Viva Docs
-
-- `VIVA_SETUP.md`
-- `VIVA_COMPLIANCE_CHECKLIST.md`
 
 ## Notes
 

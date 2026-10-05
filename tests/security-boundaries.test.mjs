@@ -76,22 +76,23 @@ test('manager store and QR routes enforce tenant ownership before mutations', as
   } finally { await app.close(); }
 });
 
-test('public order creation cannot bypass approval with paymentSessionId or Noor name', async () => {
+test('direct guest checkout still validates the table within its store', async () => {
   const app = Fastify();
   await app.register(orderRoutes);
-  const payload = { tableId: tableA, items: [{ itemId: tileId, quantity: 1 }], paymentSessionId: 'forged-payment-session' };
+  const payload = { tableId: tableA, items: [{ itemId: tileId, quantity: 1 }] };
   try {
     const benchmark = await app.inject({ url: '/orders-benchmark', headers: { 'x-store-slug': 'noor' } });
     assert.equal(benchmark.statusCode, 401);
     const cloud = await app.inject({ method: 'POST', url: '/orders', headers: { 'x-store-slug': 'noor' }, payload });
-    assert.equal(cloud.statusCode, 403);
-    assert.equal(cloud.json().error, 'LOCALITY_APPROVAL_REQUIRED');
+    assert.equal(cloud.statusCode, 404);
+    assert.equal(cloud.json().error, 'Table not found');
     process.env.LOCAL_ONLY = 'true';
     const local = await app.inject({ method: 'POST', url: '/orders', headers: { 'x-store-slug': 'noor' }, payload });
-    assert.equal(local.statusCode, 404); // Reaches table lookup: explicit local-mode policy.
+    assert.equal(local.statusCode, 404); // Local and cloud checkout use the same validation.
     assert.equal(local.json().error, 'Table not found');
     const other = await app.inject({ method: 'POST', url: '/orders', headers: { 'x-store-slug': 'other' }, payload });
-    assert.equal(other.statusCode, 403); // Local exception is only this Pi's venue.
+    assert.equal(other.statusCode, 404);
+    assert.equal(other.json().error, 'Table not found');
   } finally { process.env.LOCAL_ONLY = 'false'; await app.close(); }
 });
 

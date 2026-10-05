@@ -230,10 +230,9 @@ Do not run the legacy MQTT printer profile on the same devices.
 | Receipt output | Core -> local `/dev/rfcomm0` or `/dev/rfcomm1` |
 | Images | same origin `/uploads/...` or bundled frontend assets |
 
-Viva online payment is hidden in the local container build. Card-processing
-providers and browser web-push services inherently need internet; the local
-workflow uses pay-at-venue and live WebSocket updates. No VAPID, R2, Supabase,
-Viva or hosted database credentials are passed to the local containers.
+Checkout sends the cart directly without online payment or NFC scanning.
+Payment is handled at the venue, and live updates use WebSockets. No VAPID,
+R2, Supabase or hosted database credentials are passed to the local containers.
 
 After import, disconnect the router's WAN (keep LAN/Wi-Fi running), log in
 with a Noor staff account, scan a newly printed local QR, place an order,
