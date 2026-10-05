@@ -164,8 +164,13 @@ services:
       - /run/dbus:/run/dbus
       - /var/lib/bluetooth:/var/lib/bluetooth
       - node-state:/var/lib/garsone-node
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      NODE_API_BASE: http://core:8787
+      NODE_API_BASE: ${NODE_API_BASE:-https://order-flow-api-3uuy.onrender.com}
+      NODE_COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-garsone-complete}
+      NODE_LOCAL_ORIGIN: ${PUBLIC_ORIGIN}
+      NODE_LAN_IP: ${NODE_LAN_IP:-${PUBLIC_HOST}}
+      NODE_TAILSCALE_IP: ${NODE_TAILSCALE_IP:-}
       NODE_KEY: ${NODE_KEY:-}
       NODE_PAIRING_SECRET: ${NODE_PAIRING_SECRET:-}
       NODE_DISPLAY_NAME: ${NODE_HOSTNAME:-garsone-pi}
@@ -173,11 +178,11 @@ services:
       NODE_TAILSCALE_HOSTNAME: ${NODE_TAILSCALE_HOSTNAME:-${NODE_HOSTNAME:-garsone-pi}}
       NODE_VENUE_DEPLOYMENTS_ENABLED: "false"
       NODE_MANAGE_HOST_NETWORK: "false"
-      BOOTSTRAP_MQTT_HOST: mqtt
-      BOOTSTRAP_MQTT_PORT: "1883"
-      BOOTSTRAP_MQTT_TLS: "false"
-      BOOTSTRAP_MQTT_USER: ${MQTT_USERNAME:-garsone}
-      BOOTSTRAP_MQTT_PASS: ${MQTT_PASSWORD:?Run prepare.py init}
+      BOOTSTRAP_MQTT_HOST: ${ARCHITECT_MQTT_HOST:-}
+      BOOTSTRAP_MQTT_PORT: ${ARCHITECT_MQTT_PORT:-8883}
+      BOOTSTRAP_MQTT_TLS: ${ARCHITECT_MQTT_TLS:-true}
+      BOOTSTRAP_MQTT_USER: ${ARCHITECT_MQTT_USER:-}
+      BOOTSTRAP_MQTT_PASS: ${ARCHITECT_MQTT_PASS:-}
       TZ: ${TZ:-Europe/Athens}
 
   seed:
@@ -217,6 +222,15 @@ services:
       LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-architect@garsone.local}
       LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-}
       LOCAL_BOOTSTRAP_EMPTY: ${LOCAL_BOOTSTRAP_EMPTY:-false}
+      LOCAL_WAITER_EMAIL: ${LOCAL_WAITER_EMAIL:-waiter@garsone.local}
+      LOCAL_WAITER_PASSWORD: ${LOCAL_WAITER_PASSWORD:-}
+      LOCAL_COOK_EMAIL: ${LOCAL_COOK_EMAIL:-cook@garsone.local}
+      LOCAL_COOK_PASSWORD: ${LOCAL_COOK_PASSWORD:-}
+      LOCAL_HYBRID_EMAIL: ${LOCAL_HYBRID_EMAIL:-hybrid@garsone.local}
+      LOCAL_HYBRID_PASSWORD: ${LOCAL_HYBRID_PASSWORD:-}
+      LOCAL_STORE_NAME: ${LOCAL_STORE_NAME:-Local venue}
+      LOCAL_SEED_OFFLINE_MENU: ${LOCAL_SEED_OFFLINE_MENU:-false}
+      LOCAL_MIGRATE_ARCHITECT: ${LOCAL_MIGRATE_ARCHITECT:-false}
     command: [node, tools/bootstrap-admin.mjs]
 
 volumes:

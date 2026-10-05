@@ -1,0 +1,149 @@
+{
+  "categories": [
+    {
+      "id": "offline-cat-coffee",
+      "title": "Coffee",
+      "titleEn": "Coffee",
+      "titleEl": "Καφές",
+      "imageUrl": "/offline-assets/b083151ff3398118.jpg",
+      "sortOrder": 1
+    },
+    {
+      "id": "offline-cat-brunch",
+      "title": "Brunch",
+      "titleEn": "Brunch",
+      "titleEl": "Brunch",
+      "imageUrl": "/offline-assets/f1129cab48fe4855.jpg",
+      "sortOrder": 2
+    },
+    {
+      "id": "offline-cat-mains",
+      "title": "Mains",
+      "titleEn": "Mains",
+      "titleEl": "Κυρίως",
+      "imageUrl": "/offline-assets/d58c76cb4c2b8194.jpg",
+      "sortOrder": 3
+    },
+    {
+      "id": "offline-cat-drinks",
+      "title": "Drinks",
+      "titleEn": "Drinks",
+      "titleEl": "Ποτά",
+      "imageUrl": "/offline-assets/e5a3125b7b25aa5a.jpg",
+      "sortOrder": 4
+    }
+  ],
+  "items": [
+    {
+      "id": "offline-item-espresso",
+      "title": "Espresso",
+      "titleEn": "Espresso",
+      "titleEl": "Espresso",
+      "descriptionEn": "Single shot with a rich crema.",
+      "descriptionEl": "Μονή δόση με πλούσια κρέμα.",
+      "priceCents": 220,
+      "categoryId": "offline-cat-coffee",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/ca2ded9d3f90b635.jpg"
+    },
+    {
+      "id": "offline-item-freddo-espresso",
+      "title": "Freddo Espresso",
+      "titleEn": "Freddo Espresso",
+      "titleEl": "Freddo Espresso",
+      "descriptionEn": "Greek iced espresso, shaken and bright.",
+      "descriptionEl": "Παγωμένος espresso, χτυπημένος και έντονος.",
+      "priceCents": 320,
+      "categoryId": "offline-cat-coffee",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/7cb1a50b7626c1c7.jpg"
+    },
+    {
+      "id": "offline-item-cappuccino",
+      "title": "Cappuccino",
+      "titleEn": "Cappuccino",
+      "titleEl": "Cappuccino",
+      "descriptionEn": "Espresso, steamed milk and soft foam.",
+      "descriptionEl": "Espresso, ζεστό γάλα και αφρόγαλα.",
+      "priceCents": 360,
+      "categoryId": "offline-cat-coffee",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/31ba2d177b3a584d.jpg"
+    },
+    {
+      "id": "offline-item-avocado-toast",
+      "title": "Avocado Toast",
+      "titleEn": "Avocado Toast",
+      "titleEl": "Toast με αβοκάντο",
+      "descriptionEn": "Sourdough, avocado, lime, chili flakes.",
+      "descriptionEl": "Προζυμένιο ψωμί, αβοκάντο, lime, chili.",
+      "priceCents": 780,
+      "categoryId": "offline-cat-brunch",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/f1129cab48fe4855.jpg"
+    },
+    {
+      "id": "offline-item-pancakes",
+      "title": "Pancakes",
+      "titleEn": "Pancakes",
+      "titleEl": "Pancakes",
+      "descriptionEn": "Stacked pancakes with berries and maple syrup.",
+      "descriptionEl": "Pancakes με berries και σιρόπι maple.",
+      "priceCents": 850,
+      "categoryId": "offline-cat-brunch",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/6c31bc5c6b6e5e4c.jpg"
+    },
+    {
+      "id": "offline-item-caesar",
+      "title": "Chicken Caesar",
+      "titleEn": "Chicken Caesar",
+      "titleEl": "Caesar κοτόπουλο",
+      "descriptionEn": "Grilled chicken, romaine, parmesan, croutons.",
+      "descriptionEl": "Κοτόπουλο σχάρας, romaine, παρμεζάνα, κρουτόν.",
+      "priceCents": 980,
+      "categoryId": "offline-cat-mains",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/f35489685db02942.jpg"
+    },
+    {
+      "id": "offline-item-smash-burger",
+      "title": "Smash Burger",
+      "titleEn": "Smash Burger",
+      "titleEl": "Smash Burger",
+      "descriptionEn": "Double beef patty, cheddar, pickles, house sauce.",
+      "descriptionEl": "Διπλό μοσχαρίσιο patty, cheddar, πίκλες, sauce.",
+      "priceCents": 1150,
+      "categoryId": "offline-cat-mains",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/fba4c8b903f3c586.jpg"
+    },
+    {
+      "id": "offline-item-lemonade",
+      "title": "Fresh Lemonade",
+      "titleEn": "Fresh Lemonade",
+      "titleEl": "Σπιτική λεμονάδα",
+      "descriptionEn": "Lemon, mint and sparkling water.",
+      "descriptionEl": "Λεμόνι, μέντα και ανθρακούχο νερό.",
+      "priceCents": 420,
+      "categoryId": "offline-cat-drinks",
+      "isAvailable": true,
+      "imageUrl": "/placeholder.svg"
+    },
+    {
+      "id": "offline-item-spritz",
+      "title": "Aperol Spritz",
+      "titleEn": "Aperol Spritz",
+      "titleEl": "Aperol Spritz",
+      "descriptionEn": "Aperol, prosecco and soda over ice.",
+      "descriptionEl": "Aperol, prosecco και soda με πάγο.",
+      "priceCents": 850,
+      "categoryId": "offline-cat-drinks",
+      "isAvailable": true,
+      "imageUrl": "/offline-assets/bbed5c13e3ce4b50.jpg"
+    }
+  ],
+  "modifiers": [],
+  "itemModifiers": [],
+  "updatedAt": "2026-06-27T00:00:00.000Z"
+}

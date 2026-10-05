@@ -557,9 +557,11 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           "bootstrapJson" = EXCLUDED."bootstrapJson",
           "lastSeenAt" = CURRENT_TIMESTAMP,
           "updatedAt" = CURRENT_TIMESTAMP
+        WHERE "pending_node_agents"."pairingHash" = EXCLUDED."pairingHash"
         RETURNING *
       `;
       const row = rows[0];
+      if (!row) return reply.status(409).send({ error: "NODE_PAIRING_SECRET_MISMATCH" });
       return reply.send({
         pendingNode: serializePendingNode(row),
         claimTopic: bootstrapTopic(body.nodeKey, "claim"),

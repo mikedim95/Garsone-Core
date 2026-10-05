@@ -45,7 +45,7 @@ COPY prisma ./prisma
 COPY qr_codes.txt ./qr_codes.txt
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY deploy/pi/full-stack/venue-data.mjs deploy/pi/full-stack/bootstrap-admin.mjs ./tools/
+COPY deploy/pi/full-stack/venue-data.mjs deploy/pi/full-stack/bootstrap-admin.mjs deploy/pi/full-stack/offline-menu.json ./tools/
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
   && mkdir -p /app/uploads /app/print-spool \

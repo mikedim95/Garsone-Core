@@ -72,6 +72,9 @@ export async function authRoutes(fastify: FastifyInstance) {
       }
 
       const role = serializeRole(user.role);
+      if (process.env.LOCAL_ONLY === "true" && role === "architect") {
+        return reply.status(403).send({ error: "ARCHITECT_ONLINE_ONLY" });
+      }
 
       const token = signToken({
         userId: user.id,

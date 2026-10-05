@@ -6,6 +6,9 @@ import { Prisma } from '@prisma/client';
 
 export async function currentSession(token: string): Promise<JWTPayload> {
   const payload = verifyToken(token);
+  if (process.env.LOCAL_ONLY === 'true' && payload.role === 'architect') {
+    throw new Error('Architect access is available only online');
+  }
   const profile = await db.profile.findUnique({
     where: { id: payload.userId }, include: { store: true, cookType: true, waiterType: true },
   });

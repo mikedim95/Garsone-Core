@@ -58,7 +58,8 @@ export async function venueDeploymentRoutes(fastify: FastifyInstance) {
       await upsertRows(tx, "item", snapshot.items);
       await upsertRows(tx, "itemModifier", snapshot.itemModifiers);
       await upsertRows(tx, "table", snapshot.tables);
-      await upsertRows(tx, "profile", snapshot.profiles);
+      // Architect credentials belong only to the online control plane.
+      await upsertRows(tx, "profile", (snapshot.profiles || []).filter((profile: any) => profile.role !== "ARCHITECT"));
       await upsertRows(tx, "waiterTable", snapshot.waiterTables);
       await upsertRows(tx, "qRTile", snapshot.qrTiles);
     }, { timeout: 120_000 });

@@ -3,8 +3,12 @@
 For a **new empty full installation with local MQTT**, run
 `python deploy_onboard.py --full-stack --host <pi-LAN-IP> --user piadmin`
 from the sibling `Garsone-Nodes` directory. That onboarding mode enables the
-`node` profile and MQTT, creates an empty local venue/admin, and associates the
-node with local Core. It does not import the Noor data described below. See
+`node` profile and local MQTT, and creates one Manager, Waiter, Cook and Hybrid.
+Architect runs only online on Render. The node uses the existing online MQTT
+broker for Architect claims and configuration, and reports the existing local
+Compose services. Orders use the local broker. Add `--store-slug habibi
+--store-name Habibi --seed-offline-menu` to seed the offline demo menu into the
+local database. It does not import the Noor data described below. See
 [full local onboarding](../../../../Garsone-Nodes/README.md#full-local-installation-with-mqtt).
 
 The Pi is authoritative for Noor's database, staff login, menu, QR resolution,
@@ -166,7 +170,7 @@ Then, before letting users open the app:
 
 ```bash
 bash pi.sh import-noor   # Refuses any DB already containing stores/profiles
-bash pi.sh admin         # Adds a local architect without changing staff passwords
+bash pi.sh admin         # Bootstraps four local staff roles; refuses account conflicts
 bash pi.sh start
 ```
 
@@ -226,7 +230,7 @@ write means **sent**, not confirmed on paper. Failed or interrupted writes remai
 `uncertain` and are **not** automatically retried. Missing devices remain queued
 because no write has begun.
 
-Local managers and architects can open **Manager → Local operations** at
+Local managers can open **Manager → Local operations** at
 `/manager/operations`. They can inspect the queue, send a labelled test ticket,
 confirm that an uncertain ticket printed, or explicitly request a labelled
 reprint after checking the paper. Actions are idempotent and record the staff
