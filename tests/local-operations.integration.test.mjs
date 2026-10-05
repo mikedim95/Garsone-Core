@@ -29,7 +29,7 @@ test('local operations uses durable, tenant-scoped, idempotent staff actions', a
   const foreign = await db.store.create({ data: { name: 'Other operations test', slug: 'ops-other-test' } });
   const topic = 'ops-test/orders/placed/printer_1';
   const profiles = await Promise.all([
-    ['MANAGER', store], ['WAITER', store], ['ARCHITECT', store], ['MANAGER', foreign],
+    ['MANAGER', store], ['WAITER', store], ['ARCHITECT', store], ['MANAGER', foreign], ['MANAGER', store],
   ].map(([role, venue], i) => db.profile.create({ data: { storeId: venue.id, role, email: `test-${i}@ops.test`, displayName: role, passwordHash: 'unused-test-only' } })));
   const headers = index => ({ authorization: `Bearer ${signToken({ userId: profiles[index].id, email: profiles[index].email,
     role: profiles[index].role.toLowerCase(), storeId: profiles[index].storeId, storeSlug: index === 3 ? foreign.slug : store.slug })}` });
@@ -62,10 +62,11 @@ test('local operations uses durable, tenant-scoped, idempotent staff actions', a
       assert.equal(await db.localPrintIntent.count({ where: { storeId: store.id } }), 2);
       assert.equal((await db.localPrintIntent.findUnique({ where: { id: queued.id } })).state, 'delivered');
     });
-    await t.test('manager and architect only, exact venue, local installation only', async () => {
+    await t.test('local manager only, exact venue, Architect remains online', async () => {
       assert.equal((await get({})).statusCode, 401);
       assert.equal((await get(headers(1))).statusCode, 403);
-      assert.equal((await get(headers(2))).statusCode, 200);
+      // Local installations reject Architect sessions before route authorization.
+      assert.equal((await get(headers(2))).statusCode, 401);
       assert.equal((await get(headers(3))).statusCode, 404);
       process.env.LOCAL_ONLY = 'false';
       assert.equal((await get()).statusCode, 404);
@@ -100,7 +101,8 @@ test('local operations uses durable, tenant-scoped, idempotent staff actions', a
       assert.equal(await db.localPrintIntent.count({ where: { id: payload.requestId } }), 1);
       assert.equal((await post('printers/test', { ...payload, printerId: '../rfcomm999' })).statusCode, 400);
       assert.equal((await post('printers/test', payload, headers(1))).statusCode, 403);
-      assert.equal((await post('printers/test', payload, headers(2))).statusCode, 409);
+      assert.equal((await post('printers/test', payload, headers(2))).statusCode, 401);
+      assert.equal((await post('printers/test', payload, headers(4))).statusCode, 409);
     });
     await t.test('concurrent explicit reprints produce one labelled copy and an audit trail', async () => {
       const original = await uncertain();
