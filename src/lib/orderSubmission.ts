@@ -17,7 +17,7 @@ export function readSubmissionId(bodyId: string | undefined, header: unknown): s
 type SubmissionPayload = {
   tableId: string;
   note?: string;
-  items: Array<{ itemId: string; quantity: number; modifiers?: Record<string, string | string[]> }>;
+  items: Array<{ itemId: string; quantity: number; note?: string; modifiers?: Record<string, string | string[]> }>;
 };
 
 /** Only the order's business intent belongs in this fingerprint. Locality
@@ -27,6 +27,8 @@ export function orderSubmissionHash(payload: SubmissionPayload): string {
   const items = payload.items.map((item) => ({
     itemId: item.itemId.toLowerCase(),
     quantity: item.quantity,
+    // Omit empty comments so already-accepted carts retain their pre-comment hash.
+    ...(item.note?.trim() ? { note: item.note.trim() } : {}),
     modifiers: Object.fromEntries(Object.entries(item.modifiers || {})
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, value]) => [key, [...new Set((Array.isArray(value) ? value : [value]).filter(Boolean))].sort()])),

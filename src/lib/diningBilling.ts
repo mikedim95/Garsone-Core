@@ -81,7 +81,7 @@ export async function diningVisitSnapshot(client: Prisma.TransactionClient | typ
     const totalCents = line.unitPriceCents * line.quantity;
     const paidCents = line.paymentAllocations.reduce((sum, allocation) => sum + allocation.amountCents, 0);
     const outstandingCents = Math.max(0, totalCents - paidCents);
-    return { orderItemId: line.id, orderId: order.id, title: line.titleSnapshot, quantity: line.quantity,
+    return { orderItemId: line.id, orderId: order.id, title: line.titleSnapshot, quantity: line.quantity, note: line.note,
       unitPriceCents: line.unitPriceCents, totalCents, paidCents, outstandingCents,
       remainingQuantity: line.unitPriceCents > 0 ? Math.ceil(outstandingCents / line.unitPriceCents) : 0 };
   }));
@@ -94,7 +94,7 @@ export async function diningVisitSnapshot(client: Prisma.TransactionClient | typ
     placedAt: order.placedAt, updatedAt: order.updatedAt, preparingAt: order.preparingAt, readyAt: order.readyAt,
     servedAt: order.servedAt, paidAt: order.paidAt, cancelledAt: order.cancelledAt, cancelReason: order.cancelReason,
     items: order.orderItems.map((line) => ({ id: line.id, itemId: line.itemId, title: line.titleSnapshot,
-      quantity: line.quantity, unitPriceCents: line.unitPriceCents, unitPrice: line.unitPriceCents / 100,
+      quantity: line.quantity, note: line.note, unitPriceCents: line.unitPriceCents, unitPrice: line.unitPriceCents / 100,
       status: line.status, acceptedAt: line.acceptedAt, servedAt: line.servedAt,
       categoryId: line.item.categoryId, categoryTitle: line.item.category.title, printerTopic: line.item.printerTopic,
       modifiers: line.orderItemOptions.map((option) => ({ ...option, title: option.titleSnapshot, priceDelta: option.priceDeltaCents / 100 })),

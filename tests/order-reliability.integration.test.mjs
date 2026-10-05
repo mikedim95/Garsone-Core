@@ -29,6 +29,7 @@ const { billingRoutes } = await import("../dist/routes/billing.js");
 const { ensureOrderReliabilitySchema } = await import("../dist/db/ensureOrderReliabilitySchema.js");
 const { signToken } = await import("../dist/lib/jwt.js");
 const { orderSubmissionHash } = await import("../dist/lib/orderSubmission.js");
+const { renderLocalTicket } = await import("../dist/lib/localPrinting.js");
 const { invalidateStoreCache } = await import("../dist/lib/store.js");
 
 test("order submission HTTP contract with real PostgreSQL concurrency and rollback", async (t) => {
@@ -77,7 +78,10 @@ test("order submission HTTP contract with real PostgreSQL concurrency and rollba
   const prepare = (id, options = {}) => app.inject({ method: "PATCH", url: `/orders/${id}/status`, headers: managerHeaders, payload: { status: "PREPARING", ...options } });
   try {
     await t.test("populated legacy schema upgrades additively before guarded db push", async () => {
-      const legacy = await db.order.create({ data: { storeId: store.id, tableId: table.id, note: "Preserved legacy order" } });
+      const legacy = await db.order.create({ data: { storeId: store.id, tableId: table.id, note: "Preserved legacy order",
+        orderItems: { create: { itemId: item.id, titleSnapshot: item.title, unitPriceCents: item.priceCents } },
+      } });
+      await db.$executeRawUnsafe('ALTER TABLE "order_items" DROP COLUMN "note"');
       await db.$executeRawUnsafe('DROP TABLE "local_print_intents"');
       await db.$executeRawUnsafe('ALTER TABLE "orders" DROP COLUMN "submissionId", DROP COLUMN "submissionHash"');
       const bootstrap = spawnSync(process.execPath, ["dist/db/ensureOrderReliabilitySchema.js"], { env: process.env, encoding: "utf8" });
@@ -87,6 +91,9 @@ test("order submission HTTP contract with real PostgreSQL concurrency and rollba
       const preserved = await db.order.findUnique({ where: { id: legacy.id } });
       assert.equal(preserved.note, "Preserved legacy order");
       assert.equal(preserved.submissionId, null);
+      const legacyLine = await db.orderItem.findFirstOrThrow({ where: { orderId: legacy.id } });
+      assert.equal(legacyLine.titleSnapshot, item.title);
+      assert.equal(legacyLine.note, null);
       await db.order.delete({ where: { id: legacy.id } });
     });
     await t.test("simultaneous retries commit one order and one ticket per route", async () => {
@@ -108,6 +115,88 @@ test("order submission HTTP contract with real PostgreSQL concurrency and rollba
       }
       assert.equal(responses[0].json().order.totalCents, 800);
       assert.equal("submissionHash" in responses[0].json().order, false);
+    });
+    await t.test("individual comments persist separately, recover safely and reach grouped kitchen tickets", async () => {
+      const body = payload({ items: [
+        { itemId: item.id, quantity: 1, note: "  No sugar  " },
+        { itemId: item.id, quantity: 2, note: "Extra hot" },
+        { itemId: secondItem.id, quantity: 1, note: "No milk" },
+      ] });
+      const first = await submit(body);
+      assert.equal(first.statusCode, 201, first.body);
+      const order = first.json().order;
+      assert.deepEqual(order.items.map((line) => [line.note, line.quantity]).sort(), [["Extra hot", 2], ["No milk", 1], ["No sugar", 1]]);
+      assert.equal(order.totalCents, 1100);
+      assert.equal(new Set(order.items.map((line) => line.id)).size, 3);
+      const normalized = { ...body, items: body.items.map((line) => ({ ...line, note: line.note.trim() })).reverse() };
+      const retry = await submit(normalized);
+      assert.equal(retry.statusCode, 200, retry.body);
+      assert.equal(retry.json().order.id, order.id);
+      assert.deepEqual((await resolve(body.submissionId)).json().order.items, order.items);
+      const tableOrders = await app.inject({ url: `/public/table/${table.id}/orders`, headers: guestHeaders });
+      assert.deepEqual(tableOrders.json().orders.find((entry) => entry.id === order.id).items, order.items);
+      const bill = await app.inject({ url: `/public/visits/${order.diningVisitId}`, headers: guestHeaders });
+      assert.equal(bill.statusCode, 200, bill.body);
+      assert.deepEqual(bill.json().visit.orders.find((entry) => entry.id === order.id).items.map((line) => line.note).sort(), ["Extra hot", "No milk", "No sugar"]);
+      assert.deepEqual(bill.json().visit.items.filter((line) => line.orderId === order.id).map((line) => line.note).sort(), ["Extra hot", "No milk", "No sugar"]);
+      const intents = await db.localPrintIntent.findMany({ where: { orderId: order.id } });
+      assert.equal(intents.length, 2);
+      const bar = intents.find((intent) => intent.topic.endsWith("/bar"));
+      assert.deepEqual(bar.payload.items.map((line) => line.note).sort(), ["Extra hot", "No sugar"]);
+      const ticket = renderLocalTicket(bar.payload, { device: "unused-test-device", encoding: "utf8", width: 32 }).toString("utf8");
+      assert.match(ticket, /1x Coffee\n  No sugar/);
+      assert.match(ticket, /2x Coffee\n  Extra hot/);
+      assert.doesNotMatch(ticket, /No milk/);
+      const changed = await submit({ ...body, items: body.items.map((line, index) => index ? line : { ...line, note: "With sugar" }) });
+      assert.equal(changed.statusCode, 409);
+      assert.equal(changed.json().error, "IDEMPOTENCY_KEY_REUSED");
+      assert.equal(await db.localPrintIntent.count({ where: { orderId: order.id } }), 2);
+      assert.equal((await submit(payload({ items: [{ itemId: item.id, quantity: 1, note: "a".repeat(501) }] }))).statusCode, 400);
+      const boundary = await submit(payload({ items: [{ itemId: item.id, quantity: 1, note: " " + "a".repeat(500) + " " }] }));
+      assert.equal(boundary.statusCode, 201, boundary.body);
+      assert.equal(boundary.json().order.items[0].note.length, 500);
+    });
+    await t.test("line edits and pending-order merge preserve different comments and print the changed instructions", async () => {
+      const initial = (await submit(payload({ items: [
+        { itemId: item.id, quantity: 1, note: "No sugar" },
+        { itemId: item.id, quantity: 1, note: "Extra hot" },
+      ] }))).json().order;
+      const line = initial.items.find((entry) => entry.note === "No sugar");
+      const patch = (url, body) => app.inject({ method: "PATCH", url, payload: body, headers: guestHeaders });
+      let response = await patch(`/orders/${initial.id}/items/${line.id}`, { quantity: 2 });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.json().order.items.find((entry) => entry.id === line.id).note, "No sugar");
+      response = await patch(`/orders/${initial.id}/items/${line.id}`, { quantity: 2, note: "  Less sugar  " });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json().order.items.map((entry) => entry.note).sort(), ["Extra hot", "Less sugar"]);
+      const changed = await db.localPrintIntent.findFirstOrThrow({ where: { orderId: initial.id }, orderBy: { createdAt: "desc" } });
+      assert.equal(changed.payload.items[0].note, "Less sugar");
+      assert.match(changed.payload.change.from, /No sugar/);
+      assert.match(changed.payload.change.to, /Less sugar/);
+      assert.match(renderLocalTicket(changed.payload, { device: "unused-test-device", encoding: "utf8" }).toString("utf8"), /Less sugar/);
+      const snapshot = response.json().order;
+      response = await patch(`/orders/${initial.id}/items/${line.id}`, { quantity: 2, note: "a".repeat(501) });
+      assert.equal(response.statusCode, 400);
+      assert.deepEqual((await db.orderItem.findUniqueOrThrow({ where: { id: line.id } })).note, "Less sugar");
+      response = await patch(`/orders/${initial.id}`, { items: snapshot.items.map((entry) => ({ itemId: entry.itemId, quantity: entry.quantity, note: entry.note })) });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.deepEqual(response.json().order.items.map((entry) => entry.note).sort(), ["Extra hot", "Less sugar"]);
+      const second = (await submit(payload({ items: [{ itemId: item.id, quantity: 1, note: "With ice" }] }))).json().order;
+      const mergedItems = [...response.json().order.items, ...second.items].map((entry) => ({ itemId: entry.itemId, quantity: entry.quantity, note: entry.note }));
+      response = await patch(`/public/table/${table.id}/orders/pending`, { orderIds: [initial.id, second.id], items: mergedItems });
+      assert.equal(response.statusCode, 200, response.body);
+      const merged = response.json().order;
+      assert.equal(merged.items.length, 3);
+      assert.deepEqual(merged.items.map((entry) => entry.note).sort(), ["Extra hot", "Less sugar", "With ice"]);
+      const stored = await db.orderItem.findMany({ where: { orderId: merged.id } });
+      assert.deepEqual(stored.map((entry) => entry.note).sort(), ["Extra hot", "Less sugar", "With ice"]);
+      const clear = merged.items.find((entry) => entry.note === "With ice");
+      response = await patch(`/orders/${merged.id}/items/${clear.id}`, { quantity: 1, note: "   " });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.json().order.items.find((entry) => entry.id === clear.id).note, null);
+      const prepared = await prepare(merged.id, { printReceipt: true });
+      assert.equal(prepared.statusCode, 200, prepared.body);
+      assert.deepEqual(prepared.json().order.items.map((entry) => entry.note).filter(Boolean).sort(), ["Extra hot", "Less sugar"]);
     });
     await t.test("lost response is recoverable without resubmission, even after stock changes", async () => {
       const body = payload();
@@ -293,6 +382,8 @@ test("order submission HTTP contract with real PostgreSQL concurrency and rollba
       const b = { tableId: table.id, note: "", items: [{ itemId: secondItem.id, quantity: 2 }, { itemId: item.id, quantity: 1, modifiers: { a: ["3"], b: ["1", "2"] } }] };
       assert.equal(orderSubmissionHash(a), orderSubmissionHash(b));
       assert.notEqual(orderSubmissionHash(a), orderSubmissionHash({ ...a, note: "Different" }));
+      assert.equal(orderSubmissionHash(a), orderSubmissionHash({ ...a, items: a.items.map((line) => ({ ...line, note: "   " })) }));
+      assert.notEqual(orderSubmissionHash(a), orderSubmissionHash({ ...a, items: a.items.map((line) => ({ ...line, note: "No sugar" })) }));
     });
   } finally {
     await app.close();

@@ -9,6 +9,8 @@ export async function ensureOrderReliabilitySchema() {
   // Prisma create the base schema; existing installs get the safe additive DDL
   // first so a new nullable unique index does not require --accept-data-loss.
   if (!existing?.present) return;
+  // Nullable line comments preserve every existing order during hosted/Pi upgrades.
+  await db.$executeRawUnsafe(`ALTER TABLE "order_items" ADD COLUMN IF NOT EXISTS "note" VARCHAR(500)`);
   await db.$executeRawUnsafe(`ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "submissionId" UUID`);
   await db.$executeRawUnsafe(`ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "submissionHash" VARCHAR(64)`);
   await db.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "orders_storeId_submissionId_key" ON "orders"("storeId", "submissionId")`);

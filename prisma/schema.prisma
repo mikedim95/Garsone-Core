@@ -644,6 +644,7 @@ model OrderItem {
   paymentAllocations DiningPaymentAllocation[]
   itemId           String            @db.Uuid
   titleSnapshot    String            @db.VarChar(255)
+  note             String?           @db.VarChar(500)
   unitPriceCents   Int
   quantity         Int               @default(1)
   status           OrderItemStatus   @default(PLACED)

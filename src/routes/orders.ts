@@ -28,6 +28,8 @@ import {
 } from "../lib/orderSubmission.js";
 
 const modifierSelectionSchema = z.record(z.union([z.string(), z.array(z.string())]));
+// Comments belong to individual order lines, including duplicate menu items.
+const orderItemNoteSchema = z.string().trim().max(500).optional();
 
 const createOrderSchema = z.object({
   tableId: z.string().uuid(),
@@ -38,6 +40,7 @@ const createOrderSchema = z.object({
       z.object({
         itemId: z.string().uuid(),
         quantity: z.number().int().positive().max(999),
+        note: orderItemNoteSchema,
         modifiers: z.union([z.string(), modifierSelectionSchema]).optional(),
       })
     )
@@ -62,6 +65,7 @@ const updateItemStatusSchema = z.object({
 
 const updateOrderItemSchema = z.object({
   quantity: z.number().int().min(0).max(999),
+  note: orderItemNoteSchema,
   modifiers: z.union([z.string(), modifierSelectionSchema]).optional(),
 });
 
@@ -266,6 +270,7 @@ function serializeOrder(order: OrderWithRelations) {
       unitPriceCents: orderItem.unitPriceCents,
       unitPrice: orderItem.unitPriceCents / 100,
       quantity: orderItem.quantity,
+      note: orderItem.note,
       modifiers: orderItem.orderItemOptions.map((option) => ({
         id: option.id,
         modifierId: option.modifierId,
@@ -466,6 +471,7 @@ function buildPrinterMessagesForOrder(
         itemId: oi.itemId,
         title: oi.titleSnapshot,
         quantity: oi.quantity,
+        note: oi.note,
         unitPriceCents: oi.unitPriceCents,
         status: oi.status,
         acceptedAt: oi.acceptedAt,
@@ -732,6 +738,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             titleSnapshot: dbItem.title,
             unitPriceCents,
             quantity: item.quantity,
+            note: item.note || null,
             orderItemOptions: {
               create: orderItemOptions,
             },
@@ -806,6 +813,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               itemId: orderItem.itemId,
               title: orderItem.titleSnapshot,
               quantity: orderItem.quantity,
+              note: orderItem.note,
               unitPriceCents: orderItem.unitPriceCents,
               status: orderItem.status,
               acceptedAt: orderItem.acceptedAt,
@@ -1338,6 +1346,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               items: updatedOrder.orderItems.map((oi) => ({
                 title: oi.titleSnapshot,
                 quantity: oi.quantity,
+                note: oi.note,
                 unitPriceCents: oi.unitPriceCents,
                 modifiers: oi.orderItemOptions,
                 categoryId: (oi as any)?.item?.categoryId ?? undefined,
@@ -1389,6 +1398,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               items: updatedOrder.orderItems.map((oi) => ({
                 title: oi.titleSnapshot,
                 quantity: oi.quantity,
+                note: oi.note,
                 unitPriceCents: oi.unitPriceCents,
                 modifiers: oi.orderItemOptions,
                 categoryId: (oi as any)?.item?.categoryId ?? undefined,
@@ -1433,6 +1443,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               items: updatedOrder.orderItems.map((oi) => ({
                 title: oi.titleSnapshot,
                 quantity: oi.quantity,
+                note: oi.note,
                 unitPriceCents: oi.unitPriceCents,
                 modifiers: oi.orderItemOptions,
                 categoryId: (oi as any)?.item?.categoryId ?? undefined,
@@ -1467,6 +1478,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               items: updatedOrder.orderItems.map((oi) => ({
                 title: oi.titleSnapshot,
                 quantity: oi.quantity,
+                note: oi.note,
                 unitPriceCents: oi.unitPriceCents,
                 modifiers: oi.orderItemOptions,
                 categoryId: (oi as any)?.item?.categoryId ?? undefined,
@@ -1622,18 +1634,20 @@ export async function orderRoutes(fastify: FastifyInstance) {
           }
         }
 
-        const describe = (quantity: number, modifiers: string[]) =>
+        const itemNote = body.note === undefined ? currentItem.note : body.note || null;
+        const describe = (quantity: number, modifiers: string[], note?: string | null) =>
           `${quantity}x ${currentItem.titleSnapshot}${
             modifiers.length ? ` (${modifiers.join(", ")})` : ""
-          }`;
+          }${note ? ` [${note}]` : ""}`;
         const before = describe(
           currentItem.quantity,
-          currentItem.orderItemOptions.map((option) => option.titleSnapshot)
+          currentItem.orderItemOptions.map((option) => option.titleSnapshot),
+          currentItem.note
         );
         const after =
           body.quantity === 0
             ? `REMOVED ${currentItem.titleSnapshot}`
-            : describe(body.quantity, options.map((option) => option.titleSnapshot));
+            : describe(body.quantity, options.map((option) => option.titleSnapshot), itemNote);
         const unitPriceCents =
           dbItem.priceCents + options.reduce((sum, option) => sum + option.priceDeltaCents, 0);
         const otherTotal = existing.orderItems
@@ -1666,7 +1680,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             items: [{
               id: currentItem.id, itemId: currentItem.itemId, title: currentItem.titleSnapshot,
               quantity: body.quantity, unitPriceCents: body.quantity > 0 ? unitPriceCents : 0,
-              modifiers: options, printerTopic,
+              modifiers: options, printerTopic, note: itemNote,
             }],
           },
         });
@@ -1681,6 +1695,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               where: { id: currentItem.id },
               data: {
                 quantity: body.quantity,
+                note: itemNote,
                 unitPriceCents,
                 orderItemOptions: { create: options },
               },
@@ -2238,6 +2253,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
             titleSnapshot: dbItem.title,
             unitPriceCents,
             quantity,
+            note: it.note || null,
             orderItemOptions: { create: options },
           });
         }
@@ -2308,6 +2324,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               itemId: oi.itemId,
               title: oi.titleSnapshot,
               quantity: oi.quantity,
+              note: oi.note,
               unitPriceCents: oi.unitPriceCents,
               status: oi.status,
               acceptedAt: oi.acceptedAt,
@@ -2349,6 +2366,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               items: order.orderItems.map((oi) => ({
                 title: oi.titleSnapshot,
                 quantity: oi.quantity,
+                note: oi.note,
                 unitPriceCents: oi.unitPriceCents,
                 modifiers: oi.orderItemOptions,
                 categoryId: (oi as any)?.item?.categoryId ?? undefined,
@@ -2499,6 +2517,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               titleSnapshot: dbItem.title,
               unitPriceCents,
               quantity,
+              note: it.note || null,
               orderItemOptions: { create: options },
             });
           }
@@ -2552,6 +2571,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
               itemId: oi.itemId,
               title: oi.titleSnapshot,
               quantity: oi.quantity,
+              note: oi.note,
               unitPriceCents: oi.unitPriceCents,
               status: oi.status,
               acceptedAt: oi.acceptedAt,
@@ -2653,6 +2673,7 @@ export async function orderRoutes(fastify: FastifyInstance) {
           items: order.orderItems.map((oi) => ({
             title: oi.titleSnapshot,
             quantity: oi.quantity,
+            note: oi.note,
             unitPriceCents: oi.unitPriceCents,
             modifiers: oi.orderItemOptions,
             categoryId: (oi as any)?.item?.categoryId ?? undefined,
