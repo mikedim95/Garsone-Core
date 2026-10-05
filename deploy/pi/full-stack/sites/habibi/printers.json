@@ -1,0 +1,16 @@
+{
+  "habibi/orders/preparing/kitchen": {
+    "device": "/dev/rfcomm0",
+    "width": 32,
+    "encoding": "cp1253",
+    "codepage": 7,
+    "cut": false
+  },
+  "habibi/orders/placed/kitchen": {
+    "device": "/dev/rfcomm0",
+    "width": 32,
+    "encoding": "cp1253",
+    "codepage": 7,
+    "cut": false
+  }
+}

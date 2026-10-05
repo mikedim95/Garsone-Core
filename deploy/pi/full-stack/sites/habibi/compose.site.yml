@@ -1,0 +1,18 @@
+# Habibi has one Bluetooth printer. Core owns its durable print queue;
+# the node keeps its existing online Architect connection.
+services:
+  core:
+    environment:
+      LOCAL_PRINTING_ENABLED: "true"
+      LOCAL_PRINTER_ROUTES_FILE: /app/habibi-printers.json
+      LOCAL_PRINT_SPOOL: /app/print-spool
+    devices:
+      - /dev/rfcomm0:/dev/rfcomm0
+    group_add:
+      - "${BLUETOOTH_GID:?Set the group ID owning /dev/rfcomm0}"
+    volumes:
+      - ./sites/habibi/printers.json:/app/habibi-printers.json:ro
+  node-agent:
+    environment:
+      # The host's persistent binding must not be released on a cloud config update.
+      NODE_BIND_BLUETOOTH: "false"
