@@ -881,8 +881,10 @@ export async function managerRoutes(fastify: FastifyInstance) {
             }
           }
         }
+        // Check the staff role in the write itself: a Manager cannot reset a
+        // Manager/Architect account, even if its role changed during the request.
         const updated = await db.profile.update({
-          where: { id },
+          where: { id, storeId: store.id, role: { in: staffServiceRoles } },
           data,
         });
         return reply.send({
@@ -899,6 +901,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        if ((e as any)?.code === "P2025") return reply.status(404).send({ error: "Waiter not found" });
         return reply.status(500).send({ error: "Failed to update waiter" });
       }
     }
@@ -936,14 +939,15 @@ export async function managerRoutes(fastify: FastifyInstance) {
             ? [
                 ...cleanup,
                 db.profile.update({
-                  where: { id },
+                  where: { id, storeId: store.id, role: "HYBRID" },
                   data: { role: "COOK", waiterTypeId: null },
                 }),
               ]
-            : [...cleanup, db.profile.delete({ where: { id } })]
+            : [...cleanup, db.profile.delete({ where: { id, storeId: store.id, role: "WAITER" } })]
         );
         return reply.send({ success: true });
       } catch (e) {
+        if ((e as any)?.code === "P2025") return reply.status(404).send({ error: "Waiter not found" });
         request.log.error(e, "Failed to delete waiter");
         return reply.status(500).send({ error: "Failed to delete waiter" });
       }
@@ -1059,15 +1063,8 @@ export async function managerRoutes(fastify: FastifyInstance) {
             }
           }
         }
-        const cook = await db.profile.findFirst({
-          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
-          select: { id: true },
-        });
-        if (!cook) {
-          return reply.status(404).send({ error: "Cook not found" });
-        }
         const updated = await db.profile.update({
-          where: { id },
+          where: { id, storeId: store.id, role: { in: kitchenServiceRoles } },
           data,
         });
         return reply.send({
@@ -1084,6 +1081,7 @@ export async function managerRoutes(fastify: FastifyInstance) {
           return reply
             .status(400)
             .send({ error: "Invalid request", details: e.errors });
+        if ((e as any)?.code === "P2025") return reply.status(404).send({ error: "Cook not found" });
         return reply.status(500).send({ error: "Failed to update cook" });
       }
     }
@@ -1105,14 +1103,15 @@ export async function managerRoutes(fastify: FastifyInstance) {
         }
         if (cook.role === "HYBRID") {
           await db.profile.update({
-            where: { id },
+            where: { id, storeId: store.id, role: "HYBRID" },
             data: { role: "WAITER", cookTypeId: null, printerTopic: null },
           });
         } else {
-          await db.profile.delete({ where: { id } });
+          await db.profile.delete({ where: { id, storeId: store.id, role: "COOK" } });
         }
         return reply.send({ success: true });
-      } catch {
+      } catch (error) {
+        if ((error as any)?.code === "P2025") return reply.status(404).send({ error: "Cook not found" });
         return reply.status(500).send({ error: "Failed to delete cook" });
       }
     }

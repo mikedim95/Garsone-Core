@@ -10,6 +10,7 @@ import { resolveQrEvent } from "../lib/qrEvents.js";
 import { localQrPublicUrl } from "../lib/nodeQrConfig.js";
 import { qrAssignmentView } from "../lib/nodeQrAssignments.js";
 import { randomInt } from "node:crypto";
+import { maybeRelayArchitect } from "../lib/architectCommands.js";
 
 async function requireAdminStore(request: any, reply: any) {
   if (request.user?.role === "architect") return;
@@ -458,6 +459,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/users",
     { preHandler: architectOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'users.list', {})) return;
       const { storeId } = request.params as { storeId: string };
       const store = await db.store.findUnique({ where: { id: storeId } });
       if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
@@ -476,6 +478,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/users",
     { preHandler: architectOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'users.create')) return;
       try {
         const { storeId } = request.params as { storeId: string };
         const body = storeUserCreateSchema.parse(request.body ?? {});
@@ -509,10 +512,11 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/users/:userId",
     { preHandler: architectOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'users.update', { ...(request.body as any), userId: (request.params as any).userId })) return;
       try {
         const { storeId, userId } = request.params as { storeId: string; userId: string };
         const body = storeUserUpdateSchema.parse(request.body ?? {});
-        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId, role: { not: Role.ARCHITECT } } });
         if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
         const data: any = {};
         if (body.email) data.email = body.email.toLowerCase();
@@ -526,7 +530,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             data.printerTopic = null;
           }
         }
-        const user = await db.profile.update({ where: { id: userId }, data });
+        const user = await db.profile.update({ where: { id: userId, storeId, role: { not: Role.ARCHITECT } }, data });
         return reply.send({ user: serializeStoreUser(user) });
       } catch (error: any) {
         if (error instanceof z.ZodError) {
@@ -535,6 +539,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         if (error?.code === "P2002") {
           return reply.status(409).send({ error: "USER_ALREADY_EXISTS" });
         }
+        if (error?.code === 'P2025') return reply.status(404).send({ error: 'USER_NOT_FOUND' });
         fastify.log.error(error, "Failed to update store user");
         return reply.status(500).send({ error: "Failed to update store user" });
       }
@@ -545,21 +550,25 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/users/:userId",
     { preHandler: architectOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'users.delete', { userId: (request.params as any).userId })) return;
       try {
         const { storeId, userId } = request.params as { storeId: string; userId: string };
-        const existing = await db.profile.findFirst({ where: { id: userId, storeId } });
+        const existing = await db.profile.findFirst({ where: { id: userId, storeId, role: { not: Role.ARCHITECT } } });
         if (!existing) return reply.status(404).send({ error: "USER_NOT_FOUND" });
         await db.$transaction(async (tx) => {
+          const allowed = await tx.$queryRaw<any[]>`SELECT id FROM profiles WHERE id = ${userId}::uuid AND "storeId" = ${storeId}::uuid AND role != 'ARCHITECT' FOR UPDATE`;
+          if (!allowed.length) throw Object.assign(new Error('USER_NOT_FOUND'), { statusCode: 404 });
           await tx.auditLog.updateMany({
             where: { actorProfileId: userId },
             data: { actorProfileId: null },
           });
           await tx.waiterTable.deleteMany({ where: { waiterId: userId } });
           await tx.waiterShift.deleteMany({ where: { waiterId: userId } });
-          await tx.profile.delete({ where: { id: userId } });
+          await tx.profile.delete({ where: { id: userId, storeId, role: { not: Role.ARCHITECT } } });
         });
         return reply.send({ success: true });
       } catch (error) {
+        if ((error as any)?.statusCode === 404 || (error as any)?.code === 'P2025') return reply.status(404).send({ error: 'USER_NOT_FOUND' });
         fastify.log.error(error, "Failed to delete store user");
         return reply.status(500).send({ error: "Failed to delete store user" });
       }
@@ -679,7 +688,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const stores = await db.store.findMany({
         where: (request as any).user.role === "architect" ? {} : { id: (request as any).user.storeId },
-        select: { id: true, slug: true, name: true, settingsJson: true },
+        select: { id: true, slug: true, name: true, settingsJson: true, venueDeployment: { select: { target: true } } },
         orderBy: { name: "asc" },
       });
       return reply.send({
@@ -687,6 +696,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           id: s.id,
           slug: s.slug,
           name: s.name,
+          dataSource: process.env.LOCAL_ONLY !== 'true' && s.venueDeployment?.target === 'PI' ? 'PI' : 'ONLINE',
           orderingMode: getOrderingMode(s as any),
           printers:
             Array.isArray((s as any)?.settingsJson?.printers) &&
@@ -704,7 +714,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const stores = await db.store.findMany({
         where: (request as any).user.role === "architect" ? {} : { id: (request as any).user.storeId },
-        select: { id: true, slug: true, name: true },
+        select: { id: true, slug: true, name: true, venueDeployment: { select: { target: true } } },
         orderBy: { name: "asc" },
       });
 
@@ -772,9 +782,10 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           id: store.id,
           slug: store.slug,
           name: store.name,
-          usersCount: profileMap.get(store.id) ?? 0,
+          dataSource: process.env.LOCAL_ONLY !== 'true' && store.venueDeployment?.target === 'PI' ? 'PI' : 'ONLINE',
+          usersCount: process.env.LOCAL_ONLY !== 'true' && store.venueDeployment?.target === 'PI' ? null : profileMap.get(store.id) ?? 0,
           tilesCount: tileMap.get(store.id) ?? 0,
-          ordersCount: orderMap.get(store.id) ?? 0,
+          ordersCount: process.env.LOCAL_ONLY !== 'true' && store.venueDeployment?.target === 'PI' ? null : orderMap.get(store.id) ?? 0,
         })),
       });
     }
@@ -784,6 +795,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/history",
     { preHandler: architectOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'history.purge')) return;
       try {
         const { storeId } = request.params as { storeId: string };
         const body = purgeStoreHistorySchema.parse(request.body ?? {});
@@ -846,6 +858,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
               entityId: storeId,
               actorProfileId: actorId,
               metaJson: {
+                ...((request as any).user?.remoteActorId ? { remoteArchitectId: (request as any).user.remoteActorId } : {}),
                 storeSlug: store.slug,
                 storeName: store.name,
                 deleted: {
@@ -939,6 +952,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/ordering-mode",
     { preHandler: adminOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'settings.orderingMode')) return;
       const { storeId } = request.params as { storeId: string };
       const body = z
         .object({
@@ -990,6 +1004,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/printers",
     { preHandler: adminOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'settings.printers')) return;
       const { storeId } = request.params as { storeId: string };
       const body = z
         .object({

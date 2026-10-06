@@ -55,18 +55,19 @@ export async function localOperationsRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_PRINT_REQUEST" });
     const user = (request as any).user;
     const { printerId, requestId } = parsed.data;
+    const actor = user.remoteActorId ? `architect:${user.remoteActorId}` : user.userId;
     const routes = localPrinterRoutes(user.storeSlug);
     const topic = Object.keys(routes).sort().find(topic => path.basename(routes[topic].device) === printerId);
     if (!topic || process.env.LOCAL_PRINTING_ENABLED !== "true") return reply.code(404).send({ error: "PRINTER_NOT_FOUND" });
     const replay = (job: any) => job?.storeId === user.storeId && job.payload?.opsAction === "test" &&
-      job.payload?.opsPrinterId === printerId && job.payload?.opsActor === user.userId;
+      job.payload?.opsPrinterId === printerId && job.payload?.opsActor === actor;
     const existing = await db.localPrintIntent.findUnique({ where: { id: requestId } });
     if (existing) return replay(existing) ? { jobId: existing.id, replayed: true } : reply.code(409).send({ error: "REQUEST_ID_REUSED" });
     try {
       const job = await db.localPrintIntent.create({ data: { id: requestId, storeId: user.storeId, topic,
         payload: { title: "Garsone printer test", printReason: "TEST - NOT AN ORDER", ts: new Date().toISOString(),
-          items: [{ title: "Printer connection test", quantity: 1 }], note: "Verify that this ticket is complete and readable.",
-          opsAction: "test", opsPrinterId: printerId, opsActor: user.userId } } });
+          items: [{ title: "Printer connection test", quantity: 1 }], note: `${user.remoteActorId ? 'Online Architect' : 'Local Manager'} test. Verify that this ticket is complete and readable.`,
+          opsAction: "test", opsPrinterId: printerId, opsActor: actor } } });
       return reply.code(202).send({ jobId: job.id, replayed: false });
     } catch (error: any) {
       if (error.code !== "P2002") throw error;

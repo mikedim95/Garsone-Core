@@ -19,7 +19,7 @@ x-core-env: &core-env
   DATABASE_URL: postgresql://${POSTGRES_USER:-garsone}:${POSTGRES_PASSWORD:?Run prepare.py init}@db:5432/${POSTGRES_DB:-garsone}?schema=public
   DIRECT_URL: postgresql://${POSTGRES_USER:-garsone}:${POSTGRES_PASSWORD:?Run prepare.py init}@db:5432/${POSTGRES_DB:-garsone}?schema=public
   JWT_SECRET: ${JWT_SECRET:?Run prepare.py init}
-  DB_BOOTSTRAP_MODE: push
+  DB_BOOTSTRAP_MODE: ${DB_BOOTSTRAP_MODE:-push}
   DB_SEED_ON_START: "false"
   SEED_RESET: "0"
   ENABLE_DEV_LOGIN: "0"
@@ -84,7 +84,10 @@ services:
     image: ${CORE_IMAGE:-mikedim95/garsone-core:pi}
     build:
       context: ../../..
-    environment: *core-env
+    environment:
+      <<: *core-env
+      # Shared only with the node relay; never passed to browsers or seed jobs.
+      LOCAL_CONTROL_SECRET: ${LOCAL_CONTROL_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -172,7 +175,13 @@ services:
       NODE_LOCAL_ORIGIN: ${PUBLIC_ORIGIN}
       NODE_LOCAL_QR_SYNC_URL: http://core:8787/internal/qr-config
       LOCAL_QR_SYNC_SECRET: ${LOCAL_QR_SYNC_SECRET:-}
+      LOCAL_CONTROL_SECRET: ${LOCAL_CONTROL_SECRET:-}
       NODE_LAN_IP: ${NODE_LAN_IP:-${PUBLIC_HOST}}
+      STORE_SLUG: ${STORE_SLUG}
+      NODE_LOCAL_CORE_PORT: ${CORE_PORT:-8787}
+      # Core owns direct receipt delivery in a full local stack.
+      NODE_PRINTER_WORKERS_ENABLED: "false"
+      NODE_BIND_BLUETOOTH: "false"
       NODE_TAILSCALE_IP: ${NODE_TAILSCALE_IP:-}
       NODE_KEY: ${NODE_KEY:-}
       NODE_PAIRING_SECRET: ${NODE_PAIRING_SECRET:-}

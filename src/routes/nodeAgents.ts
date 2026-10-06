@@ -1,6 +1,7 @@
 import { nodeQrSnapshot } from "../lib/nodeQrConfig.js";
 import { acceptedQrAssignments, qrAssignmentView } from "../lib/nodeQrAssignments.js";
 import { adoptLocalStack, localStackFromBootstrap } from "../lib/localStackAdoption.js";
+import { acceptArchitectResult, maybeRelayArchitect } from "../lib/architectCommands.js";
 import { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
@@ -1003,6 +1004,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     "/admin/stores/:storeId/nodes/main/printers/test",
     { preHandler: adminOnly },
     async (request, reply) => {
+      if (await maybeRelayArchitect(request, reply, 'printing.test')) return;
       try {
         const { storeId } = z.object({ storeId: z.string().uuid() }).parse(request.params);
         const printer = testPrinterSchema.parse(request.body ?? {});
@@ -1027,6 +1029,21 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  fastify.get('/admin/stores/:storeId/local-status', { preHandler: adminOnly }, async (request, reply) => {
+    if (await maybeRelayArchitect(request, reply, 'snapshot', {})) return;
+    return reply.code(404).send({ error: 'LOCAL_OPERATIONS_UNAVAILABLE' });
+  });
+  fastify.get('/admin/stores/:storeId/nodes/main/printers/status', { preHandler: adminOnly }, async (request, reply) => {
+    if (await maybeRelayArchitect(request, reply, 'printing.status', {})) return;
+    return reply.code(404).send({ error: 'LOCAL_OPERATIONS_UNAVAILABLE' });
+  });
+  fastify.post('/node-agent/local-command-result', { bodyLimit: 256 * 1024 }, async (request, reply) => {
+    const node = await authenticateNode(request);
+    if (!node) return reply.code(401).send({ error: 'INVALID_NODE_TOKEN' });
+    try { return await acceptArchitectResult(node, request.body); }
+    catch (error: any) { return reply.code(error.statusCode ?? 500).send({ error: error.code ?? 'LOCAL_COMMAND_RESULT_FAILED' }); }
+  });
 
   fastify.post(
     "/admin/nodes/:nodeId/rotate-token",

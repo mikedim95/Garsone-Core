@@ -3,6 +3,7 @@ import { verifyToken, type JWTPayload } from '../lib/jwt.js';
 import { roleMatches, serializeRole } from '../lib/roles.js';
 import { db } from '../db/index.js';
 import { Prisma } from '@prisma/client';
+import { delegatedArchitect } from '../lib/architectDelegation.js';
 
 export async function currentSession(token: string): Promise<JWTPayload> {
   const payload = verifyToken(token);
@@ -32,6 +33,8 @@ function requestToken(request: FastifyRequest) {
 }
 
 export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
+  const delegation = delegatedArchitect(request);
+  if (delegation) { (request as any).user = delegation; (request as any).storeSlug = delegation.storeSlug; return; }
   try {
     const token = requestToken(request);
     if (typeof token !== 'string' || !token.trim()) throw new Error('Missing token');

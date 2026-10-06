@@ -1,4 +1,6 @@
 import { localQrConfigRoutes } from "./routes/localQrConfig.js";
+import { localArchitectCommandRoutes } from "./routes/localArchitectCommands.js";
+import { ensureArchitectCommandSchema } from "./db/ensureArchitectCommandSchema.js";
 import Fastify from "fastify";
 import { registerHttpSecurity } from "./lib/httpSecurity.js";
 import { jwtSecret } from "./lib/jwt.js";
@@ -48,7 +50,7 @@ const fastify = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || "info",
     serializers: { req: request => ({ method: request.method, url: request.url?.split("?")[0].replace(/\/orders\/submissions\/[^/]+/, "/orders/submissions/[redacted]"), hostname: request.hostname, remoteAddress: request.ip }) },
-    redact: ["req.headers.authorization", "req.headers.cookie", "req.headers.x-auth-token", "req.headers.x-deployment-secret", "req.headers.x-local-qr-secret", "req.headers.idempotency-key", "req.headers.x-table-visit"],
+    redact: ["req.headers.authorization", "req.headers.cookie", "req.headers.x-auth-token", "req.headers.x-deployment-secret", "req.headers.x-local-qr-secret", "req.headers.x-local-control-secret", "req.headers.x-internal-architect-capability", "req.headers.idempotency-key", "req.headers.x-table-visit"],
   },
   trustProxy: (_address, hop) => hop < Number(process.env.TRUST_PROXY_HOPS || "0"),
 });
@@ -63,6 +65,7 @@ fastify.get("/health", async (request, reply) => {
 setupRealtimeGateway(fastify);
 await ensureOrderReliabilitySchema();
 await ensureDiningBillingSchema();
+await ensureArchitectCommandSchema();
 await startLocalPrinting(db);
 fastify.addHook("onClose", async () => stopLocalPrinting());
 fastify.get("/manager/local-printing", {
@@ -91,6 +94,7 @@ await fastify.register(nodeAgentRoutes);
 await fastify.register(customerPushRoutes);
 await fastify.register(staffPushRoutes);
 await fastify.register(localQrConfigRoutes);
+await fastify.register(localArchitectCommandRoutes);
 await fastify.register(venueDeploymentRoutes);
 await fastify.register(piReleaseRoutes);
 await startQrSync(fastify);

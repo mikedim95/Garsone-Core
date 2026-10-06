@@ -786,6 +786,26 @@ model Profile {
   @@map("profiles")
 }
 
+// No payload is stored: command bodies can contain staff passwords.
+model ArchitectCommand {
+  requestId String @id @db.Uuid
+  storeId String @db.Uuid
+  nodeId String @db.Uuid
+  actorId String @db.Uuid
+  storeSlug String @db.VarChar(100)
+  operation String @db.VarChar(64)
+  fingerprint String @db.VarChar(64)
+  state String @default("pending") @db.VarChar(20)
+  statusCode Int?
+  result Json?
+  expiresAt DateTime @db.Timestamp(6)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  completedAt DateTime? @db.Timestamp(6)
+  @@index([createdAt])
+  @@index([completedAt])
+  @@map("architect_commands")
+}
+
 enum TableVisitStatus {
   OPEN
   CLOSED
