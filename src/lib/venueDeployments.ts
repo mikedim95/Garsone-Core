@@ -152,9 +152,9 @@ export async function ensureVenueDeployment(store: any, node: any | null) {
     latestRelease(channel, "CORE"),
     latestRelease(channel, "FRONT"),
   ]);
-  return db.venueDeployment.upsert({
+  const deployment = await db.venueDeployment.upsert({
     where: { storeId: store.id },
-    update: node ? { nodeId: node.id } : {},
+    update: {},
     create: {
       storeId: store.id,
       nodeId: node?.id || null,
@@ -193,6 +193,13 @@ export async function ensureVenueDeployment(store: any, node: any | null) {
       lastBackupFile: legacy.lastBackupFile || null,
     },
   });
+  // Reading status or receiving a second node's heartbeat must not silently
+  // replace the venue's chosen Pi. Explicit deployment commands set nodeId.
+  if (node && !deployment.nodeId) {
+    await db.venueDeployment.updateMany({ where: { id: deployment.id, nodeId: null }, data: { nodeId: node.id } });
+    return db.venueDeployment.findUniqueOrThrow({ where: { id: deployment.id } });
+  }
+  return deployment;
 }
 
 export function deploymentForLegacySettings(deployment: any) {

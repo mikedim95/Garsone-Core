@@ -1,5 +1,6 @@
 import { nodeQrSnapshot } from "../lib/nodeQrConfig.js";
-import { acceptedQrAssignments } from "../lib/nodeQrAssignments.js";
+import { acceptedQrAssignments, qrAssignmentView } from "../lib/nodeQrAssignments.js";
+import { adoptLocalStack, localStackFromBootstrap } from "../lib/localStackAdoption.js";
 import { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
@@ -613,6 +614,10 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
 
         const store = await db.store.findUnique({ where: { id: body.storeId } });
         if (!store) return reply.status(404).send({ error: "STORE_NOT_FOUND" });
+        const localStack = localStackFromBootstrap(pending.bootstrapJson);
+        if (localStack && localStack.storeSlug !== store.slug) {
+          return reply.status(409).send({ error: "LOCAL_STORE_SLUG_MISMATCH", message: "Choose the venue whose slug matches the local Pi installation.", expectedStoreSlug: localStack.storeSlug });
+        }
 
         const claimConfig = claimConfigFromPending(body.config, pending);
         const claimSlug = normalizeSlug(claimConfig.nodeSlug);
@@ -626,6 +631,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           ...config,
           bootstrapNodeKey: pending.nodeKey,
           bootstrapMacAddresses: Array.isArray(pending.macAddresses) ? pending.macAddresses : [],
+          ...(localStack ? { bootstrapDeploymentMode: "COMPOSE", localStack } : {}),
           mqttConfigToken:
             previousConfig.mqttConfigToken ||
             `gcfg_${randomBytes(32).toString("base64url")}`,
@@ -650,6 +656,8 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
             statusMessage: "Claimed from pending Pi",
           },
         });
+
+        const localDeployment = await adoptLocalStack(store, node, localStack);
 
         await db.$executeRaw`
           UPDATE "pending_node_agents"
@@ -679,6 +687,7 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
           node: serializeNode(node),
           token: null,
           tokenOnlyShownOnce: false,
+          localDeployment,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -1074,6 +1083,18 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     return reply.send(await nodeQrSnapshot(node.store));
   });
 
+  fastify.get("/node-agent/local-stack-status", async (request, reply) => {
+    const node = await authenticateNode(request);
+    if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
+    const deployment = await db.venueDeployment.findUnique({ where: { storeId: node.storeId }, select: { target: true, nodeId: true, localUrl: true } });
+    const assignments = qrAssignmentView({ ...node.store, venueDeployment: deployment ? { ...deployment, node } : null });
+    // Onboarding verification must not refresh lastSeenAt, create a deployment,
+    // or expose the node's operational secrets merely by inspecting its state.
+    return reply.send({ nodeId: node.id, storeId: node.storeId, storeSlug: node.store.slug,
+      target: deployment?.target ?? "ONLINE", associatedNodeId: deployment?.nodeId ?? null,
+      localUrl: deployment?.localUrl ?? null, qrAssignmentReportedAt: assignments.source === "PI" ? assignments.receivedAt : null });
+  });
+
   fastify.get("/node-agent/deployment-snapshot", async (request, reply) => {
     const node = await authenticateNode(request);
     if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
@@ -1143,14 +1164,17 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         const currentRow = await ensureVenueDeployment(store, node);
         const current = serializeVenueDeployment(currentRow, store);
         const reportedVersion = Number(report.version || 0);
-        if (reportedVersion >= current.appliedVersion) {
+        if (current.nodeId === node.id && reportedVersion >= current.appliedVersion) {
           const reportedDataSyncVersion = Number(
             report.appliedDataSyncVersion || report.dataSyncVersion || 0
           );
           const nextStatus = String(report.status || current.status);
           const nextMessage = String(report.message || "");
-          const nextDeployment = await db.venueDeployment.update({
-            where: { id: currentRow.id },
+          // Association or applied version may change after the read above.
+          // A late heartbeat must not overwrite a newly chosen Pi or release.
+          const applied = await db.venueDeployment.updateMany({
+            where: { id: currentRow.id, nodeId: node.id, appliedVersion: { lte: reportedVersion },
+              appliedDataSyncVersion: { lte: Math.max(current.appliedDataSyncVersion, reportedDataSyncVersion) } },
             data: {
               appliedVersion: reportedVersion,
               appliedDataSyncVersion: Math.max(
@@ -1179,39 +1203,42 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
                 currentRow.lastBackupFile,
             },
           });
-          const serialized = deploymentForLegacySettings(nextDeployment);
-          await db.store.update({
-            where: { id: node.storeId },
-            data: {
-              settingsJson: {
-                ...settings,
-                venueDeployment: serialized,
-              },
-            },
-          });
-          if (
-            reportedVersion !== current.appliedVersion ||
-            nextStatus !== current.status ||
-            nextMessage !== current.message
-          ) {
-            await db.venueDeploymentEvent.create({
+          if (applied.count) {
+            const nextDeployment = await db.venueDeployment.findUniqueOrThrow({ where: { id: currentRow.id } });
+            const serialized = deploymentForLegacySettings(nextDeployment);
+            await db.store.update({
+              where: { id: node.storeId },
               data: {
-                deploymentId: nextDeployment.id,
-                storeId: node.storeId,
-                nodeId: node.id,
-                version: reportedVersion,
-                eventType: "NODE_REPORT",
-                status: nextStatus,
-                message: nextMessage || null,
-                metaJson: {
-                  appliedCoreImageRef: nextDeployment.appliedCoreImageRef,
-                  appliedFrontImageRef: nextDeployment.appliedFrontImageRef,
-                  appliedDataSyncVersion:
-                    nextDeployment.appliedDataSyncVersion,
-                  lastBackupFile: nextDeployment.lastBackupFile,
+                settingsJson: {
+                  ...settings,
+                  venueDeployment: serialized,
                 },
               },
             });
+            if (
+              reportedVersion !== current.appliedVersion ||
+              nextStatus !== current.status ||
+              nextMessage !== current.message
+            ) {
+              await db.venueDeploymentEvent.create({
+                data: {
+                  deploymentId: nextDeployment.id,
+                  storeId: node.storeId,
+                  nodeId: node.id,
+                  version: reportedVersion,
+                  eventType: "NODE_REPORT",
+                  status: nextStatus,
+                  message: nextMessage || null,
+                  metaJson: {
+                    appliedCoreImageRef: nextDeployment.appliedCoreImageRef,
+                    appliedFrontImageRef: nextDeployment.appliedFrontImageRef,
+                    appliedDataSyncVersion:
+                      nextDeployment.appliedDataSyncVersion,
+                    lastBackupFile: nextDeployment.lastBackupFile,
+                  },
+                },
+              });
+            }
           }
         }
       }
