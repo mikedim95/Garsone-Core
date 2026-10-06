@@ -8,6 +8,7 @@ import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 import { serializeRole } from "../lib/roles.js";
 import { resolveQrEvent } from "../lib/qrEvents.js";
 import { localQrPublicUrl } from "../lib/nodeQrConfig.js";
+import { qrAssignmentView } from "../lib/nodeQrAssignments.js";
 import { randomInt } from "node:crypto";
 
 async function requireAdminStore(request: any, reply: any) {
@@ -183,7 +184,17 @@ function wantsJsonResponse(request: any) {
   return true;
 }
 
-function serializeTile(tile: any) {
+const tileStoreSelect = {
+  id: true, slug: true, name: true,
+  venueDeployment: { select: { target: true, localUrl: true, nodeId: true,
+    node: { select: { id: true, storeId: true, configJson: true } } } },
+} as const;
+
+function serializeTile(tile: any, views = new Map<string, ReturnType<typeof qrAssignmentView>>()) {
+  if (!views.has(tile.storeId)) views.set(tile.storeId, qrAssignmentView(tile.store));
+  const view = views.get(tile.storeId)!;
+  const observation = view.tiles.get(tile.publicCode);
+  const local = view.source !== "ONLINE";
   return {
     id: tile.id,
     storeId: tile.storeId ?? null,
@@ -193,11 +204,18 @@ function serializeTile(tile: any) {
     publicUrl: localQrPublicUrl(tile.store, tile.publicCode),
     label: tile.label ?? null,
     isActive: tile.isActive,
-    tableId: tile.tableId ?? null,
-    tableLabel: tile.table?.label ?? null,
+    tableId: local ? observation?.tableId ?? null : tile.tableId ?? null,
+    tableLabel: local ? observation?.tableLabel ?? null : tile.table?.label ?? null,
+    assignmentSource: local ? observation ? "PI" : "PI_PENDING" : "ONLINE",
+    assignmentReportedAt: local && observation ? view.receivedAt : null,
     createdAt: tile.createdAt,
     updatedAt: tile.updatedAt,
   };
+}
+
+function serializeTiles(tiles: any[]) {
+  const views = new Map<string, ReturnType<typeof qrAssignmentView>>();
+  return tiles.map(tile => serializeTile(tile, views));
 }
 
 async function createTiles(
@@ -244,7 +262,7 @@ async function createTiles(
   return db.qRTile.findMany({
     where: { id: { in: created.map((tile) => tile.id) } },
     include: {
-      store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
+      store: { select: tileStoreSelect },
       table: { select: { id: true, label: true } },
     },
     orderBy: { createdAt: "desc" },
@@ -878,14 +896,14 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
     async (_request, reply) => {
       const tiles = await db.qRTile.findMany({
         include: {
-          store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
+          store: { select: tileStoreSelect },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
       });
 
       return reply.send({
-        tiles: tiles.map(serializeTile),
+        tiles: serializeTiles(tiles),
       });
     }
   );
@@ -898,7 +916,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
         const body = generateTilesSchema.parse(request.body ?? {});
         const created = await createTiles(null, body.count, body.publicCodes);
         return reply.status(201).send({
-          tiles: created.map(serializeTile),
+          tiles: serializeTiles(created),
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -1071,7 +1089,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
       const tiles = await db.qRTile.findMany({
         where: { storeId },
         include: {
-          store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
+          store: { select: tileStoreSelect },
           table: { select: { id: true, label: true } },
         },
         orderBy: { createdAt: "desc" },
@@ -1079,7 +1097,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         store,
-        tiles: tiles.map(serializeTile),
+        tiles: serializeTiles(tiles),
       });
     }
   );
@@ -1104,7 +1122,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
 
         return reply
           .status(201)
-          .send({ tiles: hydrated.map(serializeTile) });
+          .send({ tiles: serializeTiles(hydrated) });
       } catch (error) {
         if (error instanceof z.ZodError) {
           return reply
@@ -1210,7 +1228,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
           where: { id },
           data: updateData,
           include: {
-            store: { select: { slug: true, name: true, venueDeployment: { select: { target: true, localUrl: true } } } },
+            store: { select: tileStoreSelect },
             table: { select: { id: true, label: true } },
           },
         });

@@ -29,6 +29,7 @@ try {
   run(process.execPath, ["dist/db/ensureDiningBillingSchema.js"], { env, stdio: "inherit" });
   run(process.execPath, ["node_modules/prisma/build/index.js", "db", "push", "--skip-generate"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/local-menu.integration.test.mjs"], { env, stdio: "inherit" });
+  run(process.execPath, ["--test", "tests/node-qr-assignments.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/order-reliability.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/local-operations.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/dining-billing.integration.test.mjs"], { env, stdio: "inherit" });

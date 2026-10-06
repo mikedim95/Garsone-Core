@@ -1,4 +1,5 @@
 import { nodeQrSnapshot } from "../lib/nodeQrConfig.js";
+import { acceptedQrAssignments } from "../lib/nodeQrAssignments.js";
 import { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
@@ -1092,9 +1093,28 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
     if (!node) return reply.status(401).send({ error: "INVALID_NODE_TOKEN" });
     const body = statusSchema.parse(request.body ?? {});
     const ack = buildConfigAck(node, body);
-    const existingConfig =
-      node.configJson && typeof node.configJson === "object" ? (node.configJson as any) : {};
-    const updated = await db.nodeAgent.update({
+    let localQrReport: ReturnType<typeof acceptedQrAssignments> = null;
+    if (body.meta?.qrAssignments !== undefined) {
+      const [deployment, tiles] = await Promise.all([
+        db.venueDeployment.findUnique({ where: { storeId: node.storeId }, select: { target: true, nodeId: true } }),
+        db.qRTile.findMany({ where: { storeId: node.storeId }, select: { publicCode: true } }),
+      ]);
+      localQrReport = acceptedQrAssignments(body.meta.qrAssignments, node, deployment, new Set(tiles.map(tile => tile.publicCode)));
+      // A stale or invalid observation must not break the node's health report,
+      // erase a previous observation, or write another venue's assignments.
+      if (!localQrReport) request.log.warn("Ignored out-of-scope or invalid local QR assignment report");
+    }
+    const updated = await db.$transaction(async tx => {
+      // An MQTT acknowledgement and the periodic heartbeat may arrive together.
+      // Merge their observation fields against the latest row, not the earlier
+      // authentication read, so neither can erase the other's report/config.
+      let existingConfig: Record<string, any> = {};
+      if (ack || localQrReport) {
+        await tx.$queryRaw`SELECT "id" FROM "node_agents" WHERE "id" = ${node.id}::uuid FOR UPDATE`;
+        const latest = await tx.nodeAgent.findUniqueOrThrow({ where: { id: node.id }, select: { configJson: true } });
+        existingConfig = latest.configJson && typeof latest.configJson === "object" ? latest.configJson as Record<string, any> : {};
+      }
+      return tx.nodeAgent.update({
       where: { id: node.id },
       data: {
         lastSeenAt: new Date(),
@@ -1102,15 +1122,17 @@ export async function nodeAgentRoutes(fastify: FastifyInstance) {
         status: body.status,
         statusMessage: body.message || null,
         lastLog: body.log || null,
-        ...(ack
+        ...(ack || localQrReport
           ? {
               configJson: {
                 ...existingConfig,
-                lastConfigAck: ack,
+                ...(ack ? { lastConfigAck: ack } : {}),
+                ...(localQrReport ? { localQrReport } : {}),
               },
             }
           : {}),
       },
+      });
     });
     const deploymentReport = body.meta?.deployment;
     if (deploymentReport && typeof deploymentReport === "object") {
