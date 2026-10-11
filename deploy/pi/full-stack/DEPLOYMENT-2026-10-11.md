@@ -6,9 +6,35 @@ uses `http://192.168.1.116:8080` on the venue LAN. Remote administration can use
 `http://100.91.30.75:8080`. Staff password hashes were preserved from Render;
 local staff sign in at `/login`. Architect remains an online-only role.
 
-The LAN address was observed and tested on installation day. Its existing DHCP
-configuration was retained. Printed customer QR codes must use the local LAN
-origin; old stickers containing a cloud URL do not change when data is copied.
+After installation, the Pi was configured to keep `192.168.1.116/24` as a
+persistent static address on the `NOOR` Wi-Fi profile only. Gateway and DNS
+remain `192.168.1.1`. The address itself and all QR records were left unchanged
+during this networking follow-up. Existing Noor QR codes remain for the online
+instance; future QR codes intended for this local Pi can use
+`http://192.168.1.116:8080`.
+
+The NetworkManager profile UUID is
+`521af7c3-7d52-4153-bddc-3da1f5a60f63` (`garsone-wifi-5`, interface `wlan0`).
+The reviewed `Garsone-Nodes/static_network.py` helper was installed at
+`/usr/local/lib/garsone/static_network.py`. A ten-minute checkpoint protected
+the temporary change; it was confirmed only after fresh direct LAN SSH and
+HTTP health checks. The saved keyfile was verified to contain `method=manual`,
+the same address, gateway and DNS. Live address lifetime is unlimited, the
+default route is static, DNS works, Tailscale remains reachable, and all three
+app containers remain healthy. No full hardware reboot was performed.
+
+The original Wi-Fi profile is retained privately under
+`/var/lib/garsone/network/01a1b7fe38e4422ba628c22e9eca405a/`. This is a Pi-side
+static setting; the router DHCP pool/reservations were not changed. Reserve or
+exclude this address on the router to prevent it being offered to another
+device. Other saved Wi-Fi profiles retain their existing settings.
+
+All nine existing Noor QR codes were verified through read-only requests to
+the online API: each returned `status: OK` for `noor` and an HTTP 302 redirect
+to `https://www.garsone.gr/table/...?...storeSlug=noor`. The online menu still
+returns five categories and 54 items. Redirects were not followed, so these
+checks created no online customer visits or orders. No QR codes were issued,
+modified, or reassigned during the networking follow-up.
 
 ## Installed release
 
