@@ -1,0 +1,26 @@
+name: garsone-noor-online
+
+x-printer: &printer
+  # Existing ARM64 runtime, pinned to the image previously used on this Pi.
+  image: mikedim95/mqtt-printer@sha256:de1d05821d1ccd0c61cab4882ad443ce79fc97e37c87d5e54a80c977d10546e6
+  pull_policy: never
+  entrypoint: ["/usr/bin/tini", "--", "python", "/app/mqtt_print_orders.py"]
+  restart: unless-stopped
+  stop_grace_period: 20s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  printer-1:
+    <<: *printer
+    env_file: printer-1.env
+    devices:
+      - /dev/rfcomm0:/dev/rfcomm0
+  printer-2:
+    <<: *printer
+    env_file: printer-2.env
+    devices:
+      - /dev/rfcomm1:/dev/rfcomm1

@@ -1,8 +1,14 @@
 # Standalone Pi installation — 2026-10-11
 
-The installation at `100.91.30.75` now runs the current Core and Front with a
-fresh, independent copy of the Render production database. Customer traffic
-uses `http://192.168.1.116:8080` on the venue LAN. Remote administration can use
+**Current operating mode: online printing.** At 21:30 Athens time the user
+requested continued operation through the existing online Noor QR codes.
+The local stack below is now stopped and preserved; dedicated cloud MQTT
+printer workers are active. See [online printing](../online-printing/README.md)
+for the cutover, verification, and service controls. The static IP is unchanged.
+
+The installation at `100.91.30.75` was prepared with the current Core and Front and a
+fresh, independent copy of the Render production database. When standalone
+mode is active, customer traffic uses `http://192.168.1.116:8080` on the venue LAN. Remote administration can use
 `http://100.91.30.75:8080`. Staff password hashes were preserved from Render;
 local staff sign in at `/login`. Architect remains an online-only role.
 
@@ -55,7 +61,7 @@ No cloud publication workflow was run as part of this installation. Future
 routine updates can use the existing published-image updater once the desired
 Core and Front revisions have successful image builds.
 
-Only `db`, `core`, and `front` run. Core uses local PostgreSQL and local uploads,
+In standalone mode, only `db`, `core`, and `front` run. Core uses local PostgreSQL and local uploads,
 and writes directly to the Bluetooth devices. MQTT, node agents, cloud QR sync,
 hosted payment, and browser push services are disabled for this installation.
 New local secrets were generated; no hosted database credentials were passed
@@ -94,7 +100,7 @@ This is a snapshot, with no subsequent synchronization to or from Render.
 - Application-container internet access was blocked during these checks and
   the service restart. The tested app continued working. The temporary
   firewall rule was removed afterward.
-- `garsone-noor.service` is enabled and successfully restarted the new stack.
+- During standalone verification, `garsone-noor.service` was enabled and successfully restarted the new stack.
   A full hardware reboot and an in-person phone/paper observation were not
   performed during this installation.
 - Temporary verification staff, table, QR, and visit records were removed.

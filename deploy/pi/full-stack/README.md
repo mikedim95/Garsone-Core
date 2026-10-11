@@ -2,6 +2,8 @@
 
 The [2026-10-11 installation record](DEPLOYMENT-2026-10-11.md) documents the
 current Pi release, fresh Render snapshot, offline checks, printing, and recovery.
+The venue currently uses [online printing](../online-printing/README.md);
+the standalone stack described below is preserved but stopped.
 
 For a **new empty full installation with local MQTT**, run
 `python deploy_onboard.py --full-stack --host <pi-LAN-IP> --user piadmin`

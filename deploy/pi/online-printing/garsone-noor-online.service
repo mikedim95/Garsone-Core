@@ -1,0 +1,18 @@
+[Unit]
+Description=Noor online MQTT Bluetooth printers
+Wants=network-online.target
+Requires=docker.service rfcomm-printers.service
+After=network-online.target docker.service rfcomm-printers.service garsone-noor.service
+Conflicts=garsone-noor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/garsone/online-printing
+ExecStart=/usr/bin/docker compose up -d --wait
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
