@@ -45,6 +45,53 @@ test('only configured local browser origins can use the API', async () => {
   } finally { await app.close(); }
 });
 
+test('hosted and local browsers can preflight API writes without bypassing authentication', async () => {
+  const savedLocalOnly = process.env.LOCAL_ONLY;
+  const savedNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = 'production';
+    for (const [localOnly, origin] of [
+      ['false', 'https://www.garsone.gr'],
+      ['false', 'https://noor.garsone.gr'],
+      ['true', 'http://pi.local:8080'],
+    ]) {
+      process.env.LOCAL_ONLY = localOnly;
+      const app = Fastify();
+      await registerHttpSecurity(app);
+      await app.register(managerRoutes);
+      try {
+        for (const method of ['PATCH', 'PUT', 'DELETE']) {
+          const preflight = await app.inject({ method: 'OPTIONS', url: `/manager/items/${ownId}`,
+            headers: { origin, 'access-control-request-method': method,
+              'access-control-request-headers': 'authorization,content-type,x-store-slug' } });
+          assert.equal(preflight.statusCode, 204, `${origin} ${method}: ${preflight.body}`);
+          assert.equal(preflight.headers['access-control-allow-origin'], origin);
+          assert.ok(preflight.headers['access-control-allow-methods'].split(',').map(value => value.trim()).includes(method),
+            `${origin} must allow ${method}`);
+          assert.equal(preflight.headers['access-control-allow-headers'], 'authorization,content-type,x-store-slug');
+          assert.equal(preflight.headers['access-control-allow-credentials'], undefined);
+        }
+        const unauthenticated = await app.inject({ method: 'PATCH', url: `/manager/items/${ownId}`,
+          headers: { origin }, payload: { priceCents: 42 } });
+        assert.equal(unauthenticated.statusCode, 401);
+        assert.equal(unauthenticated.headers['access-control-allow-origin'], origin);
+
+        for (const blockedOrigin of ['https://evil.example', ...(localOnly === 'true' ? ['https://www.garsone.gr'] : [])]) {
+          const blocked = await app.inject({ method: 'OPTIONS', url: `/manager/items/${ownId}`,
+            headers: { origin: blockedOrigin, 'access-control-request-method': 'PATCH',
+              'access-control-request-headers': 'authorization,content-type' } });
+          assert.equal(blocked.statusCode, 403);
+          assert.equal(blocked.headers['access-control-allow-origin'], undefined);
+        }
+        assert.equal(mutations, 0);
+      } finally { await app.close(); }
+    }
+  } finally {
+    process.env.LOCAL_ONLY = savedLocalOnly;
+    process.env.NODE_ENV = savedNodeEnv;
+  }
+});
+
 test('login attempts are rate-limited independently of general traffic', async () => {
   const app = Fastify();
   await registerHttpSecurity(app);

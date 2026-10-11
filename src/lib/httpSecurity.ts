@@ -26,7 +26,12 @@ export async function registerHttpSecurity(app: FastifyInstance) {
   app.addHook("onRequest", async (request, reply) => {
     if (!isAllowedOrigin(request.headers.origin)) return reply.code(403).send({ error: "ORIGIN_NOT_ALLOWED" });
   });
-  await app.register(cors, { origin: (origin, done) => done(null, isAllowedOrigin(origin)), credentials: false });
+  await app.register(cors, {
+    origin: (origin, done) => done(null, isAllowedOrigin(origin)),
+    // The plugin defaults to GET/HEAD/POST; browser order updates need PATCH too.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    credentials: false,
+  });
   await app.register(rateLimit, {
     global: true,
     max: request => request.url.split("?")[0].startsWith("/auth/") ? 15 : 600,
