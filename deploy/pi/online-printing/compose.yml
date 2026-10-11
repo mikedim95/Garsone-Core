@@ -5,6 +5,12 @@ x-printer: &printer
   image: mikedim95/mqtt-printer@sha256:de1d05821d1ccd0c61cab4882ad443ce79fc97e37c87d5e54a80c977d10546e6
   pull_policy: never
   entrypoint: ["/usr/bin/tini", "--", "python", "/app/mqtt_print_orders.py"]
+  # Site transport fix; the base image and its runtime dependencies stay pinned.
+  volumes:
+    - ./mqtt_print_orders.py:/app/mqtt_print_orders.py:ro
+  environment:
+    PRINT_SETTLE_SEC: "2"
+    PRINT_WRITE_TIMEOUT_SEC: "20"
   restart: unless-stopped
   stop_grace_period: 20s
   logging:

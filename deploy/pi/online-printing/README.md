@@ -15,6 +15,10 @@ requires no change to Render, application settings, or QR records.
 - Working directory: `/opt/garsone/online-printing`, root-owned, mode `0700`.
 - `compose.yml` is the manifest in this directory. It pins the previously
   installed ARM64 printer image and directly runs `mqtt_print_orders.py`.
+  The worker script from `Garsone-Nodes/MQTT_Printer/mqtt_print_orders.py` is
+  installed alongside the manifest and mounted read-only over the image copy.
+  The installed transport revision is Garsone-Nodes commit `5ec01a2`.
+  Copy that file before starting Compose on a fresh installation.
 - Private `printer-1.env` and `printer-2.env` files have mode `0600`. They were
   generated from `/var/lib/garsone-node/last-config.json`, including existing
   MQTT credentials. Never commit these files.
@@ -48,6 +52,31 @@ customer order was created or changed for this check. This confirms the device
 write; physical paper appearance requires observation at the venue.
 The online service was also restarted successfully and both subscriptions
 reconnected. No full hardware reboot was performed.
+
+### Bluetooth output follow-up
+
+The user confirmed the correct printer MAC is `66:32:6C:7A:6B:36` and reported
+that the earlier tests did not produce paper despite `Print ok` logs. The
+binding already used this address. A plain-text `TEST A` with raw serial mode,
+complete writes, output drain, and a two-second connection hold printed
+successfully, as confirmed at the venue. The printer also answered a status
+query. A subsequent `TEST B ONLINE` through the normal cloud MQTT worker was
+confirmed on paper. Neither the MAC nor the online topics needed changing.
+
+The installed worker now applies those serial settings on every write, checks
+all bytes, drains output, and waits two seconds before closing. Its entire
+device operation has a 20-second deadline and does not automatically replay an
+uncertain ticket. Logging distinguishes a completed device write from physical
+printing; paper output still requires observation. These changes preserve the
+tested connection behavior without claiming that disconnect timing alone
+caused the earlier failure.
+
+All seven transport tests passed inside the Pi runtime image, including a
+Linux pseudo-terminal check for exact binary output, incomplete writes,
+disconnects, and timeout handling. After recreating the workers, the cloud
+`FINAL ONLINE TEST` completed its 230-byte device write at 21:52:00 Athens
+time. The user confirmed that this final ticket printed. The online service
+remains enabled at boot; no full hardware reboot was performed.
 
 ```sh
 sudo systemctl status garsone-noor-online.service
