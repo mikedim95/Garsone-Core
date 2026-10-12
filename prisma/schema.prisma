@@ -261,6 +261,7 @@ model QrEvent {
   store               Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId, updatedAt(sort: Desc)])
+  @@index([assignmentsJson], type: Gin)
   @@map("qr_events")
 }
 

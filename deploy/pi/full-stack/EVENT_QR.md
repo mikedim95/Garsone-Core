@@ -31,8 +31,19 @@ flowchart LR
    choose which codes are enabled. Save the event.
 5. Apply the saved event to the Pi using an export/import or the optional
    pairing below. Verify it from a phone on the venue Wi-Fi before printing.
-6. Use **Print enabled QR codes**. The printed destination includes the event
-   ID: `http://noor-node.local:8080/api/q/GT-ABCD-2345?event=<event-id>`.
+6. Use **Print enabled QR codes**. The printed destination contains only a
+   random public tile token, for example
+   `http://noor-node.local:8080/api/q/QT-0123456789ABCDEF0123456789ABCDEF`.
+   Event IDs remain in authenticated management and synchronization data;
+   they never appear in newly generated QR links or public resolver responses.
+
+Core creates a separate 128-bit token for each event/code when the event is
+saved. Changing its label or table preserves that token. For an older event,
+choose **Save event** to prepare its public links before previewing, copying,
+or printing; the UI will not fall back to a URL containing the event ID.
+Apply the resulting version 2 bundle to an updated Pi Core before using these
+links. Older version 1 imports and already printed legacy links remain
+compatible, but an old Pi Core cannot resolve the new token format.
 
 The Pi must already contain the matching venue and table IDs. The prepared
 Noor data has those IDs. If a cloud event uses a newly created table that is
@@ -48,15 +59,29 @@ public Front address with `/api`, keeping Core's raw port on loopback.
 ## Apply an export without an ongoing cloud connection
 
 Download the saved event's JSON export from the cloud Architect dashboard.
-Transfer that file to a trusted device on the Pi LAN. Log in to the **local**
-Architect account, open event QR management and import the file.
+Transfer that file privately to the Pi. Local Architect login is disabled;
+an operator can import the file directly into the running local Core using
+the same validated import function as the sync worker:
+
+```bash
+docker compose --env-file .env -f compose.yml exec -T core node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { importQrEventBundle } from "./dist/lib/qrEvents.js";
+import { db } from "./dist/db/index.js";
+try {
+  const result = await importQrEventBundle(JSON.parse(readFileSync(0, "utf8")));
+  console.log({ appliedRevision: result.event.revision, unchanged: result.unchanged });
+} finally { await db.$disconnect(); }
+' < event-export.json
+```
 
 The imported configuration is read-only locally. Make edits in the cloud and
 import a newer export. Re-importing the identical revision is harmless; older
 revisions and changed content with the same revision are rejected. Exports
 contain only QR event configuration and do not include account passwords,
-staff records or orders. A local architect can import them; a cloud login
-session is never sent to the Pi.
+staff records or orders. Keep these management exports private; customer QR
+links contain only the opaque public token. A cloud login session is never
+sent to the Pi.
 
 ## Optional automatic updates from the cloud
 
@@ -136,7 +161,7 @@ its disabled revision while connected or import that revision locally.
 Changing table assignments, labels or enabled states within the **same event**
 keeps its existing printed URLs. Save and apply the new revision before using
 the cards. Another event may reuse the same `GT-...` code independently, but
-its URL contains a different event ID and therefore needs its own printed QR.
+it receives a different random public token and needs its own printed QR.
 
 Changing the printed API host, port or path requires reprinting. Changing the
 app hostname also requires a coordinated Pi address change; plan to reprint

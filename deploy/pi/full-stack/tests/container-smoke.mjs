@@ -65,7 +65,8 @@ try {
   await page.getByText('Saved on this Pi', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Create pairing token', exact: true }).count(), 0);
   assert.equal(await page.getByLabel('Local customer app URL', { exact: true }).inputValue(), base);
-  const printed = base + `/api/q/${tile.publicCode}?event=${event.id}`;
+  const printed = base + `/api/q/${event.assignments[0].publicToken}`;
+  assert.ok(!printed.includes(event.id), 'Printed links must not expose event IDs');
   const redirect = await context.request.get(printed, { headers: { Accept: 'text/html' }, maxRedirects: 0 });
   assert.equal(redirect.status(), 302);
   assert.equal(new URL(redirect.headers().location).origin, base);

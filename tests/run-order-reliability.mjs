@@ -32,6 +32,7 @@ try {
   run(process.execPath, ["--test", "tests/manager-role-boundaries.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/architect-local-commands.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/node-qr-assignments.integration.test.mjs"], { env, stdio: "inherit" });
+  run(process.execPath, ["--test", "tests/qr-event-tokens.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/local-stack-claim.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/order-reliability.integration.test.mjs"], { env, stdio: "inherit" });
   run(process.execPath, ["--test", "tests/local-operations.integration.test.mjs"], { env, stdio: "inherit" });

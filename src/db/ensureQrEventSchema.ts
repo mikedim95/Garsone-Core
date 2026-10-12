@@ -21,6 +21,7 @@ async function main() {
     )
   `);
   await db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "qr_events_storeId_updatedAt_idx" ON "qr_events"("storeId", "updatedAt" DESC)`);
+  await db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "qr_events_assignmentsJson_idx" ON "qr_events" USING GIN ("assignmentsJson")`);
   console.log("[db] QR event schema ready");
 }
 

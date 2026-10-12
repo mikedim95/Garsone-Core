@@ -5,6 +5,7 @@ import Fastify from "fastify";
 // Resolver-only DB doubles keep this HTTP contract suite independent of live data.
 process.env.DB_CONNECTION = "default";
 process.env.DATABASE_URL = "postgresql://test:test@127.0.0.1:15432/garsone_test";
+process.env.MQTT_DISABLED = "true";
 const { db } = await import("../dist/db/index.js");
 const { qrTileRoutes, renderPublicMessage } = await import("../dist/routes/qrTiles.js");
 
@@ -89,7 +90,7 @@ test("public QR browser error pages and JSON resolver contract", async (t) => {
       const json = await app.inject({ url, headers: jsonHeaders });
       assert.equal(json.statusCode, 200);
       assert.deepEqual(json.json(), {
-        status: "OK", storeSlug: "noor", tableId, tableLabel: "Table 1", publicCode: code, eventId,
+        status: "OK", storeSlug: "noor", tableId, tableLabel: "Table 1", publicCode: code,
         redirectUrl: `http://event-pi.local:8080/table/${tableId}?storeSlug=noor`,
       });
       const html = await app.inject({ url, headers });
@@ -121,6 +122,116 @@ test("public QR browser error pages and JSON resolver contract", async (t) => {
     });
   } finally {
     db.qRTile.findUnique = original.qr;
+    db.qrEvent.findUnique = original.event;
+    db.table.findFirst = original.table;
+    await app.close();
+    await db.$disconnect();
+  }
+});
+
+test("opaque public QR tokens resolve locally without publishing event identifiers", async (t) => {
+  const token = "QT-0123456789ABCDEF0123456789ABCDEF";
+  const otherToken = "QT-FEDCBA9876543210FEDCBA9876543210";
+  const original = {
+    qr: db.qRTile.findUnique,
+    events: db.qrEvent.findMany,
+    event: db.qrEvent.findUnique,
+    table: db.table.findFirst,
+  };
+  const makeEvent = () => ({
+    id: eventId, storeId, store: { slug: "noor", name: "Noor" }, isActive: true,
+    publicAppUrl: "http://192.168.1.116:8080", publicApiUrl: "http://192.168.1.116:8080/api",
+    assignmentsJson: [{ publicCode: code, publicToken: token, tableId, label: "Entrance", isActive: true }],
+  });
+  let candidates = [makeEvent()];
+  let table = { id: tableId, label: "Table 1", isActive: true };
+  let globalLookups = 0;
+  db.qRTile.findUnique = async () => {
+    globalLookups++;
+    throw new Error("Opaque event tokens must never fall back to global inventory");
+  };
+  db.qrEvent.findMany = async ({ where, take }) => {
+    assert.equal(take, 2, "token lookup must detect ambiguity rather than select the first match");
+    assert.equal(where.assignmentsJson.array_contains.length, 1);
+    assert.match(where.assignmentsJson.array_contains[0].publicToken, /^QT-[0-9A-F]{32}$/);
+    return candidates;
+  };
+  db.qrEvent.findUnique = async () => { throw new Error("A public token must not require the event identifier"); };
+  db.table.findFirst = async ({ where }) => {
+    assert.equal(where.storeId, storeId, "table lookup must stay scoped to the event venue");
+    assert.equal(where.id, tableId);
+    return table;
+  };
+  const app = Fastify();
+  await app.register(qrTileRoutes);
+  try {
+    await t.test("JSON and browser redirect use only the opaque token", async () => {
+      const url = `/q/${token}`;
+      const json = await app.inject({ url, headers: jsonHeaders });
+      assert.equal(json.statusCode, 200, json.body);
+      assert.equal(json.headers["referrer-policy"], "no-referrer");
+      assert.equal(json.json().status, "OK");
+      assert.equal(json.json().tableId, tableId);
+      assert.equal(json.json().storeSlug, "noor");
+      assert.equal(json.json().redirectUrl, `http://192.168.1.116:8080/table/${tableId}?storeSlug=noor`);
+      assert.equal(Object.hasOwn(json.json(), "eventId"), false);
+      assert.ok(!json.body.includes(eventId));
+      const html = await app.inject({ url, headers });
+      assert.equal(html.statusCode, 302);
+      assert.equal(html.headers["referrer-policy"], "no-referrer");
+      assert.equal(html.headers.location, json.json().redirectUrl);
+      assert.ok(!html.headers.location.includes(eventId));
+      assert.ok(!html.headers.location.includes("event="));
+    });
+    await t.test("unknown or malformed tokens cannot resolve a global tile", async () => {
+      candidates = [];
+      for (const value of [otherToken, "QT-invalid", `QT-${"A".repeat(31)}`, `QT-${"A".repeat(33)}`]) {
+        const response = await app.inject({ url: `/q/${value}`, headers: jsonHeaders });
+        assert.equal(response.statusCode, 404, response.body);
+        assert.ok(!response.body.includes(eventId));
+      }
+      assert.equal(globalLookups, 0);
+    });
+    await t.test("disabled events, assignments and tables cannot redirect", async () => {
+      for (const disabled of ["event", "assignment", "table"]) {
+        candidates = [makeEvent()];
+        table = { id: tableId, label: "Table 1", isActive: disabled !== "table" };
+        if (disabled === "event") candidates[0].isActive = false;
+        if (disabled === "assignment") candidates[0].assignmentsJson[0].isActive = false;
+        const response = await app.inject({ url: `/q/${token}`, headers: jsonHeaders });
+        assert.equal(response.statusCode, 404, `${disabled}: ${response.body}`);
+        assert.equal(response.headers.location, undefined);
+        assert.ok(!response.body.includes(eventId));
+      }
+    });
+    await t.test("unassigned token gives staff guidance and a missing venue table fails closed", async () => {
+      candidates = [makeEvent()];
+      candidates[0].assignmentsJson[0].tableId = null;
+      const response = await app.inject({ url: `/q/${token}`, headers: jsonHeaders });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.json().status, "UNASSIGNED_TILE");
+      assert.equal(response.headers.location, undefined);
+      assert.ok(!response.body.includes(eventId));
+      const html = await app.inject({ url: `/q/${token}`, headers });
+      assert.match(html.body, /This table is not ready/);
+      candidates = [makeEvent()];
+      table = null;
+      const foreign = await app.inject({ url: `/q/${token}`, headers: jsonHeaders });
+      assert.equal(foreign.statusCode, 404, foreign.body);
+      assert.equal(foreign.headers.location, undefined);
+    });
+    await t.test("ambiguous tokens across events are rejected without picking a destination", async () => {
+      table = { id: tableId, label: "Table 1", isActive: true };
+      candidates = [makeEvent(), { ...makeEvent(), id: "b7a8c9d0-1234-4567-8123-123456789abc" }];
+      const response = await app.inject({ url: `/q/${token}`, headers: jsonHeaders });
+      assert.equal(response.statusCode, 404, response.body);
+      assert.equal(response.headers.location, undefined);
+      assert.ok(!response.body.includes(eventId));
+      assert.equal(globalLookups, 0);
+    });
+  } finally {
+    db.qRTile.findUnique = original.qr;
+    db.qrEvent.findMany = original.events;
     db.qrEvent.findUnique = original.event;
     db.table.findFirst = original.table;
     await app.close();

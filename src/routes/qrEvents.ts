@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import {
-  QrEventError, exportQrEvent, importQrEventBundle, matchesQrSyncToken,
+  QrEventError, exportQrEvent, importQrEventBundle, matchesQrSyncToken, prepareQrAssignments, storedQrAssignmentsSchema,
   qrEventBundleSchema, qrEventCreateSchema, qrEventIdSchema, qrEventPatchSchema,
   qrSyncTokenHash, requireEvent, serializeQrEvent, validateEventTables,
 } from "../lib/qrEvents.js";
@@ -66,7 +66,7 @@ export async function qrEventRoutes(fastify: FastifyInstance) {
     const event = await db.$transaction(async (tx) => {
       if (!await tx.store.findUnique({ where: { id: storeId }, select: { id: true } })) throw new QrEventError(404, "STORE_NOT_FOUND");
       await validateEventTables(storeId, assignments, tx);
-      const created = await tx.qrEvent.create({ data: { ...fields, storeId, assignmentsJson: assignments }, include: { store: { select: { slug: true, name: true } } } });
+      const created = await tx.qrEvent.create({ data: { ...fields, storeId, assignmentsJson: prepareQrAssignments(assignments) }, include: { store: { select: { slug: true, name: true } } } });
       await audit(tx, request, storeId, created.id, "QR_EVENT_CREATED", created.revision);
       return created;
     });
@@ -86,8 +86,9 @@ export async function qrEventRoutes(fastify: FastifyInstance) {
       requireEditable(current);
       if (current.revision !== expectedRevision) throw new QrEventError(409, "QR_EVENT_REVISION_CONFLICT");
       if (assignments) await validateEventTables(current.storeId, assignments, tx);
+      const prepared = prepareQrAssignments(assignments ?? storedQrAssignmentsSchema.parse(current.assignmentsJson), current.assignmentsJson);
       const updated = await tx.qrEvent.updateMany({ where: { id: eventId, revision: expectedRevision, isImported: false }, data: {
-        ...fields, ...(assignments ? { assignmentsJson: assignments } : {}), revision: { increment: 1 },
+        ...fields, assignmentsJson: prepared, revision: { increment: 1 },
       } });
       if (updated.count !== 1) throw new QrEventError(409, "QR_EVENT_REVISION_CONFLICT");
       const result = await requireEvent(eventId, tx);

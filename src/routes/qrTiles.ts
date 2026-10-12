@@ -6,7 +6,7 @@ import { db } from "../db/index.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { getOrderingMode, invalidateStoreCache } from "../lib/store.js";
 import { serializeRole } from "../lib/roles.js";
-import { resolveQrEvent } from "../lib/qrEvents.js";
+import { resolveQrEvent, resolveQrToken } from "../lib/qrEvents.js";
 import { localQrPublicUrl } from "../lib/nodeQrConfig.js";
 import { qrAssignmentView } from "../lib/nodeQrAssignments.js";
 import { randomInt } from "node:crypto";
@@ -602,15 +602,18 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
 
   fastify.get("/q/:publicCode", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
+    reply.header("Referrer-Policy", "no-referrer");
     const { publicCode } = request.params as { publicCode: string };
     const normalizedCode = normalizePublicCode(publicCode);
     const prefersJson = wantsJsonResponse(request);
 
     try {
       const eventId = (request.query as { event?: unknown }).event;
-      if (eventId !== undefined) {
+      const opaqueToken = normalizedCode.startsWith("QT-");
+      if (opaqueToken || eventId !== undefined) {
         reply.header("Cache-Control", "no-store");
-        const eventTile = typeof eventId === "string" ? await resolveQrEvent(eventId, normalizedCode) : null;
+        const eventTile = opaqueToken ? await resolveQrToken(normalizedCode)
+          : typeof eventId === "string" ? await resolveQrEvent(eventId, normalizedCode) : null;
         if (!eventTile?.isActive) {
           return prefersJson
             ? reply.status(404).send({ error: "QR_EVENT_TILE_NOT_FOUND_OR_INACTIVE" })
@@ -622,7 +625,7 @@ export async function qrTileRoutes(fastify: FastifyInstance) {
             : publicMessage(reply, 200, "This table is not ready", "A table has not been assigned to this event code yet.");
         }
         if (prefersJson) return reply.send({ status: "OK", storeSlug: eventTile.storeSlug,
-          tableId: eventTile.tableId, tableLabel: eventTile.tableLabel, publicCode: normalizedCode, eventId,
+          tableId: eventTile.tableId, tableLabel: eventTile.tableLabel, publicCode: normalizedCode,
           redirectUrl: eventTile.redirectUrl });
         return reply.redirect(eventTile.redirectUrl, 302);
       }
